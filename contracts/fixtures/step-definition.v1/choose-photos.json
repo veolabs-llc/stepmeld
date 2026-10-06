@@ -1,0 +1,22 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "person",
+  "inputs": [],
+  "name": "choose-photos",
+  "outputs": [
+    {
+      "name": "photos",
+      "tag": "photo-set"
+    }
+  ],
+  "parameters": [],
+  "policy": {
+    "on_failure": {
+      "do": "stop"
+    },
+    "on_stale": "wait",
+    "placement": {},
+    "start": "automatic"
+  },
+  "version": 1
+}

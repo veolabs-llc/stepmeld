@@ -1,0 +1,35 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "performer",
+  "inputs": [
+    {
+      "name": "photos",
+      "required": true,
+      "tag": "photo-set"
+    }
+  ],
+  "name": "solve",
+  "outputs": [
+    {
+      "name": "model",
+      "tag": "sparse-model"
+    }
+  ],
+  "parameters": [
+    {
+      "default": "exhaustive",
+      "name": "matcher",
+      "required": false,
+      "tag": "string"
+    }
+  ],
+  "policy": {
+    "on_failure": {
+      "do": "stop"
+    },
+    "on_stale": "wait",
+    "placement": {},
+    "start": "automatic"
+  },
+  "version": 1
+}

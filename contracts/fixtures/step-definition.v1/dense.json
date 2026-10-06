@@ -1,0 +1,48 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "performer",
+  "inputs": [
+    {
+      "name": "model",
+      "required": true,
+      "tag": "sparse-model"
+    },
+    {
+      "name": "photos",
+      "required": true,
+      "tag": "photo-set"
+    }
+  ],
+  "name": "dense",
+  "outputs": [
+    {
+      "name": "cloud",
+      "tag": "point-cloud"
+    }
+  ],
+  "parameters": [
+    {
+      "default": 4096,
+      "name": "image-size",
+      "required": false,
+      "tag": "integer"
+    }
+  ],
+  "policy": {
+    "on_failure": {
+      "classes": [
+        "lost"
+      ],
+      "do": "retake",
+      "max": 1
+    },
+    "on_stale": "wait",
+    "placement": {
+      "confirm": [
+        "cloud"
+      ]
+    },
+    "start": "automatic"
+  },
+  "version": 1
+}

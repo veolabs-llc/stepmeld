@@ -1,0 +1,469 @@
+{
+  "contract": "stepmeld/workflow.v1",
+  "created": {
+    "at": "2026-10-06T00:00:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
+  "definition": {
+    "name": "photogrammetry-layer",
+    "version": 1
+  },
+  "id": "layer-1",
+  "steps": {
+    "dense": {
+      "confirmed": {
+        "at": "2026-10-06T00:09:00Z",
+        "by": {
+          "id": "max",
+          "kind": "person"
+        }
+      },
+      "definition": {
+        "name": "dense",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "model": {
+          "bound": true,
+          "required": true,
+          "tag": "sparse-model",
+          "value": "model-1r"
+        },
+        "photos": {
+          "bound": true,
+          "required": true,
+          "tag": "photo-set",
+          "value": "ps-1"
+        }
+      },
+      "outputs": {
+        "cloud": {
+          "tag": "point-cloud",
+          "value": "cloud-1"
+        }
+      },
+      "parameters": {
+        "image-size": {
+          "chosen": {
+            "at": "2026-10-06T00:13:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          },
+          "required": false,
+          "tag": "integer",
+          "value": 3200
+        }
+      },
+      "placement": {
+        "by": {
+          "kind": "policy",
+          "rule": "placement",
+          "step": "dense"
+        },
+        "locality": "cloud",
+        "performer": "batch"
+      },
+      "policy": {
+        "on_failure": {
+          "classes": [
+            "lost"
+          ],
+          "do": "retake",
+          "max": 1
+        },
+        "on_stale": "wait",
+        "placement": {
+          "confirm": [
+            "cloud"
+          ]
+        },
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:11:00Z",
+          "handle": "batch-1",
+          "id": "layer-1/dense/1",
+          "inputs": {
+            "model": "model-1r",
+            "photos": "ps-1"
+          },
+          "locality": "cloud",
+          "number": 1,
+          "outcome": {
+            "class": "lost",
+            "reason": "the performer no longer knows this run",
+            "state": "lost"
+          },
+          "parameters": {
+            "image-size": 4096
+          },
+          "performer": "batch",
+          "started": {
+            "at": "2026-10-06T00:10:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "dense"
+            }
+          }
+        },
+        {
+          "ended_at": "2026-10-06T00:12:00Z",
+          "handle": "batch-2",
+          "id": "layer-1/dense/2",
+          "inputs": {
+            "model": "model-1r",
+            "photos": "ps-1"
+          },
+          "locality": "cloud",
+          "number": 2,
+          "outcome": {
+            "class": "out-of-memory",
+            "reason": "CUDA out of memory at 4096",
+            "state": "failed"
+          },
+          "parameters": {
+            "image-size": 4096
+          },
+          "performer": "batch",
+          "started": {
+            "at": "2026-10-06T00:11:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "retake",
+              "step": "dense"
+            }
+          }
+        },
+        {
+          "ended_at": "2026-10-06T00:16:00Z",
+          "handle": "batch-3",
+          "id": "layer-1/dense/3",
+          "inputs": {
+            "model": "model-1r",
+            "photos": "ps-1"
+          },
+          "locality": "cloud",
+          "number": 3,
+          "outcome": {
+            "outputs": {
+              "cloud": "cloud-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {
+            "image-size": 3200
+          },
+          "performer": "batch",
+          "started": {
+            "at": "2026-10-06T00:15:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    },
+    "photos": {
+      "definition": {
+        "name": "choose-photos",
+        "version": 1
+      },
+      "done_by": "person",
+      "inputs": {},
+      "outputs": {
+        "photos": {
+          "tag": "photo-set",
+          "value": "ps-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:02:00Z",
+          "id": "layer-1/photos/1",
+          "inputs": {},
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "photos": "ps-1"
+            },
+            "state": "succeeded",
+            "summary": {
+              "headline": "completed by person:max"
+            }
+          },
+          "parameters": {},
+          "performer": "person:max",
+          "started": {
+            "at": "2026-10-06T00:02:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    },
+    "publish": {
+      "definition": {
+        "name": "publish",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "cloud": {
+          "bound": true,
+          "required": true,
+          "tag": "point-cloud",
+          "value": "cloud-1"
+        }
+      },
+      "outputs": {
+        "layer": {
+          "tag": "layer",
+          "value": "layer-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:17:00Z",
+          "handle": "local-3",
+          "id": "layer-1/publish/1",
+          "inputs": {
+            "cloud": "cloud-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "layer": "layer-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {},
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:16:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "publish"
+            }
+          }
+        }
+      ]
+    },
+    "refine": {
+      "definition": {
+        "name": "refine",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "model": {
+          "bound": true,
+          "required": true,
+          "tag": "sparse-model",
+          "value": "model-1"
+        }
+      },
+      "outputs": {
+        "model": {
+          "tag": "sparse-model",
+          "value": "model-1r"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:08:00Z",
+          "handle": "local-2",
+          "id": "layer-1/refine/1",
+          "inputs": {
+            "model": "model-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "model": "model-1r"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {},
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:07:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "refine"
+            }
+          }
+        }
+      ]
+    },
+    "review": {
+      "definition": {
+        "name": "review-solve",
+        "version": 1
+      },
+      "done_by": "person",
+      "inputs": {
+        "model": {
+          "bound": true,
+          "required": true,
+          "tag": "sparse-model",
+          "value": "model-1"
+        }
+      },
+      "outputs": {
+        "decision": {
+          "options": [
+            "accept",
+            "refine"
+          ],
+          "tag": "decision",
+          "value": "refine"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:06:00Z",
+          "id": "layer-1/review/1",
+          "inputs": {
+            "model": "model-1"
+          },
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "decision": "refine"
+            },
+            "state": "succeeded",
+            "summary": {
+              "headline": "completed by person:max"
+            }
+          },
+          "parameters": {},
+          "performer": "person:max",
+          "started": {
+            "at": "2026-10-06T00:06:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    },
+    "solve": {
+      "definition": {
+        "name": "solve",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "photos": {
+          "bound": true,
+          "required": true,
+          "tag": "photo-set",
+          "value": "ps-1"
+        }
+      },
+      "outputs": {
+        "model": {
+          "tag": "sparse-model",
+          "value": "model-1"
+        }
+      },
+      "parameters": {
+        "matcher": {
+          "required": false,
+          "tag": "string",
+          "value": "exhaustive"
+        }
+      },
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:05:00Z",
+          "handle": "local-1",
+          "id": "layer-1/solve/1",
+          "inputs": {
+            "photos": "ps-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "model": "model-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {
+            "matcher": "exhaustive"
+          },
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:04:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "solve"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

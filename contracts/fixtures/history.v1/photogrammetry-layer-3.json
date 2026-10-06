@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-06T00:04:00Z",
+  "by": {
+    "kind": "policy",
+    "rule": "start-automatically",
+    "step": "solve"
+  },
+  "contract": "stepmeld/history.v1",
+  "detail": {
+    "locality": "this-machine",
+    "number": 1,
+    "performer": "local"
+  },
+  "kind": "run-minted",
+  "run": "layer-1/solve/1",
+  "seq": 3,
+  "step": "solve",
+  "workflow": "layer-1"
+}

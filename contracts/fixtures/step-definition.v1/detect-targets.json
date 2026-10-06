@@ -1,0 +1,35 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "performer",
+  "inputs": [
+    {
+      "name": "images",
+      "required": true,
+      "tag": "file-list"
+    }
+  ],
+  "name": "detect-targets",
+  "outputs": [
+    {
+      "name": "targets",
+      "tag": "target-table"
+    }
+  ],
+  "parameters": [
+    {
+      "default": 12,
+      "name": "min-size",
+      "required": false,
+      "tag": "integer"
+    }
+  ],
+  "policy": {
+    "on_failure": {
+      "do": "stop"
+    },
+    "on_stale": "wait",
+    "placement": {},
+    "start": "automatic"
+  },
+  "version": 1
+}

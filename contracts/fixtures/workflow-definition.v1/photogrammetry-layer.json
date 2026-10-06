@@ -1,0 +1,86 @@
+{
+  "bindings": [
+    {
+      "from": "photos.photos",
+      "to": "solve.photos"
+    },
+    {
+      "from": "photos.photos",
+      "to": "dense.photos"
+    },
+    {
+      "from": "solve.model",
+      "to": "review.model"
+    },
+    {
+      "from": "solve.model",
+      "guard": {
+        "decision": {
+          "is": "refine",
+          "output": "decision",
+          "step": "review"
+        }
+      },
+      "to": "refine.model"
+    },
+    {
+      "from": "refine.model",
+      "to": "dense.model"
+    },
+    {
+      "from": "solve.model",
+      "to": "dense.model"
+    },
+    {
+      "from": "dense.cloud",
+      "to": "publish.cloud"
+    }
+  ],
+  "contract": "stepmeld/workflow-definition.v1",
+  "name": "photogrammetry-layer",
+  "steps": [
+    {
+      "name": "photos",
+      "step": {
+        "name": "choose-photos",
+        "version": 1
+      }
+    },
+    {
+      "name": "solve",
+      "step": {
+        "name": "solve",
+        "version": 1
+      }
+    },
+    {
+      "name": "review",
+      "step": {
+        "name": "review-solve",
+        "version": 1
+      }
+    },
+    {
+      "name": "refine",
+      "step": {
+        "name": "refine",
+        "version": 1
+      }
+    },
+    {
+      "name": "dense",
+      "step": {
+        "name": "dense",
+        "version": 1
+      }
+    },
+    {
+      "name": "publish",
+      "step": {
+        "name": "publish",
+        "version": 1
+      }
+    }
+  ],
+  "version": 1
+}

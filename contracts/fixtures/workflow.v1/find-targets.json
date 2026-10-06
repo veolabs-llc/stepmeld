@@ -1,0 +1,133 @@
+{
+  "contract": "stepmeld/workflow.v1",
+  "created": {
+    "at": "2026-10-06T00:00:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
+  "definition": {
+    "name": "find-targets",
+    "version": 1
+  },
+  "id": "wf-1",
+  "steps": {
+    "detect": {
+      "definition": {
+        "name": "detect-targets",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "images": {
+          "bound": false,
+          "required": true,
+          "tag": "file-list",
+          "value": [
+            "a.jpg",
+            "b.jpg"
+          ]
+        }
+      },
+      "outputs": {
+        "targets": {
+          "tag": "target-table",
+          "value": {
+            "rows": 86
+          }
+        }
+      },
+      "parameters": {
+        "min-size": {
+          "chosen": {
+            "at": "2026-10-06T00:07:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          },
+          "required": false,
+          "tag": "integer",
+          "value": 8
+        }
+      },
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:06:00Z",
+          "handle": "local-1",
+          "id": "wf-1/detect/1",
+          "inputs": {
+            "images": [
+              "a.jpg",
+              "b.jpg"
+            ]
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "targets": {
+                "rows": 86
+              }
+            },
+            "state": "succeeded",
+            "summary": {
+              "headline": "86 targets in 2 images"
+            }
+          },
+          "parameters": {
+            "min-size": 12
+          },
+          "performer": "local",
+          "progress": {
+            "at": "2026-10-06T00:03:00Z",
+            "done": 1,
+            "phase": "detecting",
+            "total": 2,
+            "unit": "images"
+          },
+          "started": {
+            "at": "2026-10-06T00:04:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "detect"
+            }
+          }
+        },
+        {
+          "handle": "local-2",
+          "id": "wf-1/detect/2",
+          "inputs": {
+            "images": [
+              "a.jpg",
+              "b.jpg"
+            ]
+          },
+          "locality": "this-machine",
+          "number": 2,
+          "parameters": {
+            "min-size": 8
+          },
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:10:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

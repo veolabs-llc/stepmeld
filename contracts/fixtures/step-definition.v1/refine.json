@@ -1,0 +1,28 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "performer",
+  "inputs": [
+    {
+      "name": "model",
+      "required": true,
+      "tag": "sparse-model"
+    }
+  ],
+  "name": "refine",
+  "outputs": [
+    {
+      "name": "model",
+      "tag": "sparse-model"
+    }
+  ],
+  "parameters": [],
+  "policy": {
+    "on_failure": {
+      "do": "stop"
+    },
+    "on_stale": "wait",
+    "placement": {},
+    "start": "automatic"
+  },
+  "version": 1
+}

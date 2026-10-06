@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-06T00:02:00Z",
+  "by": {
+    "id": "max",
+    "kind": "person"
+  },
+  "contract": "stepmeld/history.v1",
+  "detail": {
+    "outputs": {
+      "photos": "ps-1"
+    }
+  },
+  "kind": "completed",
+  "run": "layer-1/photos/1",
+  "seq": 2,
+  "step": "photos",
+  "workflow": "layer-1"
+}
