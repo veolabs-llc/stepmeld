@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["stepmeld-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "LicenseRef-TBD"
+repository = "https://github.com/veolabs-llc/stepmeld"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: a Value is opaque and must come back byte-for-byte
+serde_json = { version = "1", features = ["float_roundtrip"] }
+# Holding a document to its contract (MIT; no default features: no
+# network or file resolvers, the schemas are compiled in). Same crate
+# and pin as exlumen's tripod-rules.
+jsonschema = { version = "0.58", default-features = false }
