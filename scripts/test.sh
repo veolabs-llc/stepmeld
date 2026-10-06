@@ -8,5 +8,7 @@ failed=0
 cargo test --workspace --quiet || failed=$((failed + 1))
 cargo clippy --workspace --all-targets --quiet -- -D warnings || failed=$((failed + 1))
 cargo fmt --all -- --check || failed=$((failed + 1))
+# the Python package: the schemas' copy and the verb protocol
+(cd python && uv sync -q --all-extras --locked && uv run --no-sync pytest -q -p no:cacheprovider) || failed=$((failed + 1))
 echo "== $failed failed"
 exit "$failed"

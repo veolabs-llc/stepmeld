@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/workflow.v1",
+  "title": "One occurrence of a recipe: its Steps, their Values and Runs. Status is derived by a reader, never stored.",
+  "type": "object",
+  "required": ["contract", "id", "definition", "created", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "contract": { "const": "stepmeld/workflow.v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "definition": { "$ref": "#/$defs/ref" },
+    "label": { "type": "string" },
+    "created": { "$ref": "#/$defs/stamp" },
+    "steps": { "type": "object", "additionalProperties": { "$ref": "#/$defs/step" } },
+    "canceled": { "$ref": "#/$defs/stamp" }
+  },
+  "$defs": {
+    "ref": { "type": "object", "required": ["name", "version"], "additionalProperties": false, "properties": { "name": { "type": "string" }, "version": { "type": "integer", "minimum": 1 } } },
+    "time": { "type": "string", "description": "RFC 3339, UTC, so that later sorts later." },
+    "actor": {
+      "oneOf": [
+        { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "person" }, "id": { "type": "string" } } },
+        { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "agent" }, "id": { "type": "string" } } },
+        { "type": "object", "required": ["kind", "rule", "step"], "additionalProperties": false, "properties": { "kind": { "const": "policy" }, "rule": { "type": "string" }, "step": { "type": "string" } } },
+        { "type": "object", "required": ["kind", "workflow", "step", "run"], "additionalProperties": false, "properties": { "kind": { "const": "run" }, "workflow": { "type": "string" }, "step": { "type": "string" }, "run": { "type": "string" } } }
+      ]
+    },
+    "stamp": { "type": "object", "required": ["at", "by"], "additionalProperties": false, "properties": { "at": { "$ref": "#/$defs/time" }, "by": { "$ref": "#/$defs/actor" } } },
+    "locality": { "enum": ["this-machine", "local-network", "cloud"] },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "start": { "enum": ["automatic", "manual"] },
+        "on_failure": {
+          "oneOf": [
+            { "type": "object", "required": ["do"], "additionalProperties": false, "properties": { "do": { "const": "stop" } } },
+            { "type": "object", "required": ["do", "max", "classes"], "additionalProperties": false, "properties": { "do": { "const": "retake" }, "max": { "type": "integer", "minimum": 0 }, "classes": { "type": "array", "items": { "type": "string" } } } }
+          ]
+        },
+        "on_stale": { "enum": ["wait", "rerun"] },
+        "placement": { "type": "object", "additionalProperties": false, "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } } } }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["definition", "done_by", "inputs", "parameters", "outputs", "policy"],
+      "additionalProperties": false,
+      "properties": {
+        "definition": { "$ref": "#/$defs/ref" },
+        "done_by": { "enum": ["performer", "person"] },
+        "label": { "type": "string" },
+        "inputs": { "type": "object", "additionalProperties": { "type": "object", "required": ["tag", "required", "bound"], "additionalProperties": false, "properties": { "tag": { "type": "string" }, "required": { "type": "boolean" }, "bound": { "type": "boolean" }, "value": {} } } },
+        "parameters": { "type": "object", "additionalProperties": { "type": "object", "required": ["tag", "required"], "additionalProperties": false, "properties": { "tag": { "type": "string" }, "required": { "type": "boolean" }, "value": {}, "chosen": { "$ref": "#/$defs/stamp" } } } },
+        "outputs": { "type": "object", "additionalProperties": { "type": "object", "required": ["tag"], "additionalProperties": false, "properties": { "tag": { "type": "string" }, "options": { "type": "array", "items": { "type": "string" } }, "value": {} } } },
+        "policy": { "$ref": "#/$defs/policy" },
+        "go": { "$ref": "#/$defs/stamp" },
+        "confirmed": { "$ref": "#/$defs/stamp" },
+        "placement": { "type": "object", "required": ["performer", "locality", "by"], "additionalProperties": false, "properties": { "performer": { "type": "string" }, "locality": { "$ref": "#/$defs/locality" }, "by": { "$ref": "#/$defs/actor" } } },
+        "runs": { "type": "array", "items": { "$ref": "#/$defs/run" } }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["id", "number", "inputs", "parameters", "performer", "started"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "number": { "type": "integer", "minimum": 1 },
+        "inputs": { "type": "object" },
+        "parameters": { "type": "object" },
+        "performer": { "type": "string" },
+        "locality": { "$ref": "#/$defs/locality" },
+        "started": { "$ref": "#/$defs/stamp" },
+        "handle": { "type": "string" },
+        "progress": { "$ref": "#/$defs/progress" },
+        "attention": { "type": "string" },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "ended_at": { "$ref": "#/$defs/time" },
+        "cancel": { "$ref": "#/$defs/stamp" }
+      }
+    },
+    "progress": {
+      "type": "object", "required": ["at"], "additionalProperties": false,
+      "properties": { "phase": { "type": "string" }, "done": { "type": "integer", "minimum": 0 }, "total": { "type": "integer", "minimum": 0 }, "unit": { "type": "string" }, "at": { "$ref": "#/$defs/time" } }
+    },
+    "outcome": {
+      "type": "object", "required": ["state"], "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["succeeded", "failed", "canceled", "lost"] },
+        "class": { "type": "string", "description": "The failure's class, the Performer's word; `refused`, `fault` and `lost` are the engine's." },
+        "reason": { "type": "string" },
+        "summary": { "type": "object", "required": ["headline"], "additionalProperties": false, "properties": { "headline": { "type": "string" }, "details": {} } },
+        "outputs": { "type": "object" },
+        "metrics": {}
+      }
+    }
+  }
+}
