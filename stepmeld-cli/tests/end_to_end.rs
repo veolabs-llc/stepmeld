@@ -64,6 +64,34 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
     assert!(ok && out.contains("looked at 3 images"), "{out}");
     let (ok, out) = stepmeld(d, &["history", "wf-1"]);
     assert!(ok && out.contains("run-ended") && out.contains("policy start-automatically"), "{out}");
+    // a second performer that launches work in the cloud: the file says so,
+    // and a confirm-before-cloud policy holds a step for a person
+    std::fs::write(
+        d.join("performers.json"),
+        serde_json::json!({"performers": [
+            {"name": "local", "root": d.join("runs"), "programs": [{"verb": {"name": "detect-targets", "version": 1}, "command": ["sh", d.join("detect.sh")]}]},
+            {"name": "batch", "locality": "cloud", "root": d.join("runs"), "programs": [{"verb": {"name": "detect-targets", "version": 1}, "command": ["sh", d.join("detect.sh")]}]}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (ok, out) = stepmeld(d, &["create", "find-targets", "--id", "wf-2"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["policy", "wf-2", "detect", "--to", r#"{"placement":{"performer":"batch","confirm":["cloud"]}}"#]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["set", "wf-2", "detect", "--input", "images", "--value", r#"["a.jpg"]"#]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["tick"]);
+    assert!(ok && out.contains("wf-2") && out.contains("waiting"), "{out}");
+    let (ok, out) = stepmeld(d, &["show", "wf-2"]);
+    assert!(ok && out.contains("waiting for the cloud placement to be confirmed"), "{out}");
+    let (ok, out) = stepmeld(d, &["confirm", "wf-2", "detect"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["show", "wf-2"]);
+    assert!(ok && out.contains("run 1 on batch by policy start-automatically: succeeded"), "{out}");
+
     // a policy change is a command like any other, and a bad one is refused
     let (ok, out) = stepmeld(d, &["policy", "wf-1", "detect", "--to", r#"{"placement":{"confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");

@@ -95,7 +95,7 @@ impl Performer for LocalPerformer {
     fn describe(&self) -> PerformerFace {
         PerformerFace {
             name: self.name.clone(),
-            locality: Locality::ThisMachine,
+            locality: self.locality,
             verbs: self.programs.iter().map(|p| p.verb.clone()).collect(),
         }
     }
@@ -282,6 +282,19 @@ mod tests {
         assert_eq!(seen.unwrap().done, Some(1));
         p.cancel(&h, "enough");
         assert!(matches!(p.observe(&h), Observation::Ended { outcome } if outcome.class.as_deref() == Some("canceled")));
+    }
+
+    /// A launcher for work elsewhere says so, and the gate's confirm
+    /// policies see it (2026-10-06: a cloud performer that answered
+    /// this-machine submitted a Batch job past a confirm-before-cloud
+    /// policy).
+    #[test]
+    fn a_performer_answers_where_its_work_happens() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(dir.path(), "true");
+        assert_eq!(p.describe().locality, Locality::ThisMachine);
+        let p = performer(dir.path(), "true").at(Locality::Cloud);
+        assert_eq!(p.describe().locality, Locality::Cloud);
     }
 
     #[test]
