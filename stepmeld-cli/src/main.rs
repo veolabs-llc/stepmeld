@@ -78,6 +78,13 @@ enum Cmd {
     },
     /// Confirm a placement a Policy asks about.
     Confirm { workflow: String, step: String },
+    /// Change a Step's Policy (JSON, the verb's shape: start, on_failure, on_stale, placement).
+    Policy {
+        workflow: String,
+        step: String,
+        #[arg(long)]
+        json: String,
+    },
     /// Choose the Performer for a Step's next Run.
     Place { workflow: String, step: String, performer: String, locality: String },
     /// Stop a Step's live Run, or the whole Workflow.
@@ -301,6 +308,11 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Confirm { workflow, step } => {
             driver.command(workflow, &Command::Confirm { step: step.clone() }, &by, &now)?;
             println!("confirmed {step}");
+        }
+        Cmd::Policy { workflow, step, json } => {
+            let policy: stepmeld_core::definition::Policy = serde_json::from_str(json).map_err(|e| Error::Refused(format!("--json is not a policy: {e}")))?;
+            driver.command(workflow, &Command::SetPolicy { step: step.clone(), policy }, &by, &now)?;
+            println!("policy set on {step}");
         }
         Cmd::Place { workflow, step, performer, locality } => {
             let locality = match locality.as_str() {
