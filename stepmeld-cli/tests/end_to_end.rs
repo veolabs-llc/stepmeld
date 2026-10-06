@@ -65,11 +65,11 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
     let (ok, out) = stepmeld(d, &["history", "wf-1"]);
     assert!(ok && out.contains("run-ended") && out.contains("policy start-automatically"), "{out}");
     // a policy change is a command like any other, and a bad one is refused
-    let (ok, out) = stepmeld(d, &["policy", "wf-1", "detect", "--json", r#"{"placement":{"confirm":["cloud"]}}"#]);
+    let (ok, out) = stepmeld(d, &["policy", "wf-1", "detect", "--to", r#"{"placement":{"confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["history", "wf-1"]);
     assert!(ok && out.contains("policy-set"), "{out}");
-    let (ok, out) = stepmeld(d, &["policy", "wf-1", "detect", "--json", r#"{"start":"sometimes"}"#]);
+    let (ok, out) = stepmeld(d, &["policy", "wf-1", "detect", "--to", r#"{"start":"sometimes"}"#]);
     assert!(!ok && out.contains("not a policy"), "{out}");
     // a refusal is one line and exit 1
     let (ok, out) = stepmeld(d, &["set", "wf-1", "detect", "--input", "nope", "--value", "1"]);
