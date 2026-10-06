@@ -1,0 +1,18 @@
+[package]
+name = "stepmeld-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A StateStore for stepmeld in one SQLite file"
+
+[dependencies]
+stepmeld-core = { path = "../stepmeld-core" }
+serde.workspace = true
+serde_json.workspace = true
+# One file, no server, bundled so a build needs nothing installed
+# (MIT; SQLite itself is public domain).
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
