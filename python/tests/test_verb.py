@@ -88,3 +88,24 @@ def test_the_outcome_validates_against_the_contracts_outcome(tmp_path, state):
     import jsonschema
 
     jsonschema.Draft202012Validator({"$ref": "#/$defs/outcome", "$defs": schema["$defs"]}).validate(outcome(tmp_path))
+
+
+def test_saved_state_comes_back_on_the_next_life(tmp_path):
+    d = request(tmp_path)
+
+    def first(run):
+        assert run.state == {} and run.resumed == 0
+        run.save_state({"job": "j-9"})
+        raise SystemExit(1)  # dies before an outcome
+
+    with pytest.raises(SystemExit):
+        verb.main({"detect-targets": first}, [str(d)])
+    assert (d / "resumable").exists() and not (d / "outcome.json").exists()
+    (d / "resumes").write_text("1")
+
+    def second(run):
+        assert run.state == {"job": "j-9"} and run.resumed == 1
+        run.succeed({"targets": []}, headline="picked up j-9")
+
+    assert verb.main({"detect-targets": second}, [str(d)]) == 0
+    assert outcome(d)["summary"]["headline"] == "picked up j-9"

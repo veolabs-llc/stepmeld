@@ -16,6 +16,15 @@
 //! log), or succeeded with no Outputs when it exits 0 and the verb
 //! declares none. What the Performer knows of its Runs is on disk, so
 //! a new process finds the Runs an earlier one started.
+//!
+//! **Resuming.** A program whose work goes on elsewhere (a launcher
+//! following a job on a cloud queue) writes what it would need to pick
+//! the work back up to `<run-dir>/state.json` and touches
+//! `<run-dir>/resumable`. If such a program is gone without an outcome
+//! (killed, a reboot), the Performer starts it again on the same run
+//! directory instead of calling the Run lost, up to [`RESUMES`] times;
+//! the program reads its state and carries on. A program that never
+//! said it was resumable is lost, as before.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -35,6 +44,10 @@ pub struct Program {
     /// appended.
     pub command: Vec<String>,
 }
+
+/// How many times a resumable program is started again before its Run
+/// is lost.
+pub const RESUMES: u32 = 3;
 
 pub struct LocalPerformer {
     name: String,
@@ -68,6 +81,50 @@ impl LocalPerformer {
 
     fn dir(&self, handle: &str) -> PathBuf {
         self.root.join(handle)
+    }
+
+    fn program_for(&self, verb: &Ref) -> Result<Program, String> {
+        self.programs.iter().find(|p| &p.verb == verb).cloned().ok_or_else(|| format!("{} does not perform {verb}", self.name))
+    }
+
+    /// Start the program on a run directory: its log appended (a
+    /// resume continues the same log), its pid written, the child kept.
+    fn spawn(&self, handle: &str, dir: &Path, program: &Program, resume: bool) -> Result<(), String> {
+        let (exe, args) = program.command.split_first().ok_or_else(|| format!("{} has no program for {}", self.name, program.verb))?;
+        let log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("log.txt")).map_err(|e| format!("cannot open the log: {e}"))?;
+        if resume {
+            use std::io::Write;
+            let _ = writeln!(&log, "== resumed by {} ({})", self.name, Self::read::<u32>(&dir.join("resumes")).unwrap_or(0));
+        }
+        let err = log.try_clone().map_err(|e| e.to_string())?;
+        let child = Command::new(exe)
+            .args(args)
+            .arg(dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(err))
+            .spawn()
+            .map_err(|e| format!("cannot run {exe}: {e}"))?;
+        std::fs::write(dir.join("pid"), child.id().to_string()).map_err(|e| e.to_string())?;
+        self.children.lock().unwrap().insert(handle.to_string(), child);
+        Ok(())
+    }
+
+    /// A program that said it could resume, gone without an outcome:
+    /// start it again on the same directory, counting; Some(why) when
+    /// it will not be.
+    fn resume(&self, handle: &str, dir: &Path) -> Result<(), String> {
+        if !dir.join("resumable").exists() {
+            return Err("the program never said it could resume".into());
+        }
+        let resumes = Self::read::<u32>(&dir.join("resumes")).unwrap_or(0);
+        if resumes >= RESUMES {
+            return Err(format!("resumed {resumes} times already"));
+        }
+        let request = Self::read::<StartRequest>(&dir.join("request.json")).ok_or("the request cannot be read")?;
+        let program = self.program_for(&request.definition)?;
+        std::fs::write(dir.join("resumes"), (resumes + 1).to_string()).map_err(|e| e.to_string())?;
+        self.spawn(handle, dir, &program, true)
     }
 
     fn handle_for(request: &StartRequest) -> String {
@@ -106,18 +163,13 @@ impl Performer for LocalPerformer {
         if dir.join("request.json").exists() {
             return Ok(handle);
         }
-        let program = self.programs.iter().find(|p| p.verb == request.definition).ok_or_else(|| format!("{} does not perform {}", self.name, request.definition))?;
-        let (exe, args) = program.command.split_first().ok_or_else(|| format!("{} has no program for {}", self.name, request.definition))?;
+        let program = self.program_for(&request.definition)?;
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
         std::fs::write(dir.join("request.json"), serde_json::to_string_pretty(request).unwrap()).map_err(|e| format!("cannot write the request: {e}"))?;
-        let log = std::fs::File::create(dir.join("log.txt")).map_err(|e| format!("cannot open the log: {e}"))?;
-        let err = log.try_clone().map_err(|e| e.to_string())?;
-        let child = Command::new(exe).args(args).arg(&dir).stdin(Stdio::null()).stdout(Stdio::from(log)).stderr(Stdio::from(err)).spawn().map_err(|e| {
+        if let Err(e) = self.spawn(&handle, &dir, &program, false) {
             let _ = std::fs::remove_dir_all(&dir);
-            format!("cannot run {exe}: {e}")
-        })?;
-        std::fs::write(dir.join("pid"), child.id().to_string()).map_err(|e| e.to_string())?;
-        self.children.lock().unwrap().insert(handle.clone(), child);
+            return Err(e);
+        }
         Ok(handle)
     }
 
@@ -154,14 +206,25 @@ impl Performer for LocalPerformer {
                 attention: None,
             },
             Some(status) => {
-                // ended without an outcome: a 0 exit with nothing to
-                // deliver is a success; anything else failed
+                // gone without an outcome: a program that can resume is
+                // started again; otherwise a 0 exit with nothing to
+                // deliver is a success, anything else failed
                 let declared: Vec<String> = Self::read::<StartRequest>(&dir.join("request.json")).map(|r| r.outputs.into_iter().map(|o| o.name).collect()).unwrap_or_default();
+                let clean_success = status.is_some_and(|s| s.success()) && declared.is_empty();
+                let resumed = if clean_success { Err(String::new()) } else { self.resume(handle, &dir) };
+                if resumed.is_ok() {
+                    return Observation::Running {
+                        progress: Self::read::<Progress>(&dir.join("progress.json")),
+                        attention: None,
+                    };
+                }
+                let not_resumed = resumed.unwrap_err();
+                let gave_up = if dir.join("resumable").exists() { format!(" ({not_resumed})") } else { String::new() };
                 let outcome = match status {
                     Some(s) if s.success() && declared.is_empty() => Outcome::succeeded(BTreeMap::new()),
                     Some(s) if s.success() => Outcome::failed("fault", &format!("the program exited 0 without writing outcome.json; it owed {declared:?}")),
-                    Some(s) => Outcome::failed("exit", &format!("the program ended with {s}: {}", Self::last_line(&dir.join("log.txt")).unwrap_or_else(|| "(no output)".into()))),
-                    None => Outcome::lost("the process is gone and wrote no outcome"),
+                    Some(s) => Outcome::failed("exit", &format!("the program ended with {s}{gave_up}: {}", Self::last_line(&dir.join("log.txt")).unwrap_or_else(|| "(no output)".into()))),
+                    None => Outcome::lost(&format!("the process is gone and wrote no outcome ({not_resumed})")),
                 };
                 let _ = std::fs::write(dir.join("outcome.json"), serde_json::to_string_pretty(&outcome).unwrap());
                 Observation::Ended { outcome }
@@ -295,6 +358,43 @@ mod tests {
         assert_eq!(p.describe().locality, Locality::ThisMachine);
         let p = performer(dir.path(), "true").at(Locality::Cloud);
         assert_eq!(p.describe().locality, Locality::Cloud);
+    }
+
+    /// A launcher that recorded its state is started again when it is
+    /// gone without an outcome, on the same directory, and carries on
+    /// from that state; one that never said so is lost.
+    #[test]
+    fn a_resumable_program_is_started_again_and_resumes_from_its_state() {
+        let dir = tempfile::tempdir().unwrap();
+        // first life: save state, say resumable, die; second life: resume from the state
+        let p = performer(
+            dir.path(),
+            r#"if [ -f "$1/state.json" ]; then echo "resuming job $(cat "$1/state.json")"; echo '{"state":"succeeded","summary":{"headline":"resumed"}}' > "$1/outcome.json"; exit 0; fi
+echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-9"; exit 1"#,
+        );
+        let h = p.start(&request("wf/s/1", &[])).unwrap();
+        match settle(&p, &h) {
+            Observation::Ended { outcome } => assert_eq!(outcome.summary.unwrap().headline, "resumed"),
+            other => panic!("{other:?}"),
+        }
+        let log = p.log(&h).unwrap();
+        assert!(log.contains("submitted j-9") && log.contains("== resumed by local (1)") && log.contains("resuming job"), "{log}");
+        assert_eq!(std::fs::read_to_string(dir.path().join("runs").join(&h).join("resumes")).unwrap(), "1");
+    }
+
+    #[test]
+    fn a_program_that_keeps_dying_fails_after_the_last_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(dir.path(), r#"touch "$1/resumable"; kill -9 $$"#);
+        let h = p.start(&request("wf/s/1", &[])).unwrap();
+        match settle(&p, &h) {
+            Observation::Ended { outcome } => {
+                // our own child, so how it died is known: failed by exit, not lost
+                assert_eq!((outcome.state, outcome.class.as_deref()), (stepmeld_core::workflow::RunState::Failed, Some("exit")));
+                assert!(outcome.reason.as_ref().unwrap().contains(&format!("resumed {RESUMES} times")), "{outcome:?}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

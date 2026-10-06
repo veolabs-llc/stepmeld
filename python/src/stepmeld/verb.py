@@ -7,6 +7,12 @@ Performer (`stepmeld-local`).
       <run-dir>/outcome.json    written once, when the work ends
       <run-dir>/log.txt         stdout and stderr, kept by the Performer
 
+A verb whose work goes on elsewhere (a launcher following a job on a
+cloud queue) saves what it would need to pick the work back up with
+`run.save_state(...)`; if the program is then gone without an outcome,
+the Performer starts it again on the same directory and `run.state`
+holds what was saved.
+
 A verb is a function of a `Run`. `main` reads the request, picks the
 verb by the definition's name, runs it, and makes sure an outcome is
 written whatever happens: a `Refused` becomes class `refused`, any
@@ -43,6 +49,11 @@ class Run:
         self.dir = Path(run_dir)
         self.request: dict = json.loads((self.dir / "request.json").read_text())
         self.ended = False
+        state = self.dir / "state.json"
+        self.state: dict = json.loads(state.read_text()) if state.exists() else {}
+        resumes = self.dir / "resumes"
+        #: how many times the Performer has started this program again
+        self.resumed: int = int(resumes.read_text().strip() or 0) if resumes.exists() else 0
 
     # ---- what was asked ----
 
@@ -69,6 +80,17 @@ class Run:
 
     def parameter(self, name: str, default: Any = None) -> Any:
         return self.parameters.get(name, default)
+
+    # ---- what is kept for a resume ----
+
+    def save_state(self, state: dict) -> None:
+        """Record what a fresh start of this program would need to carry
+        on (a job id, a run id), and tell the Performer the program may
+        be started again if it dies. `run.state` holds it on the next
+        life."""
+        self.state = dict(state)
+        _write(self.dir / "state.json", self.state)
+        (self.dir / "resumable").touch()
 
     # ---- what is said back ----
 
