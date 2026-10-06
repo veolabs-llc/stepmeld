@@ -13,9 +13,21 @@ do the work; a UI reads documents and never gets called.
   and the scenario fixtures every implementation is held to.
 - `stepmeld-core`: the Rust implementation: documents, the pure core,
   the Performer and StateStore seams with in-memory implementations
-  and their conformance suites.
+  and their conformance suites, the Driver, the nested-workflow
+  Performer; the design note's scenarios as tests.
+- `stepmeld-sqlite`: the StateStore in one SQLite file.
+- `stepmeld-local`: a Performer that runs a program per verb on this
+  machine (files-in-a-directory protocol; any language).
+- `stepmeld-cli`: the `stepmeld` command over the two.
 
-Build and test with `scripts/test.sh` (cargo).
+Build and test with `scripts/test.sh` (cargo). Try it:
+
+```bash
+cargo run -q -p stepmeld-cli -- performers        # what a performers file looks like
+cargo run -q -p stepmeld-cli -- add contracts/fixtures/step-definition.v1/detect-targets.json contracts/fixtures/workflow-definition.v1/find-targets.json
+cargo run -q -p stepmeld-cli -- create find-targets --id wf-1
+cargo run -q -p stepmeld-cli -- show wf-1
+```
 
 Licence: to be chosen with exlumen's (Apache-2.0 or MPL-2.0); private
 until then. Built by VEO Labs; first user is the exlumen engine.

@@ -372,6 +372,47 @@ A simple recipe is a list of verbs.
   policy (our attention); validation at load and schemas generated from
   types; cleanup hooks and compensation, noted for later.
 
+## 10a. Decided while building (2026-10-06)
+
+The first implementation (`stepmeld-core`, `stepmeld-sqlite`,
+`stepmeld-local`, `stepmeld-cli`) settled these; each is in the code
+and its tests, and none contradicts the rules above.
+
+1. **Verbs are one namespace.** A WorkflowDefinition may not take a
+   StepDefinition's name and version, since the Library offers both as
+   verbs. Labels may be equal ("Detect OmniTargets" twice), names not.
+2. **Port names.** Inputs and Parameters share a namespace (both are
+   given); Outputs have their own (a refine takes `model` and gives
+   `model`). A port name on a nested recipe's face is dotted
+   (`chunk.cloud`); a step name never is, so `step.port` splits at the
+   first dot.
+3. **Alternative Bindings are taken in order, and an earlier one that
+   cannot be told yet holds the answer.** `dense.model <- refine.model,
+   else solve.model` waits while the review is undecided rather than
+   taking solve's model early.
+4. **A source that succeeded once keeps its Outputs while it is
+   retaken**, so downstream Inputs hold the last good Value until the
+   new Run succeeds (rule 7's "stale spreads only on success").
+5. **A confirmation stands until the placement changes.** A Policy
+   retake of the same placement is not asked about again; a `place`
+   Command clears it. A person's `start` counts as a confirmation.
+6. **The driver notes a prospective placement** on a Step waiting for
+   confirmation, so a reader with only the document sees the same
+   status the driver does.
+7. **Children tick before parents**, so a parent sees what its child
+   did this tick; a child created mid-tick is ticked in the same call.
+8. **Policies live on the verb and on the Step**, not on the recipe:
+   the StepDefinition carries defaults; an Actor changes a Workflow's
+   Step by `set-policy`. Per-recipe overrides stay withdrawn (rule 4).
+9. **The core is synchronous.** No async runtime; every Performer call
+   is short by contract, and a driver may thread as it likes.
+10. **A person's Run has no locality**, and its Performer word is the
+    person.
+11. **The local Performer's protocol is files in a directory**
+    (`request.json` in; `progress.json`, `outcome.json`, `log.txt`
+    out), so a verb can be a program in any language: the first wire
+    form of the Performer contract.
+
 ## 11. Open
 
 - A better label than Actor (Max's instinct; none proposed yet).
@@ -385,14 +426,20 @@ A simple recipe is a list of verbs.
 
 ## 12. Next steps
 
-1. Create the `stepmeld` repository (Max). Contracts at the root, a
-   Rust workspace beside them, licence to match exlumen's choice.
-2. Write the data contracts as JSON schemas with golden fixtures, and
-   the scenario fixtures for A-D.
-3. The Rust core as a pure function held to those fixtures; in-memory
-   StateStore and Performer with their conformance suites.
-4. A SQLite StateStore and a local-process Performer.
-5. "Detect OmniTargets" end to end from exlumen: one verb, one recipe,
-   one Run, read by nothing but a CLI.
-6. Then the photogrammetry recipe in exlumen and the publish child in
-   veokit, and veokit 18 closes.
+1. *(done 2026-10-06)* The `stepmeld` repository, private, licence to
+   match exlumen's choice.
+2. *(done)* The four data contracts as JSON schemas with golden
+   fixtures; scenarios A-D as tests in `stepmeld-core/tests`, which
+   stand in for scenario fixtures until a second implementation needs
+   language-neutral ones.
+3. *(done)* The Rust core as a pure function; in-memory StateStore and
+   Performer with conformance suites.
+4. *(done)* `stepmeld-sqlite` and `stepmeld-local`.
+5. *(done)* "Detect OmniTargets" end to end through the `stepmeld`
+   command, with a shell script as the verb.
+6. exlumen: the real verbs (`groundtruth solve`, `dense`, OmniTarget
+   detection) as programs speaking the local Performer's protocol, and
+   the open recipes; veokit: the fleet and Batch Performers and the
+   publish child recipe; then veokit 18 closes.
+7. The Performer wire form beyond this machine (a server), and the
+   scenario fixtures as language-neutral files.
