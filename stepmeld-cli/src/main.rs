@@ -3,7 +3,6 @@
 //! Refusals are one line and exit 1; nothing here is a UI.
 
 use clap::{Parser, Subcommand};
-use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,7 +12,6 @@ use stepmeld_core::engine::Command;
 use stepmeld_core::store::StateStore;
 use stepmeld_core::workflow::{Actor, StepStatus, Waiting, Workflow};
 use stepmeld_core::{Error, Value};
-use stepmeld_local::{LocalPerformer, Program};
 use stepmeld_sqlite::SqliteStore;
 
 #[derive(Parser)]
@@ -116,33 +114,6 @@ enum Cmd {
     Performers,
 }
 
-/// The performers file: one Performer of this machine's programs, or
-/// several (`{"performers": [...]}`), each with a name, a locality (what
-/// it answers to "where": `this-machine` unless its programs are
-/// launchers for work elsewhere), where its Runs keep their files, and
-/// a program per verb.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum PerformersFile {
-    Several { performers: Vec<PerformerEntry> },
-    One(PerformerEntry),
-}
-
-#[derive(Deserialize)]
-struct PerformerEntry {
-    #[serde(default = "default_name")]
-    name: String,
-    #[serde(default)]
-    locality: Option<Locality>,
-    /// Where Runs keep their files.
-    root: PathBuf,
-    programs: Vec<Program>,
-}
-
-fn default_name() -> String {
-    "local".into()
-}
-
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(cli) {
@@ -190,14 +161,7 @@ fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
     let store = Arc::new(SqliteStore::open(&cli.store)?);
     let mut driver = Driver::new(store.clone(), &format!("stepmeld@{}", std::process::id())).with_nesting();
     if let Some(path) = &cli.performers {
-        let text = std::fs::read_to_string(path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
-        let file: PerformersFile = serde_json::from_str(&text).map_err(|e| Error::Refused(format!("{} is not a performers file: {e}", path.display())))?;
-        let entries = match file {
-            PerformersFile::Several { performers } => performers,
-            PerformersFile::One(one) => vec![one],
-        };
-        for e in entries {
-            let p = LocalPerformer::new(&e.name, &e.root, e.programs).at(e.locality.unwrap_or(Locality::ThisMachine));
+        for p in stepmeld_local::file::load(path)? {
             driver = driver.with_performer(Arc::new(p));
         }
     }
@@ -211,10 +175,7 @@ fn run(cli: Cli) -> Result<(), Error> {
     let until = || iso(now_secs() + 60);
     match &cli.command {
         Cmd::Performers => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({"name": "local", "root": "/path/for/runs", "programs": [{"verb": {"name": "detect-targets", "version": 1}, "command": ["python3", "/path/to/detect.py"]}]})).unwrap()
-            );
+            println!("{}", serde_json::to_string_pretty(&stepmeld_local::file::example()).unwrap());
             println!("\nEach program is run as: <command...> <run-dir>; it reads <run-dir>/request.json and writes <run-dir>/outcome.json (and progress.json as it goes).");
         }
         Cmd::Add { files } => {
