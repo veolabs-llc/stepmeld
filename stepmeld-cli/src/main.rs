@@ -109,11 +109,24 @@ enum Cmd {
     Performers,
 }
 
-/// The performers file: this machine's programs.
+/// The performers file: one Performer of this machine's programs, or
+/// several (`{"performers": [...]}`), each with a name, a locality (what
+/// it answers to "where": `this-machine` unless its programs are
+/// launchers for work elsewhere), where its Runs keep their files, and
+/// a program per verb.
 #[derive(Deserialize)]
-struct PerformersFile {
+#[serde(untagged)]
+enum PerformersFile {
+    Several { performers: Vec<PerformerEntry> },
+    One(PerformerEntry),
+}
+
+#[derive(Deserialize)]
+struct PerformerEntry {
     #[serde(default = "default_name")]
     name: String,
+    #[serde(default)]
+    locality: Option<Locality>,
     /// Where Runs keep their files.
     root: PathBuf,
     programs: Vec<Program>,
@@ -172,7 +185,14 @@ fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
     if let Some(path) = &cli.performers {
         let text = std::fs::read_to_string(path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
         let file: PerformersFile = serde_json::from_str(&text).map_err(|e| Error::Refused(format!("{} is not a performers file: {e}", path.display())))?;
-        driver = driver.with_performer(Arc::new(LocalPerformer::new(&file.name, &file.root, file.programs)));
+        let entries = match file {
+            PerformersFile::Several { performers } => performers,
+            PerformersFile::One(one) => vec![one],
+        };
+        for e in entries {
+            let p = LocalPerformer::new(&e.name, &e.root, e.programs).at(e.locality.unwrap_or(Locality::ThisMachine));
+            driver = driver.with_performer(Arc::new(p));
+        }
     }
     Ok((store, driver))
 }

@@ -38,6 +38,10 @@ pub struct Program {
 
 pub struct LocalPerformer {
     name: String,
+    /// What this Performer answers to "where": the programs run here,
+    /// but a program may be a launcher whose work happens elsewhere
+    /// (a job on a cloud queue), and then the Performer says so.
+    locality: Locality,
     root: PathBuf,
     programs: Vec<Program>,
     children: Mutex<BTreeMap<String, std::process::Child>>,
@@ -48,10 +52,18 @@ impl LocalPerformer {
     pub fn new(name: &str, root: &Path, programs: Vec<Program>) -> LocalPerformer {
         LocalPerformer {
             name: name.to_string(),
+            locality: Locality::ThisMachine,
             root: root.to_path_buf(),
             programs,
             children: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Say where the work happens, where that is not this machine: a
+    /// program may be a launcher for a job on a cloud queue.
+    pub fn at(mut self, locality: Locality) -> LocalPerformer {
+        self.locality = locality;
+        self
     }
 
     fn dir(&self, handle: &str) -> PathBuf {
