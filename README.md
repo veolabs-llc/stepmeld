@@ -18,6 +18,8 @@ do the work; a UI reads documents and never gets called.
 - `stepmeld-sqlite`: the StateStore in one SQLite file.
 - `stepmeld-local`: a Performer that runs a program per verb on this
   machine (files-in-a-directory protocol; any language).
+- `stepmeld-verb`: the program side of that protocol for a verb
+  written in Rust (the Python twin is `python/`'s `stepmeld.verb`).
 - `stepmeld-cli`: the `stepmeld` command over the two.
 
 Build and test with `scripts/test.sh` (cargo). Try it:

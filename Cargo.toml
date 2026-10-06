@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["stepmeld-core", "stepmeld-sqlite", "stepmeld-local", "stepmeld-cli"]
+members = ["stepmeld-core", "stepmeld-sqlite", "stepmeld-local", "stepmeld-cli", "stepmeld-verb"]
 
 [workspace.package]
 version = "0.1.0"

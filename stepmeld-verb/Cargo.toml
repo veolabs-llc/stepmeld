@@ -1,0 +1,15 @@
+[package]
+name = "stepmeld-verb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The program side of stepmeld's local Performer protocol, for a verb written in Rust: read request.json, write progress.json and outcome.json, keep state for a resume"
+
+[dependencies]
+stepmeld-core = { path = "../stepmeld-core" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
