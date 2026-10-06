@@ -26,6 +26,8 @@
 //! the program reads its state and carries on. A program that never
 //! said it was resumable is lost, as before.
 
+pub mod file;
+
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
