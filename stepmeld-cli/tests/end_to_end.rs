@@ -43,8 +43,23 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
     )
     .unwrap();
 
-    let (ok, out) = stepmeld(d, &["add", "verb.json", "recipe.json"]);
-    assert!(ok, "{out}");
+    // a recipe nesting another may be named before it in one add
+    std::fs::write(
+        d.join("outer.json"),
+        serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "find-targets-twice", "version": 1, "steps": [{"name": "once", "step": {"name": "find-targets", "version": 1}}]}).to_string(),
+    )
+    .unwrap();
+    let (ok, out) = stepmeld(d, &["add", "outer.json", "verb.json", "recipe.json"]);
+    assert!(ok && out.contains("added recipe find-targets-twice v1"), "{out}");
+    let (ok, out) = stepmeld(d, &["add", "outer.json"]);
+    assert!(ok, "adding again is fine: {out}");
+    std::fs::write(
+        d.join("orphan.json"),
+        serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "orphan", "version": 1, "steps": [{"name": "x", "step": {"name": "nope", "version": 1}}]}).to_string(),
+    )
+    .unwrap();
+    let (ok, out) = stepmeld(d, &["add", "orphan.json"]);
+    assert!(!ok && out.contains("not in the library"), "{out}");
     let (ok, out) = stepmeld(d, &["library"]);
     assert!(ok && out.contains("verb    detect-targets v1") && out.contains("recipe  find-targets v1"), "{out}");
     let (ok, out) = stepmeld(d, &["create", "find-targets", "--id", "wf-1"]);

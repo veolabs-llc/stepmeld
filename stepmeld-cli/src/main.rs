@@ -218,24 +218,43 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("\nEach program is run as: <command...> <run-dir>; it reads <run-dir>/request.json and writes <run-dir>/outcome.json (and progress.json as it goes).");
         }
         Cmd::Add { files } => {
+            // verbs first, then recipes in whatever order they resolve:
+            // a recipe that nests another may be named before it
+            let mut steps = Vec::new();
+            let mut recipes = Vec::new();
             for path in files {
                 let text = std::fs::read_to_string(path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
                 let doc: Value = serde_json::from_str(&text).map_err(|e| Error::Refused(format!("{} is not JSON: {e}", path.display())))?;
-                let contract = doc.get("contract").and_then(Value::as_str).unwrap_or("");
-                stepmeld_core::contracts::validate(&doc, contract).map_err(|e| Error::Refused(format!("{}: {e}", path.display())))?;
-                match contract {
-                    stepmeld_core::definition::STEP_DEFINITION => {
-                        let def: StepDefinition = serde_json::from_value(doc).map_err(|e| Error::Protocol(e.to_string()))?;
-                        store.put_step(&def)?;
-                        println!("added verb {}", def.reference());
-                    }
-                    stepmeld_core::definition::WORKFLOW_DEFINITION => {
-                        let def: WorkflowDefinition = serde_json::from_value(doc).map_err(|e| Error::Protocol(e.to_string()))?;
-                        store.put_workflow_definition(&def)?;
-                        println!("added recipe {}", def.reference());
-                    }
+                let contract = doc.get("contract").and_then(Value::as_str).unwrap_or("").to_string();
+                stepmeld_core::contracts::validate(&doc, &contract).map_err(|e| Error::Refused(format!("{}: {e}", path.display())))?;
+                match contract.as_str() {
+                    stepmeld_core::definition::STEP_DEFINITION => steps.push((path.clone(), serde_json::from_value::<StepDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
+                    stepmeld_core::definition::WORKFLOW_DEFINITION => recipes.push((path.clone(), serde_json::from_value::<WorkflowDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
                     other => return Err(Error::Refused(format!("{}: contract {other:?} is not a definition", path.display()))),
                 }
+            }
+            for (_, def) in &steps {
+                store.put_step(def)?;
+                println!("added verb {}", def.reference());
+            }
+            while !recipes.is_empty() {
+                let before = recipes.len();
+                let mut kept = Vec::new();
+                let mut errors = Vec::new();
+                for (path, def) in recipes {
+                    match store.put_workflow_definition(&def) {
+                        Ok(()) => println!("added recipe {}", def.reference()),
+                        Err(Error::Invalid(e)) if e.contains("not in the library") => {
+                            errors.push(format!("{}: {e}", path.display()));
+                            kept.push((path, def));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if kept.len() == before {
+                    return Err(Error::Refused(errors.join("\n")));
+                }
+                recipes = kept;
             }
         }
         Cmd::Library => {
