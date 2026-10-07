@@ -203,6 +203,8 @@ mod tests {
         }
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.library().unwrap().step(&def.reference()).unwrap().label.as_deref(), Some("A verb"));
-        assert_eq!(store.history("conformance-wf").unwrap().len(), 3);
+        // the suite removes its Workflow at the end and puts it again: no history
+        assert!(store.get("conformance-wf").unwrap().is_some());
+        assert!(store.history("conformance-wf").unwrap().is_empty(), "removed and put again, with no history");
     }
 }
