@@ -110,8 +110,18 @@ impl Run {
             .ok_or_else(|| refused(format!("a {what} is {{\"{name}\": ...}}, not {}", serde_json::to_string(value).unwrap_or_default().chars().take(80).collect::<String>())))
     }
 
+    /// One line of the Run's log, stamped with the moment (UTC, the
+    /// one spelling every stepmeld record uses; a reader shows local
+    /// time). A message of several lines is several stamped lines.
     pub fn log(&self, line: &str) {
-        println!("{line}");
+        let stamp = now();
+        let mut lines = line.lines().peekable();
+        if lines.peek().is_none() {
+            println!("{stamp} ");
+        }
+        for l in lines {
+            println!("{stamp} {l}");
+        }
     }
 
     pub fn progress(&self, phase: Option<&str>, done: Option<u64>, total: Option<u64>, unit: Option<&str>) {

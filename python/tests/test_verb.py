@@ -109,3 +109,20 @@ def test_saved_state_comes_back_on_the_next_life(tmp_path):
 
     assert verb.main({"detect-targets": second}, [str(d)]) == 0
     assert outcome(d)["summary"]["headline"] == "picked up j-9"
+
+
+def test_every_log_line_is_stamped(tmp_path, capsys):
+    """A reader of log.txt sees when each line was said: a UTC stamp in
+    stepmeld's one spelling, one per line even for a message of several."""
+    import re
+
+    def chatty(run):
+        run.log("one")
+        run.log("two\nthree")
+        run.succeed({"targets": []})
+
+    assert verb.main({"detect-targets": chatty}, [str(request(tmp_path))]) == 0
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    stamped = [re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (.*)", ln) for ln in lines]
+    assert all(stamped), lines
+    assert [m.group(2) for m in stamped] == ["one", "two", "three"]

@@ -95,7 +95,12 @@ class Run:
     # ---- what is said back ----
 
     def log(self, message: str) -> None:
-        print(message, flush=True)
+        """One line of the Run's log, stamped with the moment (UTC, the
+        one spelling every stepmeld record uses; a reader shows local
+        time). A message of several lines is several stamped lines."""
+        stamp = _now()
+        for line in message.splitlines() or [""]:
+            print(f"{stamp} {line}", flush=True)
 
     def progress(self, phase: str | None = None, done: int | None = None, total: int | None = None, unit: str | None = None) -> None:
         doc = {"at": _now()}
