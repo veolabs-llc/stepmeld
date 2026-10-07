@@ -129,6 +129,15 @@ impl StateStore for SqliteStore {
         ids.collect::<Result<Vec<_>, _>>().map_err(db)
     }
 
+    fn remove(&self, id: &str) -> Result<(), Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(db)?;
+        tx.execute("DELETE FROM history WHERE workflow = ?1", params![id]).map_err(db)?;
+        tx.execute("DELETE FROM leases WHERE workflow = ?1", params![id]).map_err(db)?;
+        tx.execute("DELETE FROM workflows WHERE id = ?1", params![id]).map_err(db)?;
+        tx.commit().map_err(db)
+    }
+
     fn append(&self, entries: &[Entry]) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().map_err(db)?;

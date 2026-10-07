@@ -117,4 +117,11 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
     // a refusal is one line and exit 1
     let (ok, out) = stepmeld(d, &["set", "wf-1", "detect", "--input", "nope", "--value", "1"]);
     assert!(!ok && out.trim().lines().count() == 1 && out.contains("no input"), "{out}");
+    // a finished Workflow and its children are forgotten; a live one is not
+    let (ok, out) = stepmeld(d, &["remove", "wf-1"]);
+    assert!(ok && out.contains("removed wf-1"), "{out}");
+    let (ok, out) = stepmeld(d, &["show", "wf-1"]);
+    assert!(!ok && out.contains("no workflow"), "{out}");
+    let (ok, out) = stepmeld(d, &["remove", "wf-1"]);
+    assert!(!ok && out.contains("no workflow"), "{out}");
 }

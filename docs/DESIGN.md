@@ -408,6 +408,12 @@ and its tests, and none contradicts the rules above.
    is short by contract, and a driver may thread as it likes.
 10. **A person's Run has no locality**, and its Performer word is the
     person.
+12. **A Workflow is removed by a person, never archived by the
+    engine.** `remove` (the StateStore's, through the driver) forgets
+    a Workflow, its History, its lease and the children its Runs made;
+    one with a Run still live is refused until canceled. A driver
+    ticks every Workflow in the store, finished ones included (a lease
+    write each), so a long-lived store is kept short by removing.
 11. **The local Performer's protocol is files in a directory**
     (`request.json` in; `progress.json`, `outcome.json`, `log.txt`
     out), so a verb can be a program in any language: the first wire
