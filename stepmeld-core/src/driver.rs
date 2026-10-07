@@ -73,6 +73,31 @@ impl Driver {
         Ok(wf)
     }
 
+    /// Forget a Workflow and the children its Runs made (`<id>~…`): what
+    /// a person asks once it is over. One with a Run still live, or
+    /// held under another driver's lease, is refused in words; cancel
+    /// it first, and tick. The Runs' files on the Performers' side stay
+    /// where they are: the engine never owned them.
+    pub fn remove(&self, id: &str, now: &str, lease_until: &str) -> Result<Vec<String>, Error> {
+        let lib = self.store.library()?;
+        let (wf, _) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
+        let def = self.definition(&lib, &wf)?;
+        if matches!(wf.status(&def), WorkflowStatus::Running) {
+            return Err(Error::Refused(format!("{id} has a Run still live: cancel it first, and tick")));
+        }
+        if !self.store.lease(id, &self.holder, now, lease_until)? {
+            return Err(Error::Refused(format!("{id} is held by another driver right now; ask again")));
+        }
+        let prefix = format!("{id}~");
+        let mut gone: Vec<String> = self.store.list()?.into_iter().filter(|c| c.starts_with(&prefix)).collect();
+        for child in &gone {
+            self.store.remove(child)?;
+        }
+        self.store.remove(id)?;
+        gone.push(id.to_string());
+        Ok(gone)
+    }
+
     /// Advance one Workflow as far as it goes now: mint and start what
     /// is ready, observe what runs, apply what came back, until nothing
     /// more happens. Under the lease; skipped when another holds it.

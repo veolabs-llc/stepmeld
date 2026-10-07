@@ -25,6 +25,10 @@ pub trait StateStore: Send + Sync {
     /// "already exists" in it. The version now held.
     fn put(&self, wf: &Workflow, expected: Option<&str>) -> Result<String, Error>;
     fn list(&self) -> Result<Vec<String>, Error>;
+    /// Forget a Workflow: its document, its History and its lease. A
+    /// Workflow that is not there is nothing to do. The driver decides
+    /// whether one may go ([`crate::driver::Driver::remove`]).
+    fn remove(&self, id: &str) -> Result<(), Error>;
     // ---- History ----
     /// Append, assigning each entry the next `seq` of its workflow.
     fn append(&self, entries: &[Entry]) -> Result<(), Error>;
@@ -98,6 +102,14 @@ impl StateStore for MemoryStore {
 
     fn list(&self) -> Result<Vec<String>, Error> {
         Ok(self.inner.lock().unwrap().workflows.keys().cloned().collect())
+    }
+
+    fn remove(&self, id: &str) -> Result<(), Error> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.workflows.remove(id);
+        inner.history.remove(id);
+        inner.leases.remove(id);
+        Ok(())
     }
 
     fn append(&self, entries: &[Entry]) -> Result<(), Error> {
@@ -181,6 +193,14 @@ pub mod conformance {
         assert!(!store.lease(id, "a", "2026-10-06T00:02:10Z", "2026-10-06T00:03:00Z").unwrap(), "releasing another's lease does nothing");
         store.release(id, "b").unwrap();
         assert!(store.lease(id, "a", "2026-10-06T00:02:20Z", "2026-10-06T00:03:00Z").unwrap(), "a released lease is free");
+        store.remove(id).unwrap();
+        assert!(store.get(id).unwrap().is_none() && !store.list().unwrap().contains(&id.to_string()), "removed is gone");
+        assert!(store.history(id).unwrap().is_empty(), "its history with it");
+        assert!(store.lease(id, "c", "2026-10-06T00:02:30Z", "2026-10-06T00:03:00Z").unwrap(), "and its lease");
+        store.remove(id).unwrap();
+        store.remove("never-there").unwrap();
+        let v = store.put(&workflow(id), None).unwrap();
+        assert!(!v.is_empty(), "the id may be used again");
     }
 }
 

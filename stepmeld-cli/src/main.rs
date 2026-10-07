@@ -93,6 +93,8 @@ enum Cmd {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Forget a finished Workflow and the children its Runs made (cancel a live one first).
+    Remove { workflow: String },
     /// Advance every Workflow once; with --watch, keep going until nothing is running.
     Tick {
         #[arg(long)]
@@ -302,6 +304,10 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Cancel { workflow, step, reason } => {
             driver.command(workflow, &Command::Cancel { step: step.clone(), reason: reason.clone() }, &by, &now)?;
             println!("cancel asked; tick to carry it out");
+        }
+        Cmd::Remove { workflow } => {
+            let gone = driver.remove(workflow, &now, &until())?;
+            println!("removed {}", gone.join(", "));
         }
         Cmd::Tick { watch, every } => loop {
             let statuses = driver.tick_all(&iso(now_secs()), &until())?;
