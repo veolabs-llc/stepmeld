@@ -29,6 +29,10 @@ impl SqliteStore {
     /// Open or create the file; the tables are made when missing.
     pub fn open(path: &Path) -> Result<SqliteStore, Error> {
         let conn = Connection::open(path).map_err(db)?;
+        // rusqlite waits five seconds for another writer's lock; the
+        // store's own transactions begin IMMEDIATE (`write`) so that the
+        // wait happens at BEGIN, before any read, and never ends in a
+        // stale snapshot.
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;
@@ -47,6 +51,18 @@ impl SqliteStore {
     pub fn in_memory() -> Result<SqliteStore, Error> {
         Self::open(Path::new(":memory:"))
     }
+}
+
+/// A transaction that will write, begun IMMEDIATE: it takes the write
+/// lock first (waiting for another writer, rusqlite's five seconds)
+/// and reads after. Begun DEFERRED, a transaction reads at once and
+/// asks for the lock at its first write; when another process (a
+/// daemon's tick beside a person's Command) committed in between, the
+/// read is a stale snapshot and SQLite refuses the upgrade at once,
+/// "database is locked", however long the busy handler would wait
+/// (veokit, 2026-10-08: a cancel that collided with a tick).
+fn write(conn: &mut Connection) -> Result<rusqlite::Transaction<'_>, Error> {
+    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(db)
 }
 
 impl StateStore for SqliteStore {
@@ -107,7 +123,7 @@ impl StateStore for SqliteStore {
 
     fn put(&self, wf: &Workflow, expected: Option<&str>) -> Result<String, Error> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().map_err(db)?;
+        let tx = write(&mut conn)?;
         let held: Option<i64> = tx.query_row("SELECT version FROM workflows WHERE id = ?1", params![wf.id], |r| r.get(0)).optional().map_err(db)?;
         let next = match (held, expected) {
             (Some(_), None) => return Err(Error::Refused(format!("workflow {} already exists", wf.id))),
@@ -131,7 +147,7 @@ impl StateStore for SqliteStore {
 
     fn remove(&self, id: &str) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().map_err(db)?;
+        let tx = write(&mut conn)?;
         tx.execute("DELETE FROM history WHERE workflow = ?1", params![id]).map_err(db)?;
         tx.execute("DELETE FROM leases WHERE workflow = ?1", params![id]).map_err(db)?;
         tx.execute("DELETE FROM workflows WHERE id = ?1", params![id]).map_err(db)?;
@@ -140,7 +156,7 @@ impl StateStore for SqliteStore {
 
     fn append(&self, entries: &[Entry]) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().map_err(db)?;
+        let tx = write(&mut conn)?;
         for e in entries {
             let last: i64 = tx.query_row("SELECT COALESCE(MAX(seq), 0) FROM history WHERE workflow = ?1", params![e.workflow], |r| r.get(0)).map_err(db)?;
             let mut e = e.clone();
@@ -160,7 +176,7 @@ impl StateStore for SqliteStore {
 
     fn lease(&self, workflow: &str, holder: &str, now: &str, until: &str) -> Result<bool, Error> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().map_err(db)?;
+        let tx = write(&mut conn)?;
         let held: Option<(String, String)> = tx.query_row("SELECT holder, until FROM leases WHERE workflow = ?1", params![workflow], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(db)?;
         let free = match &held {
             None => true,
@@ -188,6 +204,28 @@ mod tests {
     #[test]
     fn the_sqlite_store_conforms() {
         stepmeld_core::store::conformance::run(&SqliteStore::in_memory().unwrap());
+    }
+
+    /// Two processes write one file: a lease taken while another
+    /// connection holds the write lock and commits a change meanwhile
+    /// waits and lands, rather than being refused with a stale snapshot.
+    #[test]
+    fn a_write_waits_for_another_writer_and_is_not_refused_on_a_stale_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.sqlite");
+        let store = SqliteStore::open(&path).unwrap();
+        store.lease("wf", "daemon", "2026-10-08T10:00:00Z", "2026-10-08T10:01:00Z").unwrap();
+        // the other process: the lock held, a change made, committed later
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE; UPDATE leases SET until = '2026-10-08T10:02:00Z' WHERE workflow = 'wf';").unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            other.execute_batch("COMMIT").unwrap();
+        });
+        let t0 = std::time::Instant::now();
+        let taken = store.lease("wf", "daemon", "2026-10-08T10:00:30Z", "2026-10-08T10:03:00Z").unwrap();
+        assert!(taken && t0.elapsed() >= std::time::Duration::from_millis(200), "waited for the other writer");
+        holder.join().unwrap();
     }
 
     #[test]
