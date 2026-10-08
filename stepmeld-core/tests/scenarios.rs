@@ -218,7 +218,7 @@ impl Rig {
 }
 
 // ---------------------------------------------------------------------
-// The one-step example: Detect OmniTargets.
+// The one-step example: Detect targets.
 
 fn detect_library(store: &MemoryStore) {
     store
@@ -226,7 +226,7 @@ fn detect_library(store: &MemoryStore) {
         .unwrap();
     // the verb and the recipe may share a label, never a name: verbs are one namespace
     let mut w = WorkflowDefinition::new("find-targets", 1);
-    w.label = Some("Detect OmniTargets".into());
+    w.label = Some("Detect targets".into());
     w.steps = vec![entry("detect", "detect-targets")];
     store.put_workflow_definition(&w).unwrap();
 }
@@ -701,7 +701,7 @@ fn scenario_d_the_same_verb_twice() {
     ];
     store.put_workflow_definition(&w).unwrap();
     let local = performer("local", Locality::ThisMachine, &["detect-targets", "compare-targets"]);
-    let fleet = performer("ryzenbox", Locality::LocalNetwork, &["detect-targets"]);
+    let fleet = performer("workstation", Locality::LocalNetwork, &["detect-targets"]);
     let mut rig = Rig::new(store.clone(), vec![local.clone(), fleet.clone()], "target-drift", "drift-1");
 
     // one side first: detect-early starts; nothing waits on "the previous step"
@@ -716,7 +716,7 @@ fn scenario_d_the_same_verb_twice() {
     rig.command(param("detect-late", "min-size", 6.into())).unwrap();
     rig.command(Command::Place {
         step: "detect-late".into(),
-        performer: "ryzenbox".into(),
+        performer: "workstation".into(),
         locality: Locality::LocalNetwork,
     })
     .unwrap();

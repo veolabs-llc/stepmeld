@@ -1,29 +1,26 @@
 # stepmeld — design note
 
-*Moved here from veokit/docs/STEPMELD-DESIGN.md on 2026-10-06. Drafted 2026-10-06 from the design conversation of 2026-10-04 to
+*Drafted 2026-10-06 from the design conversation of 2026-10-04 to
 2026-10-06 (Max and Claude). It records agreed vocabulary and shape;
-nothing is built. Where a point is still my recommendation rather than
-Max's ruling it is labelled. The note lives here until the `stepmeld`
-repository exists, then moves there; veokit issues 17 and 18 refer to
-it.*
+§10a records what building the first implementation settled. Where a
+point is still my recommendation rather than Max's ruling it is
+labelled.*
 
 ## 1. Why
 
-The review of `conductor-core` (veokit 17) found that there is no
-workflow runner to extract: what issue 18 calls the runner is a set of
-per-step launch functions and one fold function that knows every step,
-every route and the publish chain by name. Rather than carve that into
-a runner, the decision is to design a generic workflow engine and build
-it in a repository of its own, open source, upstream of exlumen:
+stepmeld came out of the review of an application whose workflow logic
+had no runner to extract: what looked like one was a set of per-step
+launch functions and one fold function that knew every step, every
+route and every follow-on job by name. Rather than carve that into a
+runner, the decision was to design a generic workflow engine and build
+it in a repository of its own, open source, upstream of everything that
+uses it.
 
-```
-stepmeld  <-  exlumen  <-  veokit  <-  gt, kima
-```
-
-The engine is domain-agnostic. gt will need an expressive, multi-user
-workflow engine; kima's pipelines and a render farm fit the same model;
-exlumen needs an open runner for its open workflows. One engine, three
-users, which is the second-domain test a generic design needs.
+The engine is domain-agnostic. A photogrammetry pipeline, a
+visual-effects pipeline and a render farm fit the same model; an
+expressive, multi-user workflow tool is the direction. Several users in
+different domains, which is the second-domain test a generic design
+needs.
 
 The name: `stepmeld`, free on crates.io, PyPI, npm and GitHub as of
 2026-10-06.
@@ -85,7 +82,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **Step** | One occurrence of a StepDefinition inside a Workflow, carrying the name the recipe gave it. |
 | **Input, Parameter, Output** | A Step's slots, each holding a Value or empty. |
 | **Value** | An opaque blob the engine never reads, usually a reference into a store. Compared for equality. |
-| **Run** | One execution of a Step: its Inputs and Parameters as resolved, its Performer and placement, its handle, its progress, its Outcome, its metrics. Append-only: a retake is a new Run. A data-layer run (§8) is the durable trace of one. |
+| **Run** | One execution of a Step: its Inputs and Parameters as resolved, its Performer and placement, its handle, its progress, its Outcome, its metrics. Append-only: a retake is a new Run. A stored run (§8) is the durable trace of one. |
 | **Gate** | A Step's go/no-go: the conjunction of its Predicates (§5.5). Derived each time the engine looks. |
 | **Status** | Derived, never stored. Step: not ready, ready, running, waiting on a person (with the Predicate that is closed), succeeded, failed, skipped, stale. Workflow: follows from its Steps. |
 | **Stale** | A succeeded Step whose Inputs or Parameters now differ from its current Run's record (§5.7). |
@@ -138,7 +135,7 @@ feeding five Steps opens five Gates.
 
 With a server, several processes may hold the same StateStore. One
 driver advances a Workflow at a time, under a lease held in the
-StateStore. (The publish chain's lease, one level up.)
+StateStore.
 
 ### 4.2 Performer
 
@@ -176,10 +173,10 @@ estimate(step)           -> optional: cost or duration, changing nothing
 A Step a person completes has no Performer; it is finished by a
 `complete` Command carrying its Outputs.
 
-Kinds expected: a local process, a container on this machine (what
-exlumen's `execution.v1` local executor is), fleet orders (veokit),
-AWS Batch (veokit), and the nested-workflow Performer, which lives
-inside the engine because it issues Commands (§6).
+Kinds expected: a local process, a container on this machine, orders
+to other machines on the local network, a cloud batch service, and the
+nested-workflow Performer, which lives inside the engine because it
+issues Commands (§6).
 
 The Performer contract gets a wire form, not only a Rust trait, so a
 Performer in another language or process can serve a Rust engine.
@@ -187,7 +184,7 @@ Performer in another language or process can serve a Rust engine.
 ### 4.3 Contracts
 
 Language-neutral, versioned, with golden fixtures and conformance
-suites, as `exlumen/contracts` does today.
+suites.
 
 | Contract | Kind | States |
 |---|---|---|
@@ -220,7 +217,7 @@ conformance suite beside it.
 3. **A workflow's face is derived.** Required Inputs no Binding feeds
    are what a user must provide; every Step's Output is addressable by
    path (`dense.cloud`). A value two Steps need comes from a Step with
-   no Inputs (today's `sources` step), never from the Workflow itself.
+   no Inputs, never from the Workflow itself.
 4. **Names are the only per-use difference in a recipe.** Two entries
    for the same StepDefinition differ by name; everything else that
    makes the Steps differ arrives after minting. A step entry may carry
@@ -284,15 +281,15 @@ History, linked by its handle. A child that needs attention is reported
 running with the attention flag, so the person fixes it inside the
 child and the parent proceeds when the child does.
 
-The publish chain becomes a child recipe: `chunk` then `layers` and
-`warm` in parallel. Its `commit` is the dense Run's success and its
-`pull` is the chunk Performer's own fetching. Leases, capabilities,
-`waiting`, `blocked` and `interrupted` were the chain's own scheduler;
-here they are Gates, Performers and the attention flag.
+A chain of follow-on jobs is a child recipe: publishing, say, as
+`chunk` then `layers` and `warm` in parallel. What such a chain would
+otherwise need as a scheduler of its own (leases, capabilities,
+`waiting`, `blocked`, `interrupted`) is here Gates, Performers and the
+attention flag.
 
-Nesting also answers issue 18's hardest question: exlumen ships
-"photogrammetry", which ends at dense; veokit's "photogrammetry layer"
-nests it and adds publish. The open recipe never names a viewer.
+Nesting also lets one recipe extend another across a boundary: an open
+"photogrammetry" recipe ends at dense, and a product's "photogrammetry
+layer" nests it and adds publish. The open recipe never names a viewer.
 
 ## 7. The scenarios
 
@@ -309,8 +306,8 @@ fixtures.
   Actor reads fine.
 - **B. Rerunning upstream.** Changing `solve.matcher` after everything
   succeeded. Found: the stale rules (§5.7), the current-Run rule (§5.8),
-  "superseded" as a data-layer word for a Run a later Run replaced (the
-  sweep can reclaim one nothing references), and that re-reviewing may be
+  "superseded" as a store's word for a Run a later Run replaced (a
+  cleanup can reclaim one nothing references), and that re-reviewing may be
   unwanted (`on stale: keep`, left out until asked for).
 - **C. Publish as a nested workflow.** §6. Found: the attention flag;
   confirmations per Step at any depth; dotted names are the only new
@@ -325,27 +322,23 @@ fixtures.
 
 ## 8. Relation to what exists
 
-| Today | Under stepmeld |
-|---|---|
-| A data-layer run (id, manifest, prefix) | The durable trace of one Run: the run id is the Run's, the manifest is its record, the prefix is where its Outputs live. A failed Run is an uncommitted prefix; a retake is a new run id, as now. Sharded dense is one Run whose Performer runs a job plan. An executor's retry stays beneath one Run. |
-| The `runs` space also holding status, job, workflow, chain, dispatch and machine documents | Most of it becomes the StateStore |
-| `workflow.v1` with its hard-coded kinds, routes and publish fields | WorkflowDefinition + Workflow documents; `aws-batch`, `dispatch`, `conductor-local` become Performers |
-| `Compute`, `execution.v1` | `execution.v1` stays exlumen's contract for container jobs; one adapter presents an executor as a Performer; the engine never sees a job |
-| The publish chain (`chain-state.v2`) | A child recipe (§6) |
-| `fold_workflow` and the five step tables in conductor-core | The loop (§4.1) and the Library |
-| The glossary's "run": a computation output | One execution of a Step and what it produced; same referent, wider sense |
+How a system that already stores what its computations produce maps
+onto the engine:
 
-veokit 17's refactoring plan is unchanged in its first phases (carving
-the document helpers and the leaves off `Direct`) and changes in its
-later ones: instead of building a runner inside conductor-core, the
-launch and fold code is retired in favour of Performers for stepmeld.
-No backward compatibility is owed to today's workflow logic.
+| In the system | Under stepmeld |
+|---|---|
+| A stored run of a computation (id, manifest, location) | The durable trace of one Run: the run id is the Run's, the manifest is its record, the location is where its Outputs live. A failed Run is an uncommitted location; a retake is a new run id. Work split into many jobs is one Run whose Performer runs a job plan. An executor's retry stays beneath one Run. |
+| Status, job, workflow and machine documents kept beside the runs | Most of it becomes the StateStore |
+| A workflow document with hard-coded kinds and routes | WorkflowDefinition + Workflow documents; each way of running a job becomes a Performer |
+| A contract for container jobs and its executors | Stays the system's own; one adapter presents an executor as a Performer; the engine never sees a job |
+| A chain of follow-on jobs with its own state | A child recipe (§6) |
+| Per-step launch functions and a function that folds their results | The loop (§4.1) and the Library |
 
 ## 9. Ease of use
 
 The complexity sits with recipe authors, not with people who run
 recipes. A user picks a WorkflowDefinition and sees Steps with reasons
-("needs photos", "waiting for your OK", "running on RyzenBox"); they
+("needs photos", "waiting for your OK", "running on the workstation"); they
 never meet a Binding. Authors meet Bindings, but the recipe format may
 infer the obvious ones (one Input below one Output of the same tag) as
 sugar compiled to explicit Bindings before anything runs. Defaults cover
@@ -380,7 +373,7 @@ and its tests, and none contradicts the rules above.
 
 1. **Verbs are one namespace.** A WorkflowDefinition may not take a
    StepDefinition's name and version, since the Library offers both as
-   verbs. Labels may be equal ("Detect OmniTargets" twice), names not.
+   verbs. Labels may be equal ("Detect targets" twice), names not.
 2. **Port names.** Inputs and Parameters share a namespace (both are
    given); Outputs have their own (a refine takes `model` and gives
    `model`). A port name on a nested recipe's face is dotted
@@ -432,8 +425,8 @@ and its tests, and none contradicts the rules above.
 
 ## 12. Next steps
 
-1. *(done 2026-10-06)* The `stepmeld` repository, private, licence to
-   match exlumen's choice.
+1. *(done 2026-10-06)* The `stepmeld` repository; public under MIT or
+   Apache-2.0 since 2026-10-08.
 2. *(done)* The four data contracts as JSON schemas with golden
    fixtures; scenarios A-D as tests in `stepmeld-core/tests`, which
    stand in for scenario fixtures until a second implementation needs
@@ -441,11 +434,10 @@ and its tests, and none contradicts the rules above.
 3. *(done)* The Rust core as a pure function; in-memory StateStore and
    Performer with conformance suites.
 4. *(done)* `stepmeld-sqlite` and `stepmeld-local`.
-5. *(done)* "Detect OmniTargets" end to end through the `stepmeld`
+5. *(done)* "Detect targets" end to end through the `stepmeld`
    command, with a shell script as the verb.
-6. exlumen: the real verbs (`groundtruth solve`, `dense`, OmniTarget
-   detection) as programs speaking the local Performer's protocol, and
-   the open recipes; veokit: the fleet and Batch Performers and the
-   publish child recipe; then veokit 18 closes.
+6. *(done, downstream)* Real verbs as programs speaking the local
+   Performer's protocol, with their recipes; Performers for other
+   machines and a cloud batch service; a child recipe for publishing.
 7. The Performer wire form beyond this machine (a server), and the
    scenario fixtures as language-neutral files.

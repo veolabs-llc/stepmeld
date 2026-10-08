@@ -36,10 +36,10 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
         serde_json::json!({"root": d.join("runs"), "programs": [{"verb": {"name": "detect-targets", "version": 1}, "command": ["sh", d.join("detect.sh")]}]}).to_string(),
     )
     .unwrap();
-    std::fs::write(d.join("verb.json"), serde_json::json!({"contract": "stepmeld/step-definition.v1", "name": "detect-targets", "version": 1, "label": "Detect OmniTargets", "inputs": [{"name": "images", "tag": "file-list"}], "parameters": [{"name": "min-size", "tag": "integer", "default": 12}], "outputs": [{"name": "targets", "tag": "target-table"}]}).to_string()).unwrap();
+    std::fs::write(d.join("verb.json"), serde_json::json!({"contract": "stepmeld/step-definition.v1", "name": "detect-targets", "version": 1, "label": "Detect targets", "inputs": [{"name": "images", "tag": "file-list"}], "parameters": [{"name": "min-size", "tag": "integer", "default": 12}], "outputs": [{"name": "targets", "tag": "target-table"}]}).to_string()).unwrap();
     std::fs::write(
         d.join("recipe.json"),
-        serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "find-targets", "version": 1, "label": "Detect OmniTargets", "steps": [{"name": "detect", "step": {"name": "detect-targets", "version": 1}}]}).to_string(),
+        serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "find-targets", "version": 1, "label": "Detect targets", "steps": [{"name": "detect", "step": {"name": "detect-targets", "version": 1}}]}).to_string(),
     )
     .unwrap();
 

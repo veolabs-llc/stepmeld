@@ -1,5 +1,5 @@
-# Pinned to the same compiler as veokit's Seurat workspace (1.97.1), so
-# the four repositories build with one toolchain. Bump deliberately.
+# Pinned, so every build and every downstream workspace uses one
+# compiler. Bump deliberately.
 [toolchain]
 channel = "1.97.1"
 components = ["rustfmt", "clippy"]
