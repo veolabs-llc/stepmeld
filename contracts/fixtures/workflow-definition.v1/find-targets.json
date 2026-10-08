@@ -1,7 +1,7 @@
 {
   "bindings": [],
   "contract": "stepmeld/workflow-definition.v1",
-  "label": "Detect OmniTargets",
+  "label": "Detect targets",
   "name": "find-targets",
   "steps": [
     {

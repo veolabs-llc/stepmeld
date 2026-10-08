@@ -31,5 +31,13 @@ cargo run -q -p stepmeld-cli -- create find-targets --id wf-1
 cargo run -q -p stepmeld-cli -- show wf-1
 ```
 
-Licence: to be chosen with exlumen's (Apache-2.0 or MPL-2.0); private
-until then. Built by VEO Labs; first user is the exlumen engine.
+## Licence
+
+Licensed under either of the Apache License, Version 2.0
+([LICENSE-APACHE](LICENSE-APACHE)) or the MIT licence
+([LICENSE-MIT](LICENSE-MIT)), at your option. Built by VEO Labs.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work by you, as defined in the
+Apache-2.0 licence, shall be dual licensed as above, without any
+additional terms or conditions.
