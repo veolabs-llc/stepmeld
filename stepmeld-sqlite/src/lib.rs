@@ -60,7 +60,7 @@ impl SqliteStore {
 /// daemon's tick beside a person's Command) committed in between, the
 /// read is a stale snapshot and SQLite refuses the upgrade at once,
 /// "database is locked", however long the busy handler would wait
-/// (veokit, 2026-10-08: a cancel that collided with a tick).
+/// (seen 2026-10-08: a cancel that collided with a tick).
 fn write(conn: &mut Connection) -> Result<rusqlite::Transaction<'_>, Error> {
     conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(db)
 }
