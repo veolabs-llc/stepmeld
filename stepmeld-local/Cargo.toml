@@ -4,10 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "A Performer that runs a program on this machine for each verb"
 
 [dependencies]
-stepmeld-core = { path = "../stepmeld-core" }
+stepmeld-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

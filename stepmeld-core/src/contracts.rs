@@ -1,4 +1,6 @@
-//! The contracts, compiled in: `contracts/schemas/*.schema.json`.
+//! The contracts, compiled in: `schemas/*.schema.json`, a copy of the
+//! repository's `contracts/schemas` (a published crate carries only its
+//! own directory), held equal by test.
 //! [`validate`] holds a document to one by name.
 
 use jsonschema::Validator;
@@ -7,10 +9,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub const SCHEMAS: [(&str, &str); 4] = [
-    ("stepmeld/step-definition.v1", include_str!("../../contracts/schemas/step-definition.v1.schema.json")),
-    ("stepmeld/workflow-definition.v1", include_str!("../../contracts/schemas/workflow-definition.v1.schema.json")),
-    ("stepmeld/workflow.v1", include_str!("../../contracts/schemas/workflow.v1.schema.json")),
-    ("stepmeld/history.v1", include_str!("../../contracts/schemas/history.v1.schema.json")),
+    ("stepmeld/step-definition.v1", include_str!("../schemas/step-definition.v1.schema.json")),
+    ("stepmeld/workflow-definition.v1", include_str!("../schemas/workflow-definition.v1.schema.json")),
+    ("stepmeld/workflow.v1", include_str!("../schemas/workflow.v1.schema.json")),
+    ("stepmeld/history.v1", include_str!("../schemas/history.v1.schema.json")),
 ];
 
 fn compiled() -> &'static HashMap<&'static str, Result<Validator, String>> {
@@ -70,6 +72,11 @@ mod tests {
         let mut compiled: Vec<String> = names().map(str::to_string).collect();
         compiled.sort();
         assert_eq!(on_disk, compiled, "a schema on disk is compiled in, and the reverse");
+        for (name, text) in SCHEMAS {
+            let file = format!("{}.schema.json", name.strip_prefix("stepmeld/").unwrap());
+            let theirs = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/schemas").join(&file)).unwrap();
+            assert_eq!(text, theirs, "stepmeld-core/schemas/{file} is a copy of contracts/schemas; copy again");
+        }
     }
 
     /// Every golden fixture validates against the contract its
