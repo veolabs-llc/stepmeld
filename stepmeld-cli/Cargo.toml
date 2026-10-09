@@ -1,9 +1,12 @@
 [package]
-name = "stepmeld-cli"
+name = "stepmeld"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "The stepmeld command: a Library, Workflows and a driver over one SQLite file and this machine's programs"
 
 [[bin]]
@@ -11,9 +14,9 @@ name = "stepmeld"
 path = "src/main.rs"
 
 [dependencies]
-stepmeld-core = { path = "../stepmeld-core" }
-stepmeld-sqlite = { path = "../stepmeld-sqlite" }
-stepmeld-local = { path = "../stepmeld-local" }
+stepmeld-core.workspace = true
+stepmeld-sqlite.workspace = true
+stepmeld-local.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Argument parsing (MIT OR Apache-2.0).

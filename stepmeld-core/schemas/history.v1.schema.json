@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/history.v1",
+  "title": "One entry of the append-only record: who did what, when.",
+  "type": "object",
+  "required": [
+    "contract",
+    "seq",
+    "at",
+    "by",
+    "workflow",
+    "kind"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "stepmeld/history.v1"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Per workflow, assigned by the StateStore; 0 until appended."
+    },
+    "at": {
+      "type": "string"
+    },
+    "by": {
+      "$ref": "#/$defs/actor"
+    },
+    "workflow": {
+      "type": "string"
+    },
+    "step": {
+      "type": "string"
+    },
+    "run": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "created",
+        "set",
+        "go",
+        "placed",
+        "confirmed",
+        "completed",
+        "policy-set",
+        "cancel-asked",
+        "canceled",
+        "run-minted",
+        "run-started",
+        "run-ended",
+        "progress",
+        "attention"
+      ]
+    },
+    "detail": {}
+  },
+  "$defs": {
+    "actor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "person"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "agent"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "rule",
+            "step"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "policy"
+            },
+            "rule": {
+              "type": "string"
+            },
+            "step": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "workflow",
+            "step",
+            "run"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "run"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "step": {
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

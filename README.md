@@ -20,15 +20,16 @@ do the work; a UI reads documents and never gets called.
   machine (files-in-a-directory protocol; any language).
 - `stepmeld-verb`: the program side of that protocol for a verb
   written in Rust (the Python twin is `python/`'s `stepmeld.verb`).
-- `stepmeld-cli`: the `stepmeld` command over the two.
+- `stepmeld-cli`: the `stepmeld` command over the two (the crate is
+  named `stepmeld`: `cargo install stepmeld`).
 
 Build and test with `scripts/test.sh` (cargo). Try it:
 
 ```bash
-cargo run -q -p stepmeld-cli -- performers        # what a performers file looks like
-cargo run -q -p stepmeld-cli -- add contracts/fixtures/step-definition.v1/detect-targets.json contracts/fixtures/workflow-definition.v1/find-targets.json
-cargo run -q -p stepmeld-cli -- create find-targets --id wf-1
-cargo run -q -p stepmeld-cli -- show wf-1
+cargo run -q -p stepmeld -- performers        # what a performers file looks like
+cargo run -q -p stepmeld -- add contracts/fixtures/step-definition.v1/detect-targets.json contracts/fixtures/workflow-definition.v1/find-targets.json
+cargo run -q -p stepmeld -- create find-targets --id wf-1
+cargo run -q -p stepmeld -- show wf-1
 ```
 
 ## Licence

@@ -7,8 +7,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/veolabs-llc/stepmeld"
+readme = "README.md"
+keywords = ["workflow", "engine", "pipeline"]
+categories = ["development-tools"]
 
 [workspace.dependencies]
+# Ours, by path here and by version once published.
+stepmeld-core = { path = "stepmeld-core", version = "0.1.0" }
+stepmeld-sqlite = { path = "stepmeld-sqlite", version = "0.1.0" }
+stepmeld-local = { path = "stepmeld-local", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a Value is opaque and must come back byte-for-byte
 serde_json = { version = "1", features = ["float_roundtrip"] }
