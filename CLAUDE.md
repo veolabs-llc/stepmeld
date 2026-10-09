@@ -24,5 +24,7 @@ a scheduler).
 - Every seam (Performer, StateStore) ships an in-memory implementation
   and a conformance suite beside the trait.
 - Tests: `scripts/test.sh` before a PR, every time; no GitHub gate, by
-  choice. Suites stay well under a minute.
+  choice. Suites stay well under a minute. The same script runs nightly
+  from a fresh checkout (`.github/workflows/nightly.yml`), opening one
+  issue when it fails.
 - Edit in a worktree; the main checkout stays on `main`. Small PRs.
