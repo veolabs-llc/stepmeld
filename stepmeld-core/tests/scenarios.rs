@@ -791,6 +791,62 @@ fn skip(step: &str) -> Command {
     Command::Skip { step: step.into() }
 }
 
+/// solve -> survey (a reframe out) -> dense, whose `reframe` Input is
+/// OPTIONAL and bound from survey: dense computes in the survey's frame
+/// when there is one, and without when survey is skipped.
+fn optional_bound_library(store: &MemoryStore) {
+    store.put_step(&verb("solve", &[("images", "file-list")], &[], &[("model", "sparse-model")])).unwrap();
+    store.put_step(&verb("survey", &[("model", "sparse-model")], &[], &[("reframe", "reframe")])).unwrap();
+    let mut dense = verb("dense", &[("model", "sparse-model"), ("reframe", "reframe")], &[], &[("cloud", "point-cloud")]);
+    dense.inputs[1].required = false;
+    store.put_step(&dense).unwrap();
+    let mut w = WorkflowDefinition::new("registered", 1);
+    w.steps = vec![entry("solve", "solve"), entry("survey", "survey"), entry("dense", "dense")];
+    w.bindings = vec![bind("solve.model", "survey.model"), bind("solve.model", "dense.model"), bind("survey.reframe", "dense.reframe")];
+    store.put_workflow_definition(&w).unwrap();
+}
+
+/// An optional Input fed by a Binding waits for its source like a
+/// required one (2026-10-11: before, dense started the moment its model
+/// arrived and went stale when the reframe did). Skipping the source
+/// lets the step run without it.
+#[test]
+fn scenario_f_an_optional_bound_input_waits_for_its_source() {
+    let store = Arc::new(MemoryStore::new());
+    optional_bound_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["solve", "survey", "dense"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "registered", "opt-1");
+    rig.command(set("solve", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    rig.tick();
+    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
+    rig.tick();
+    // the model is there, the reframe may still come: dense waits
+    assert_eq!(rig.status("survey"), StepStatus::Running);
+    assert_eq!(rig.status("dense"), StepStatus::NotReady, "an optional bound Input waits for its source");
+    local.finish(&rig.handle(&local, "survey"), Outcome::succeeded(outs(&[("reframe", "survey-1".into())])));
+    rig.tick();
+    assert_eq!(rig.status("dense"), StepStatus::Running);
+    let dense_start = local.started().into_iter().find(|r| r.step == "dense").unwrap();
+    assert_eq!(dense_start.inputs["reframe"], Value::from("survey-1"));
+    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    rig.tick();
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
+
+    // the same recipe with the survey skipped: dense runs without a reframe
+    let store = Arc::new(MemoryStore::new());
+    optional_bound_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["solve", "survey", "dense"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "registered", "opt-2");
+    rig.command(set("solve", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    rig.tick();
+    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
+    rig.command(skip("survey")).unwrap();
+    rig.tick();
+    assert_eq!(rig.status("dense"), StepStatus::Running);
+    let dense_start = local.started().into_iter().find(|r| r.step == "dense").unwrap();
+    assert!(!dense_start.inputs.contains_key("reframe"), "skipped: the optional Input is simply absent");
+}
+
 #[test]
 fn scenario_e_a_skipped_step_lets_the_next_binding_carry() {
     let store = Arc::new(MemoryStore::new());
