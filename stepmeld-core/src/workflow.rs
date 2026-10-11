@@ -250,6 +250,9 @@ pub struct Step {
     pub confirmed: Option<Stamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<Placement>,
+    /// A `skip` given by an Actor. Final.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<Stamp>,
     #[serde(default)]
     pub runs: Vec<Run>,
 }
@@ -333,7 +336,7 @@ pub enum StepStatus {
     Succeeded,
     Failed,
     Canceled,
-    /// No path leads to it. Final.
+    /// No path leads to it, or an Actor skipped it. Final.
     Skipped,
     /// Succeeded, and its Values changed since.
     Stale,
@@ -589,6 +592,11 @@ impl Workflow {
     pub fn gate(&self, def: &WorkflowDefinition, name: &str, performers: &[PerformerFace]) -> Gate {
         let Some(step) = self.steps.get(name) else { return Gate::Closed(StepStatus::NotReady) };
         use Gate::Closed;
+        // a skip is final: it was refused while a Run was live or after
+        // a success, so nothing below could say otherwise
+        if step.skipped.is_some() {
+            return Closed(StepStatus::Skipped);
+        }
         // 1. no live Run; where it stands if it ended
         if let Some(run) = step.latest() {
             match &run.outcome {
