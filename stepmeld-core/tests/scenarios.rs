@@ -769,6 +769,95 @@ fn a_cancel_stops_the_live_run_and_the_workflow() {
     assert!(local.run(&rig.handle(&local, "detect")).unwrap().canceled.is_some());
 }
 
+// ---------------------------------------------------------------------
+// E. Skipping a Step nobody will ever feed.
+
+/// A -> B -> C: B takes A's cloud and a transform nobody feeds; C's
+/// cloud comes from B, else from A (`fallback`), or from B alone.
+fn skip_library(store: &MemoryStore, fallback: bool) {
+    store.put_step(&verb("dense", &[("images", "file-list")], &[], &[("cloud", "point-cloud")])).unwrap();
+    store.put_step(&verb("reframe", &[("cloud", "point-cloud"), ("reframe", "transform")], &[], &[("cloud", "point-cloud")])).unwrap();
+    store.put_step(&verb("publish", &[("cloud", "point-cloud")], &[], &[("layer", "layer")])).unwrap();
+    let mut w = WorkflowDefinition::new("reframed-layer", 1);
+    w.steps = vec![entry("dense", "dense"), entry("reframe", "reframe"), entry("publish", "publish")];
+    w.bindings = vec![bind("dense.cloud", "reframe.cloud"), bind("reframe.cloud", "publish.cloud")];
+    if fallback {
+        w.bindings.push(bind("dense.cloud", "publish.cloud"));
+    }
+    store.put_workflow_definition(&w).unwrap();
+}
+
+fn skip(step: &str) -> Command {
+    Command::Skip { step: step.into() }
+}
+
+#[test]
+fn scenario_e_a_skipped_step_lets_the_next_binding_carry() {
+    let store = Arc::new(MemoryStore::new());
+    skip_library(&store, true);
+    let local = performer("local", Locality::ThisMachine, &["dense", "reframe", "publish"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "reframed-layer", "skip-1");
+
+    // dense runs; reframe then waits on the transform nobody feeds, and
+    // publish cannot tell yet which binding will carry: the workflow
+    // would wait forever
+    rig.command(set("dense", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    rig.tick();
+    assert!(matches!(rig.command(skip("dense")), Err(Error::Refused(w)) if w.contains("running")), "a running step is not skipped");
+    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    rig.tick();
+    assert!(matches!(rig.command(skip("dense")), Err(Error::Refused(w)) if w.contains("succeeded")), "a succeeded step is not skipped");
+    assert_eq!(rig.status("reframe"), StepStatus::Waiting(Waiting::Input { name: "reframe".into() }));
+    assert_eq!(rig.status("publish"), StepStatus::NotReady);
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Waiting);
+
+    // skip reframe: it is final, and publish takes dense's cloud
+    rig.command(skip("reframe")).unwrap();
+    assert_eq!(rig.status("reframe"), StepStatus::Skipped);
+    assert!(matches!(rig.command(start("reframe")), Err(Error::Refused(w)) if w.contains("final")));
+    assert!(matches!(rig.command(skip("reframe")), Err(Error::Refused(w)) if w.contains("already")));
+    assert_eq!(rig.wf().step("publish").unwrap().inputs["cloud"].value, Some("cloud-1".into()));
+    rig.tick();
+    assert_eq!(rig.status("publish"), StepStatus::Running);
+    assert_eq!(local.started()[1].inputs["cloud"], Value::from("cloud-1"));
+    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("layer", "layer-1".into())])));
+    rig.tick();
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
+    assert_eq!(rig.wf().step("reframe").unwrap().skipped.as_ref().unwrap().by, max());
+    assert_eq!(
+        rig.history_kinds(),
+        [
+            "created",
+            "set@dense",
+            "run-minted@dense",
+            "run-started@dense",
+            "run-ended@dense",
+            "skipped@reframe",
+            "run-minted@publish",
+            "run-started@publish",
+            "run-ended@publish"
+        ]
+    );
+}
+
+#[test]
+fn scenario_e_a_skipped_step_skips_what_only_it_feeds() {
+    let store = Arc::new(MemoryStore::new());
+    skip_library(&store, false);
+    let local = performer("local", Locality::ThisMachine, &["dense", "reframe", "publish"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "reframed-layer", "skip-2");
+    rig.command(set("dense", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    rig.tick();
+    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    rig.tick();
+    rig.command(skip("reframe")).unwrap();
+    assert_eq!(rig.status("reframe"), StepStatus::Skipped);
+    assert_eq!(rig.status("publish"), StepStatus::Skipped, "its only binding will never carry");
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
+    rig.tick();
+    assert_eq!(local.started().len(), 1, "nothing else starts");
+}
+
 #[test]
 fn definitions_are_checked() {
     let store = MemoryStore::new();

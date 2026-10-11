@@ -85,6 +85,8 @@ enum Cmd {
     },
     /// Choose the Performer for a Step's next Run.
     Place { workflow: String, step: String, performer: String, locality: String },
+    /// Pass a Step by, for good: it never runs, and an Input bound from its Outputs takes its next Binding.
+    Skip { workflow: String, step: String },
     /// Stop a Step's live Run, or the whole Workflow.
     Cancel {
         workflow: String,
@@ -301,6 +303,10 @@ fn run(cli: Cli) -> Result<(), Error> {
             )?;
             println!("placed {step} on {performer}");
         }
+        Cmd::Skip { workflow, step } => {
+            driver.command(workflow, &Command::Skip { step: step.clone() }, &by, &now)?;
+            println!("skipped {step}; tick to carry on past it");
+        }
         Cmd::Cancel { workflow, step, reason } => {
             driver.command(workflow, &Command::Cancel { step: step.clone(), reason: reason.clone() }, &by, &now)?;
             println!("cancel asked; tick to carry it out");
@@ -394,6 +400,10 @@ fn show(store: &SqliteStore, wf: &Workflow) -> Result<(), Error> {
                 })
                 .unwrap_or_default(),
             StepStatus::Failed => step.latest().and_then(|r| r.outcome.as_ref()).and_then(|o| o.reason.clone()).unwrap_or_default(),
+            StepStatus::Skipped => match &step.skipped {
+                Some(s) => format!("skipped by {}", who(&s.by)),
+                None => "no path leads to it".into(),
+            },
             _ => String::new(),
         };
         println!("  {:<16} {:<10} {}", name, status.word(), reason);

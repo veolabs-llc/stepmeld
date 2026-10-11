@@ -21,7 +21,8 @@ pub struct Entry {
     pub run: Option<String>,
     /// `created`, `set`, `go`, `placed`, `confirmed`, `completed`,
     /// `run-minted`, `run-started`, `run-refused`, `progress`,
-    /// `attention`, `run-ended`, `canceled`, `policy-set`.
+    /// `attention`, `run-ended`, `skipped`, `cancel-asked`, `canceled`,
+    /// `policy-set`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub detail: Value,

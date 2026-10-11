@@ -44,6 +44,7 @@
         "placed",
         "confirmed",
         "completed",
+        "skipped",
         "policy-set",
         "cancel-asked",
         "canceled",

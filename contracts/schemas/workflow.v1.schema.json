@@ -56,6 +56,7 @@
         "go": { "$ref": "#/$defs/stamp" },
         "confirmed": { "$ref": "#/$defs/stamp" },
         "placement": { "type": "object", "required": ["performer", "locality", "by"], "additionalProperties": false, "properties": { "performer": { "type": "string" }, "locality": { "$ref": "#/$defs/locality" }, "by": { "$ref": "#/$defs/actor" } } },
+        "skipped": { "$ref": "#/$defs/stamp", "description": "A `skip` given by an Actor. Final." },
         "runs": { "type": "array", "items": { "$ref": "#/$defs/run" } }
       }
     },

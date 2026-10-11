@@ -48,6 +48,11 @@ pub enum Command {
         step: String,
         policy: Policy,
     },
+    /// Pass a Step by: it never runs, and an Input bound from its
+    /// Outputs takes its next Binding. Final.
+    Skip {
+        step: String,
+    },
     /// Stop a Step's live Run, or the whole Workflow.
     Cancel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +194,7 @@ pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&
                 go: None,
                 confirmed: None,
                 placement: None,
+                skipped: None,
                 runs: Vec::new(),
             },
         );
@@ -253,6 +259,9 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
         }
         Command::Start { step } => {
             not_running(wf, step)?;
+            if wf.step_status(def, step) == StepStatus::Skipped {
+                return Err(refused(format!("step {step:?} is skipped, which is final")));
+            }
             let s = wf.step_mut(step)?;
             if s.done_by == DoneBy::Person {
                 return Err(refused(format!("step {step:?} is a person's: complete it, do not start it")));
@@ -320,6 +329,19 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
         Command::SetPolicy { step, policy } => {
             wf.step_mut(step)?.policy = policy.clone();
             vec![entry("policy-set", step).detail(serde_json::to_value(policy).unwrap_or(Value::Null))]
+        }
+        Command::Skip { step } => {
+            not_running(wf, step)?;
+            let s = wf.step_mut(step)?;
+            if s.current().is_some() {
+                return Err(refused(format!("step {step:?} has succeeded; it cannot be skipped")));
+            }
+            if s.skipped.is_some() {
+                return Err(refused(format!("step {step:?} is already skipped")));
+            }
+            s.skipped = Some(stamp(now, by));
+            s.go = None;
+            vec![entry("skipped", step)]
         }
         Command::Cancel { step, reason } => {
             let reason = reason.clone().unwrap_or_else(|| format!("canceled by {}", actor_word(by)));
