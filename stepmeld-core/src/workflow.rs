@@ -627,8 +627,11 @@ impl Workflow {
             }
             match self.feed(def, name, iname) {
                 Feed::Never if input.required => return Closed(StepStatus::Skipped),
-                Feed::Undecided if input.required => return Closed(StepStatus::NotReady),
-                Feed::Never | Feed::Undecided | Feed::Value(_) => {}
+                // an optional Input a Binding may still carry waits for its
+                // source too: starting without it would take the Value the
+                // recipe meant it to have as one the person declined
+                Feed::Undecided => return Closed(StepStatus::NotReady),
+                Feed::Never | Feed::Value(_) => {}
             }
         }
         // 4. parameters present
