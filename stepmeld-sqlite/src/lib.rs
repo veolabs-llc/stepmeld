@@ -102,6 +102,13 @@ impl StateStore for SqliteStore {
         Ok(())
     }
 
+    fn definition_refs(&self) -> Result<Vec<Ref>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT name, version FROM definitions ORDER BY kind, name, version").map_err(db)?;
+        let rows = stmt.query_map([], |r| Ok(Ref::new(&r.get::<_, String>(0)?, r.get::<_, u32>(1)?))).map_err(db)?;
+        rows.map(|r| r.map_err(db)).collect()
+    }
+
     fn library(&self) -> Result<Library, Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT kind, doc FROM definitions ORDER BY kind, name, version").map_err(db)?;

@@ -21,6 +21,11 @@ pub trait StateStore: Send + Sync {
     /// Workflows that name it: the caller decides what may go. One that
     /// is not there is nothing to do.
     fn remove_definition(&self, reference: &Ref) -> Result<(), Error>;
+    /// Every definition's reference, unchecked: what a mirror reads of a
+    /// store whose definitions may no longer hold together (`library`
+    /// refuses such a store, which is right for everyone but the mirror
+    /// that would mend it).
+    fn definition_refs(&self) -> Result<Vec<Ref>, Error>;
     /// Everything defined, as a Library.
     fn library(&self) -> Result<Library, Error>;
     // ---- Workflows ----
@@ -89,6 +94,11 @@ impl StateStore for MemoryStore {
         inner.steps.remove(reference);
         inner.workflows_defs.remove(reference);
         Ok(())
+    }
+
+    fn definition_refs(&self) -> Result<Vec<Ref>, Error> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.steps.keys().chain(inner.workflows_defs.keys()).cloned().collect())
     }
 
     fn library(&self) -> Result<Library, Error> {
@@ -231,8 +241,13 @@ pub mod conformance {
         }];
         store.put_workflow_definition(&recipe).unwrap();
         assert!(store.library().unwrap().workflow(&recipe.reference()).is_some());
+        assert!(
+            store.definition_refs().unwrap().contains(&recipe.reference()) && store.definition_refs().unwrap().contains(&verb.reference()),
+            "refs list verbs and recipes alike"
+        );
         store.remove_definition(&recipe.reference()).unwrap();
         assert!(store.library().unwrap().workflow(&recipe.reference()).is_none(), "a removed recipe is gone");
+        assert!(!store.definition_refs().unwrap().contains(&recipe.reference()));
         store.remove_definition(&verb.reference()).unwrap();
         assert!(store.library().unwrap().step(&verb.reference()).is_none(), "a removed verb is gone");
         store.remove_definition(&Ref::new("never-defined", 1)).unwrap();
