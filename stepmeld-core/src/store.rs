@@ -15,6 +15,12 @@ pub trait StateStore: Send + Sync {
     // ---- the Library ----
     fn put_step(&self, def: &StepDefinition) -> Result<(), Error>;
     fn put_workflow_definition(&self, def: &WorkflowDefinition) -> Result<(), Error>;
+    /// Forget a definition (a verb or a recipe, whichever holds that
+    /// name and version): what a mirror does with one its source no
+    /// longer holds. Not checked against what else is defined or the
+    /// Workflows that name it: the caller decides what may go. One that
+    /// is not there is nothing to do.
+    fn remove_definition(&self, reference: &Ref) -> Result<(), Error>;
     /// Everything defined, as a Library.
     fn library(&self) -> Result<Library, Error>;
     // ---- Workflows ----
@@ -75,6 +81,13 @@ impl StateStore for MemoryStore {
     fn put_workflow_definition(&self, def: &WorkflowDefinition) -> Result<(), Error> {
         self.library()?.check_workflow(def)?;
         self.inner.lock().unwrap().workflows_defs.insert(def.reference(), def.clone());
+        Ok(())
+    }
+
+    fn remove_definition(&self, reference: &Ref) -> Result<(), Error> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.steps.remove(reference);
+        inner.workflows_defs.remove(reference);
         Ok(())
     }
 
@@ -201,6 +214,28 @@ pub mod conformance {
         store.remove("never-there").unwrap();
         let v = store.put(&workflow(id), None).unwrap();
         assert!(!v.is_empty(), "the id may be used again");
+        // definitions come and go by reference, a verb or a recipe alike
+        let mut verb = StepDefinition::new("conformance-verb", 1);
+        verb.outputs = vec![crate::definition::OutputDefinition {
+            name: "out".into(),
+            tag: "thing".into(),
+            options: None,
+            label: None,
+        }];
+        store.put_step(&verb).unwrap();
+        let mut recipe = WorkflowDefinition::new("conformance-recipe", 1);
+        recipe.steps = vec![crate::definition::StepEntry {
+            name: "a".into(),
+            step: verb.reference(),
+            label: None,
+        }];
+        store.put_workflow_definition(&recipe).unwrap();
+        assert!(store.library().unwrap().workflow(&recipe.reference()).is_some());
+        store.remove_definition(&recipe.reference()).unwrap();
+        assert!(store.library().unwrap().workflow(&recipe.reference()).is_none(), "a removed recipe is gone");
+        store.remove_definition(&verb.reference()).unwrap();
+        assert!(store.library().unwrap().step(&verb.reference()).is_none(), "a removed verb is gone");
+        store.remove_definition(&Ref::new("never-defined", 1)).unwrap();
     }
 }
 

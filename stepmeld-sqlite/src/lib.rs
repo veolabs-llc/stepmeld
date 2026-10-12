@@ -5,7 +5,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
-use stepmeld_core::definition::{StepDefinition, WorkflowDefinition};
+use stepmeld_core::definition::{Ref, StepDefinition, WorkflowDefinition};
 use stepmeld_core::history::Entry;
 use stepmeld_core::library::Library;
 use stepmeld_core::store::StateStore;
@@ -93,6 +93,12 @@ impl StateStore for SqliteStore {
             params![def.name, def.version, serde_json::to_string(def).unwrap()],
         )
         .map_err(db)?;
+        Ok(())
+    }
+
+    fn remove_definition(&self, reference: &Ref) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM definitions WHERE name = ?1 AND version = ?2", params![reference.name, reference.version]).map_err(db)?;
         Ok(())
     }
 
