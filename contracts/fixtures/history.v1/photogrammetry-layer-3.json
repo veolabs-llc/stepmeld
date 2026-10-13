@@ -1,19 +1,18 @@
 {
-  "at": "2026-10-06T00:04:00Z",
+  "at": "2026-10-06T00:02:00Z",
   "by": {
-    "kind": "policy",
-    "rule": "start-automatically",
-    "step": "solve"
+    "id": "max",
+    "kind": "person"
   },
   "contract": "stepmeld/history.v1",
   "detail": {
-    "locality": "this-machine",
-    "number": 1,
-    "performer": "local"
+    "outputs": {
+      "photos": "ps-1"
+    }
   },
-  "kind": "run-minted",
-  "run": "layer-1/solve/1",
+  "kind": "completed",
+  "run": "layer-1/photos/1",
   "seq": 3,
-  "step": "solve",
+  "step": "photos",
   "workflow": "layer-1"
 }

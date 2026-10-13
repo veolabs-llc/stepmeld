@@ -188,6 +188,7 @@ pub mod conformance {
                 by: Actor::person("t"),
             },
             steps: BTreeMap::new(),
+            started: None,
             canceled: None,
         }
     }

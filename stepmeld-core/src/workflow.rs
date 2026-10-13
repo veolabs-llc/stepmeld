@@ -336,6 +336,8 @@ pub enum Waiting {
     },
     /// No Performer offers the verb.
     Performer,
+    /// The Workflow as a whole has not been started.
+    Start,
     /// Several Performers offer the verb and neither an Actor nor the
     /// Policy has chosen among them: a placement is somebody's to make.
     Placement,
@@ -470,6 +472,13 @@ pub struct Workflow {
     pub label: Option<String>,
     pub created: Stamp,
     pub steps: BTreeMap<String, Step>,
+    /// The go for the Workflow as a whole: until an Actor gives it no
+    /// Step's Run is minted, whatever the Steps' own Policies say. A
+    /// root Workflow is created without it (2026-10-13: starting the
+    /// moment the Inputs are in made it easy to start before an optional
+    /// Parameter was set); a nested one starts as it is created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<Stamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canceled: Option<Stamp>,
 }
@@ -704,6 +713,11 @@ impl Workflow {
             if step.policy.placement.confirm.contains(&locality) && !confirmed {
                 return Closed(StepStatus::Waiting(Waiting::Confirmation { locality }));
             }
+        }
+        // 7. the Workflow has its go. Last, so a reader sees what else
+        // the Step needs before the start is given.
+        if self.started.is_none() {
+            return Closed(StepStatus::Waiting(Waiting::Start));
         }
         Gate::Open
     }

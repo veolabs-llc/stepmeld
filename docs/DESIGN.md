@@ -401,6 +401,11 @@ and its tests, and none contradicts the rules above.
    (`offered`) on a Step waiting for a placement, for the same reason.
 7. **Children tick before parents**, so a parent sees what its child
    did this tick; a child created mid-tick is ticked in the same call.
+8. **A root Workflow runs nothing until it is started** (`StartWorkflow`,
+   2026-10-13), however ready its Steps are: starting the moment the
+   Inputs are in made it easy to start before an optional Parameter was
+   set. A nested Workflow is its parent's Run and has its go from
+   creation. A Step's own `start: manual` is the finer gate, on top.
 8. **Policies live on the verb and on the Step**, not on the recipe:
    the StepDefinition carries defaults; an Actor changes a Workflow's
    Step by `set-policy`. Per-recipe overrides stay withdrawn (rule 4).
