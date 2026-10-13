@@ -38,7 +38,7 @@
           ]
         },
         "on_stale": { "enum": ["wait", "rerun"] },
-        "placement": { "type": "object", "additionalProperties": false, "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } } } }
+        "placement": { "type": "object", "additionalProperties": false, "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } }, "anywhere": { "type": "boolean", "description": "Where it runs does not matter: with several Performers offering the verb and none chosen, the driver that gets to it takes one and nobody is asked." } } }
       }
     },
     "step": {
