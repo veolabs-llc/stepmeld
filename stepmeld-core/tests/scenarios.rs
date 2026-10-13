@@ -138,6 +138,7 @@ impl Rig {
             driver = driver.with_performer(p);
         }
         driver.create(&Ref::new(definition, 1), id, None, &max(), &now(0)).unwrap();
+        driver.command(id, &Command::StartWorkflow, &max(), &now(1)).unwrap();
         Rig { store, driver, id: id.into(), clock: 1 }
     }
 
@@ -278,7 +279,7 @@ fn one_step_workflow_runs_when_its_input_is_given() {
     assert_eq!(wf.step_status(&rig.def(), "detect"), StepStatus::Succeeded);
     assert_eq!(wf.step("detect").unwrap().outputs["targets"].value, Some(serde_json::json!({"rows": 86})));
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
-    assert_eq!(rig.history_kinds(), ["created", "set@detect", "run-minted@detect", "run-started@detect", "progress@detect", "run-ended@detect"]);
+    assert_eq!(rig.history_kinds(), ["created", "started", "set@detect", "run-minted@detect", "run-started@detect", "progress@detect", "run-ended@detect"]);
 
     // a set on a succeeded step makes it stale; nothing restarts on its own
     rig.command(param("detect", "min-size", Value::from(8))).unwrap();
@@ -771,6 +772,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     let here = Driver::new(store.clone(), "here").with_nesting().with_performer(desk.clone()).with_elsewhere(vec![bench.describe()]);
     let there = Driver::new(store.clone(), "there").with_nesting().with_performer(bench.clone()).with_elsewhere(vec![desk.describe()]);
     here.create(&Ref::new("find-targets", 1), "wf-s", None, &max(), &now(0)).unwrap();
+    here.command("wf-s", &Command::StartWorkflow, &max(), &now(0)).unwrap();
     here.command("wf-s", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
     let status = |_: &Driver| {
         let lib = store.library().unwrap();
@@ -813,6 +815,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     // a Performer no driver of the store is known to have is still a refusal
     let alone = Driver::new(store.clone(), "alone").with_nesting();
     alone.create(&Ref::new("find-targets", 1), "wf-t", None, &max(), &now(0)).unwrap();
+    alone.command("wf-t", &Command::StartWorkflow, &max(), &now(0)).unwrap();
     alone.command("wf-t", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
     alone.tick_all(&now(2), &now(9)).unwrap();
     let lib = store.library().unwrap();
@@ -823,6 +826,47 @@ fn drivers_that_share_a_store_each_run_their_own() {
 
 fn alone_faces(d: &Driver) -> Vec<PerformerFace> {
     d.performers.iter().map(|p| p.describe()).collect()
+}
+
+/// A root Workflow runs nothing until it is started, however ready its
+/// Steps are (Max, 2026-10-13); a nested one has its go from creation.
+#[test]
+fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
+    let store = Arc::new(MemoryStore::new());
+    detect_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
+    let driver = Driver::new(store.clone(), "test").with_nesting().with_performer(local.clone());
+    driver.create(&Ref::new("find-targets", 1), "wf-r", None, &max(), &now(0)).unwrap();
+    driver.command("wf-r", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
+    driver.tick_all(&now(2), &now(9)).unwrap();
+    let lib = store.library().unwrap();
+    let wf = store.get("wf-r").unwrap().unwrap().0;
+    let def = lib.workflow(&wf.definition).unwrap().clone();
+    assert_eq!(wf.step_status(&def, "detect"), StepStatus::Waiting(Waiting::Start));
+    assert_eq!(wf.status(&def), WorkflowStatus::Waiting);
+    assert!(local.started().is_empty(), "nothing is minted before the go");
+    stepmeld_core::contracts::validate(&serde_json::to_value(&wf).unwrap(), "stepmeld/workflow.v1").unwrap();
+    driver.command("wf-r", &Command::StartWorkflow, &max(), &now(3)).unwrap();
+    assert!(matches!(driver.command("wf-r", &Command::StartWorkflow, &max(), &now(3)), Err(Error::Refused(w)) if w.contains("already started")));
+    driver.tick_all(&now(4), &now(9)).unwrap();
+    assert_eq!(local.started().len(), 1);
+    let kinds: Vec<String> = store.history("wf-r").unwrap().iter().map(|e| e.kind.clone()).collect();
+    assert_eq!(&kinds[..2], ["created", "set"]);
+    assert!(kinds.contains(&"started".to_string()));
+    for e in store.history("wf-r").unwrap() {
+        stepmeld_core::contracts::validate(&serde_json::to_value(&e).unwrap(), "stepmeld/history.v1").unwrap();
+    }
+    // a nested child: the parent's Run is its go
+    let mut outer = WorkflowDefinition::new("outer", 1);
+    outer.steps = vec![entry("inner", "find-targets")];
+    store.put_workflow_definition(&outer).unwrap();
+    driver.create(&Ref::new("outer", 1), "wf-o", None, &max(), &now(5)).unwrap();
+    driver.command("wf-o", &set("inner", "detect.images", serde_json::json!(["b.jpg"])), &max(), &now(6)).unwrap();
+    driver.command("wf-o", &Command::StartWorkflow, &max(), &now(7)).unwrap();
+    driver.tick_all(&now(8), &now(20)).unwrap();
+    let child = store.list().unwrap().into_iter().find(|id| id.starts_with("wf-o~")).expect("a child was created");
+    assert!(store.get(&child).unwrap().unwrap().0.started.is_some(), "the child has its go from creation");
+    assert_eq!(local.started().len(), 2, "and ran");
 }
 
 #[test]
@@ -960,6 +1004,7 @@ fn scenario_e_a_skipped_step_lets_the_next_binding_carry() {
         rig.history_kinds(),
         [
             "created",
+            "started",
             "set@dense",
             "run-minted@dense",
             "run-started@dense",

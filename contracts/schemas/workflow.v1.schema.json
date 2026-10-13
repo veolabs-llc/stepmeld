@@ -12,6 +12,7 @@
     "label": { "type": "string" },
     "created": { "$ref": "#/$defs/stamp" },
     "steps": { "type": "object", "additionalProperties": { "$ref": "#/$defs/step" } },
+    "started": { "$ref": "#/$defs/stamp", "description": "The Workflow's go: until an Actor gives it, no Step's Run is minted. Absent on a root Workflow as created; a nested one has it from creation." },
     "canceled": { "$ref": "#/$defs/stamp" }
   },
   "$defs": {

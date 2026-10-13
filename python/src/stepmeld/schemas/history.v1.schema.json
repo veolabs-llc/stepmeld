@@ -39,6 +39,7 @@
     "kind": {
       "enum": [
         "created",
+        "started",
         "set",
         "go",
         "placed",

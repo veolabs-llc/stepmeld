@@ -65,8 +65,9 @@ enum Cmd {
         #[arg(long, allow_hyphen_values = true)]
         value: String,
     },
-    /// Give the go: start, retake, or rerun a stale Step.
-    Start { workflow: String, step: String },
+    /// Give the go: the Workflow's (no step named: a root Workflow runs
+    /// nothing until then), or a Step's start, retake, or rerun.
+    Start { workflow: String, step: Option<String> },
     /// Finish a Step a person does: `--output name=json` for each.
     Complete {
         workflow: String,
@@ -263,8 +264,15 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("set");
         }
         Cmd::Start { workflow, step } => {
-            driver.command(workflow, &Command::Start { step: step.clone() }, &by, &now)?;
-            println!("go given to {step}; tick to run it");
+            let cmd = match step {
+                Some(step) => Command::Start { step: step.clone() },
+                None => Command::StartWorkflow,
+            };
+            driver.command(workflow, &cmd, &by, &now)?;
+            match step {
+                Some(step) => println!("go given to {step}; tick to run it"),
+                None => println!("go given to {workflow}; tick to run it"),
+            }
         }
         Cmd::Complete { workflow, step, outputs } => {
             let mut map = BTreeMap::new();
@@ -383,6 +391,7 @@ fn show(store: &SqliteStore, wf: &Workflow) -> Result<(), Error> {
             StepStatus::Waiting(Waiting::Parameter { name }) => format!("needs parameter {name}"),
             StepStatus::Waiting(Waiting::Completion) => "waiting for someone to complete it".into(),
             StepStatus::Waiting(Waiting::Go) => "waiting for a start".into(),
+            StepStatus::Waiting(Waiting::Start) => "waiting for the workflow to be started (`start <workflow>`)".into(),
             StepStatus::Waiting(Waiting::Confirmation { locality }) => format!("waiting for the {} placement to be confirmed", locality.as_str()),
             StepStatus::Waiting(Waiting::Performer) => "no performer offers it".into(),
             StepStatus::Waiting(Waiting::Placement) => "waiting for a placement: several performers offer it (`place`)".into(),

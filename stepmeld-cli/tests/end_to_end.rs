@@ -68,6 +68,13 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
     assert!(ok && out.contains("needs input images"), "{out}");
     let (ok, out) = stepmeld(d, &["set", "wf-1", "detect", "--input", "images", "--value", r#"["a.jpg","b.jpg","c.jpg"]"#]);
     assert!(ok, "{out}");
+    // a root Workflow runs nothing until its go
+    let (ok, out) = stepmeld(d, &["show", "wf-1"]);
+    assert!(ok && out.contains("waiting for the workflow to be started"), "{out}");
+    let (ok, out) = stepmeld(d, &["tick"]);
+    assert!(ok && !out.contains("succeeded"), "{out}");
+    let (ok, out) = stepmeld(d, &["start", "wf-1"]);
+    assert!(ok && out.contains("go given to wf-1"), "{out}");
     let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
     assert!(ok && out.contains("succeeded"), "{out}");
     let (ok, out) = stepmeld(d, &["show", "wf-1"]);
@@ -95,6 +102,8 @@ echo '{"state":"succeeded","outputs":{"targets":{"rows":[[1,10.5,20.25],[2,30.0,
     let (ok, out) = stepmeld(d, &["policy", "wf-2", "detect", "--to", r#"{"placement":{"performer":"batch","confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["set", "wf-2", "detect", "--input", "images", "--value", r#"["a.jpg"]"#]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["start", "wf-2"]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick"]);
     assert!(ok && out.contains("wf-2") && out.contains("waiting"), "{out}");

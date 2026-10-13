@@ -29,6 +29,9 @@ pub enum Command {
     Start {
         step: String,
     },
+    /// Give the Workflow as a whole its go; its Steps then run by their
+    /// own Policies.
+    StartWorkflow,
     /// Finish a Step a person does, with its Outputs.
     Complete {
         step: String,
@@ -132,7 +135,9 @@ fn stamp(at: &str, by: &Actor) -> Stamp {
 
 /// A Workflow from a recipe: every Step with its slots empty, every
 /// Parameter at its default.
-pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&str>, by: &Actor, now: &str) -> Result<(Workflow, Vec<Entry>), Error> {
+/// `started`: whether the Workflow has its go from the moment it exists
+/// (a nested one does; a root one waits for `Command::StartWorkflow`).
+pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&str>, by: &Actor, now: &str, started: bool) -> Result<(Workflow, Vec<Entry>), Error> {
     lib.check_workflow(def)?;
     let mut steps = BTreeMap::new();
     for entry in &def.steps {
@@ -207,10 +212,14 @@ pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&
         label: label.map(str::to_string),
         created: stamp(now, by),
         steps,
+        started: started.then(|| stamp(now, by)),
         canceled: None,
     };
-    let entry = Entry::new(now, by, id, "created").detail(json!({"definition": def.reference()}));
-    Ok((wf, vec![entry]))
+    let mut entries = vec![Entry::new(now, by, id, "created").detail(json!({"definition": def.reference()}))];
+    if started {
+        entries.push(Entry::new(now, by, id, "started"));
+    }
+    Ok((wf, entries))
 }
 
 fn refused(words: String) -> Error {
@@ -343,6 +352,16 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
             s.skipped = Some(stamp(now, by));
             s.go = None;
             vec![entry("skipped", step)]
+        }
+        Command::StartWorkflow => {
+            if wf.started.is_some() {
+                return Err(refused(format!("workflow {id} is already started")));
+            }
+            if wf.canceled.is_some() {
+                return Err(refused(format!("workflow {id} is canceled")));
+            }
+            wf.started = Some(stamp(now, by));
+            vec![Entry::new(now, by, &id, "started")]
         }
         Command::Cancel { step, reason } => {
             let reason = reason.clone().unwrap_or_else(|| format!("canceled by {}", actor_word(by)));

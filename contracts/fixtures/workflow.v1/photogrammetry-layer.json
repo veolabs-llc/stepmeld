@@ -12,6 +12,13 @@
     "version": 1
   },
   "id": "layer-1",
+  "started": {
+    "at": "2026-10-06T00:01:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
   "steps": {
     "dense": {
       "confirmed": {

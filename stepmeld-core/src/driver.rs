@@ -81,10 +81,12 @@ impl Driver {
         lib.workflow(&wf.definition).cloned().ok_or_else(|| Error::Invalid(format!("{} is not in the library", wf.definition)))
     }
 
+    /// A root Workflow, created without its go: no Step runs until
+    /// `Command::StartWorkflow`.
     pub fn create(&self, definition: &Ref, id: &str, label: Option<&str>, by: &Actor, now: &str) -> Result<Workflow, Error> {
         let lib = self.store.library()?;
         let def = lib.workflow(definition).ok_or_else(|| Error::Refused(format!("{definition} is not in the library")))?;
-        let (wf, entries) = engine::create(&lib, def, id, label, by, now)?;
+        let (wf, entries) = engine::create(&lib, def, id, label, by, now, false)?;
         self.store.put(&wf, None)?;
         self.store.append(&entries)?;
         Ok(wf)
@@ -282,7 +284,8 @@ impl Performer for Nested {
             run: request.run.clone(),
         };
         let now = "";
-        let (mut wf, mut entries) = engine::create(&lib, def, &id, None, &by, now).map_err(|e| e.to_string())?;
+        // a nested Workflow is its parent's Run: it has its go already
+        let (mut wf, mut entries) = engine::create(&lib, def, &id, None, &by, now, true).map_err(|e| e.to_string())?;
         for (path, value) in request.inputs.iter().chain(request.parameters.iter()) {
             let Some((step, port)) = path.split_once('.') else { continue };
             let is_input = wf.steps.get(step).is_some_and(|s| s.inputs.contains_key(port));
