@@ -710,9 +710,10 @@ impl Workflow {
 
     /// The Performer a Run of `step` would go to: the one placed by an
     /// Actor, else the Policy's, else the only one offering the verb.
-    /// With several offering it and none chosen there is no answer:
-    /// "the first" is an accident of one driver's list, and drivers
-    /// that share a store need not list alike.
+    /// With several offering it and none chosen there is no answer
+    /// ("the first" is an accident of one driver's list, and drivers
+    /// that share a store need not list alike), unless the Policy says
+    /// it may run anywhere.
     pub fn placement_for<'a>(&self, step: &Step, performers: &'a [PerformerFace]) -> Option<&'a PerformerFace> {
         Self::placement_among(step, performers).ok()
     }
@@ -728,6 +729,9 @@ impl Workflow {
         match (offering.next(), offering.next()) {
             (Some(only), None) => Ok(only),
             (None, _) => Err(Unplaced::Nobody),
+            // the Policy says any will do: the first of the list, which a
+            // driver heads with its own
+            (Some(first), Some(_)) if step.policy.placement.anywhere => Ok(first),
             (Some(_), Some(_)) => Err(Unplaced::Several),
         }
     }

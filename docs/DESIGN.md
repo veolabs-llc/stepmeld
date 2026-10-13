@@ -93,7 +93,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 |---|---|
 | **Performer** | What does a Step's work (§4.2). Declares its verbs and its locality; chosen per Step. |
 | **Locality** | A Performer's answer to where: this machine, the local network, the cloud. A Workflow has none of its own. |
-| **Placement** | The act and record of choosing a Performer for a Run, by an Actor or a Policy. With one Performer offering the verb there is nothing to choose and it is the placement; with several and none chosen the Step waits for one (since 2026-10-13; before, the first in the driver's list was taken, which is no answer once drivers with different lists share a store). |
+| **Placement** | The act and record of choosing a Performer for a Run, by an Actor or a Policy. With one Performer offering the verb there is nothing to choose and it is the placement; with several and none chosen the Step waits for one (since 2026-10-13; before, the first in the driver's list was taken, which is no answer once drivers with different lists share a store). A verb whose Policy says `anywhere` is not asked about: the driver that gets to it takes one of its own. |
 | **Handle** | The Performer's own id for a Run's work. |
 | **Outcome** | How a Run ended: succeeded, failed, canceled or lost, with a class, a reason, a Summary and, on success, the Outputs. Refused is a start that never ran. "Could not be asked" is never an Outcome. |
 | **Summary** | The Performer's account of what it did: a headline and opaque details. |

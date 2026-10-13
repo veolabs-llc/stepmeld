@@ -53,7 +53,7 @@
         "on_stale": { "enum": ["wait", "rerun"], "default": "wait" },
         "placement": {
           "type": "object", "additionalProperties": false,
-          "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } } }
+          "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } }, "anywhere": { "type": "boolean", "default": false, "description": "Where it runs does not matter: with several Performers offering the verb and none chosen, the driver that gets to it takes one and nobody is asked." } }
         }
       }
     }
