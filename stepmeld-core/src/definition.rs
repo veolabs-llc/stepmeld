@@ -141,11 +141,6 @@ pub struct PlacementPolicy {
     /// Localities a person must confirm before a Run starts there.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub confirm: Vec<Locality>,
-    /// Where it runs does not matter: with several Performers offering
-    /// the verb and none chosen, the driver that gets to it takes one
-    /// (its own before another's) and nobody is asked.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub anywhere: bool,
 }
 
 /// A Step's rules, from a fixed menu. The verb carries its defaults;
