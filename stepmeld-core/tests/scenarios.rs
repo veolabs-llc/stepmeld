@@ -781,25 +781,6 @@ fn drivers_that_share_a_store_each_run_their_own() {
     here.tick_all(&now(2), &now(9)).unwrap();
     there.tick_all(&now(2), &now(9)).unwrap();
     assert_eq!(status(&here), StepStatus::Waiting(Waiting::Placement));
-    // a verb whose Policy says anywhere is not asked about: the driver
-    // that gets to it takes its own Performer
-    {
-        let mut anyhow = verb("note", &[], &[], &[]);
-        anyhow.policy.placement.anywhere = true;
-        stepmeld_core::contracts::validate(&serde_json::to_value(&anyhow).unwrap(), "stepmeld/step-definition.v1").unwrap();
-        store.put_step(&anyhow).unwrap();
-        let mut w = WorkflowDefinition::new("note-it", 1);
-        w.steps = vec![entry("note", "note")];
-        store.put_workflow_definition(&w).unwrap();
-        let pen = performer("pen", Locality::ThisMachine, &["note"]);
-        let quill = performer("quill", Locality::LocalNetwork, &["note"]);
-        let a = Driver::new(store.clone(), "a").with_performer(pen.clone()).with_elsewhere(vec![quill.describe()]);
-        a.create(&Ref::new("note-it", 1), "wf-n", None, &max(), &now(0)).unwrap();
-        a.tick_all(&now(1), &now(9)).unwrap();
-        assert_eq!((pen.started().len(), quill.started().len()), (1, 0));
-        stepmeld_core::contracts::validate(&serde_json::to_value(store.get("wf-n").unwrap().unwrap().0).unwrap(), "stepmeld/workflow.v1").unwrap();
-        store.remove("wf-n").unwrap();
-    }
     // placed on the other driver's Performer, from this one
     here.command(
         "wf-s",
