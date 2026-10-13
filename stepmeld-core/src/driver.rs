@@ -15,6 +15,10 @@ use std::sync::Arc;
 pub struct Driver {
     pub store: Arc<dyn StateStore>,
     pub performers: Vec<Arc<dyn Performer>>,
+    /// Performers other drivers of this store serve, by their faces:
+    /// what this driver may place a Run on and must then leave alone.
+    /// Names are one namespace across the drivers of a store.
+    pub elsewhere: Vec<PerformerFace>,
     /// Who holds leases.
     pub holder: String,
 }
@@ -24,6 +28,7 @@ impl Driver {
         Driver {
             store,
             performers: Vec::new(),
+            elsewhere: Vec::new(),
             holder: holder.to_string(),
         }
     }
@@ -40,8 +45,32 @@ impl Driver {
         self.with_performer(nested)
     }
 
+    /// Tell the driver of the Performers other drivers of its store
+    /// serve. Several drivers may tick one store, each with its own
+    /// Performers: a Gate and a placement are judged over all of them,
+    /// and a Run is started, observed and canceled only by a driver
+    /// that has its Performer. A face named as one of this driver's own
+    /// is ignored.
+    pub fn with_elsewhere(mut self, faces: Vec<PerformerFace>) -> Driver {
+        self.elsewhere = faces;
+        self
+    }
+
+    /// Every Performer a Step may be placed on: this driver's, then the
+    /// ones elsewhere.
     fn faces(&self) -> Vec<PerformerFace> {
-        self.performers.iter().map(|p| p.describe()).collect()
+        let mut faces: Vec<PerformerFace> = self.performers.iter().map(|p| p.describe()).collect();
+        for face in &self.elsewhere {
+            if !faces.iter().any(|f| f.name == face.name) {
+                faces.push(face.clone());
+            }
+        }
+        faces
+    }
+
+    /// Whether another driver serves the Performer of this name.
+    fn is_elsewhere(&self, name: &str) -> bool {
+        self.performer(name).is_none() && self.elsewhere.iter().any(|f| f.name == name)
     }
 
     fn performer(&self, name: &str) -> Option<&Arc<dyn Performer>> {
@@ -119,6 +148,7 @@ impl Driver {
             let def = self.definition(&lib, &wf)?;
             let effects = engine::plan(&def, &wf, &faces);
             let mut entries: Vec<Entry> = engine::note_placements(&def, &mut wf, &faces, now);
+            let noted = engine::note_offers(&def, &mut wf, &faces);
             let mut moved = false;
             for effect in effects {
                 match effect {
@@ -130,10 +160,16 @@ impl Driver {
                     }
                     Effect::Start { step, run } => {
                         let request = engine::request_for(&lib, &wf, &step, &run)?;
-                        entries.extend(self.start(&def, &mut wf, &request, now)?);
-                        moved = true;
+                        // a start that changed nothing (its Performer is
+                        // another driver's, or unreachable) is not a move
+                        let started = self.start(&def, &mut wf, &request, now)?;
+                        moved |= !started.is_empty();
+                        entries.extend(started);
                     }
                     Effect::Observe { step, run, performer, handle } => {
+                        if self.is_elsewhere(&performer) {
+                            continue; // its driver observes it
+                        }
                         let obs = match self.performer(&performer) {
                             Some(p) => p.observe(&handle),
                             None => Observation::Unreachable {
@@ -155,7 +191,7 @@ impl Driver {
                     }
                 }
             }
-            if !entries.is_empty() {
+            if !entries.is_empty() || noted {
                 self.store.put(&wf, Some(&version))?;
                 self.store.append(&entries)?;
             }
@@ -168,6 +204,9 @@ impl Driver {
 
     fn start(&self, def: &WorkflowDefinition, wf: &mut Workflow, request: &StartRequest, now: &str) -> Result<Vec<Entry>, Error> {
         let performer = wf.step(&request.step)?.run(&request.run).map(|r| r.performer.clone()).ok_or_else(|| Error::Refused(format!("no run {}", request.run)))?;
+        if self.is_elsewhere(&performer) {
+            return Ok(Vec::new()); // minted here, started by the driver that has it
+        }
         let Some(p) = self.performer(&performer) else {
             return engine::refused_start(def, wf, &request.step, &request.run, &format!("no performer {performer:?} in this driver"), now);
         };

@@ -707,6 +707,16 @@ fn scenario_d_the_same_verb_twice() {
     // one side first: detect-early starts; nothing waits on "the previous step"
     rig.command(complete("early", &[("photos", "ps-early".into())])).unwrap();
     rig.tick();
+    // two Performers offer the verb and nobody chose: it waits to be placed
+    assert_eq!(rig.status("detect-early"), StepStatus::Waiting(Waiting::Placement));
+    assert!(local.started().is_empty() && fleet.started().is_empty());
+    rig.command(Command::Place {
+        step: "detect-early".into(),
+        performer: "local".into(),
+        locality: Locality::ThisMachine,
+    })
+    .unwrap();
+    rig.tick();
     assert_eq!(rig.status("detect-early"), StepStatus::Running);
     assert_eq!(rig.status("detect-late"), StepStatus::NotReady);
     assert_eq!(rig.status("compare"), StepStatus::NotReady);
@@ -747,6 +757,72 @@ fn scenario_d_the_same_verb_twice() {
     assert_eq!(rig.workflow_status(), WorkflowStatus::Waiting);
     rig.command(complete("flag", &[])).unwrap();
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
+}
+
+/// Two drivers on one store, each with its own Performer: a Run placed
+/// on the other's is minted and left alone here, started and ended
+/// there, and seen here as it ends. Neither fails what is not its own.
+#[test]
+fn drivers_that_share_a_store_each_run_their_own() {
+    let store = Arc::new(MemoryStore::new());
+    detect_library(&store);
+    let desk = performer("desk", Locality::ThisMachine, &["detect-targets"]);
+    let bench = performer("bench", Locality::LocalNetwork, &["detect-targets"]);
+    let here = Driver::new(store.clone(), "here").with_nesting().with_performer(desk.clone()).with_elsewhere(vec![bench.describe()]);
+    let there = Driver::new(store.clone(), "there").with_nesting().with_performer(bench.clone()).with_elsewhere(vec![desk.describe()]);
+    here.create(&Ref::new("find-targets", 1), "wf-s", None, &max(), &now(0)).unwrap();
+    here.command("wf-s", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
+    let status = |_: &Driver| {
+        let lib = store.library().unwrap();
+        let wf = store.get("wf-s").unwrap().unwrap().0;
+        wf.step_status(lib.workflow(&wf.definition).unwrap(), "detect")
+    };
+    // both offer it: nobody starts anything until it is placed
+    here.tick_all(&now(2), &now(9)).unwrap();
+    there.tick_all(&now(2), &now(9)).unwrap();
+    assert_eq!(status(&here), StepStatus::Waiting(Waiting::Placement));
+    // placed on the other driver's Performer, from this one
+    here.command(
+        "wf-s",
+        &Command::Place {
+            step: "detect".into(),
+            performer: "bench".into(),
+            locality: Locality::LocalNetwork,
+        },
+        &max(),
+        &now(3),
+    )
+    .unwrap();
+    here.tick_all(&now(4), &now(9)).unwrap();
+    here.tick_all(&now(5), &now(9)).unwrap();
+    let wf = store.get("wf-s").unwrap().unwrap().0;
+    let run = wf.steps["detect"].latest().unwrap();
+    assert!(run.live() && run.handle.is_none() && run.performer == "bench", "minted here, not started, not failed: {run:?}");
+    assert!(desk.started().is_empty());
+    // its own driver starts it, and this one watches without touching
+    there.tick_all(&now(6), &now(9)).unwrap();
+    assert_eq!(bench.started().len(), 1);
+    here.tick_all(&now(7), &now(9)).unwrap();
+    assert_eq!(status(&here), StepStatus::Running);
+    let handle = bench.handle_of(&store.get("wf-s").unwrap().unwrap().0.steps["detect"].latest().unwrap().id).unwrap();
+    bench.finish(&handle, Outcome::succeeded(outs(&[("targets", "t".into())])));
+    here.tick_all(&now(8), &now(9)).unwrap();
+    assert_eq!(status(&here), StepStatus::Running, "only its own driver hears it end");
+    there.tick_all(&now(8), &now(9)).unwrap();
+    assert_eq!(status(&here), StepStatus::Succeeded);
+    // a Performer no driver of the store is known to have is still a refusal
+    let alone = Driver::new(store.clone(), "alone").with_nesting();
+    alone.create(&Ref::new("find-targets", 1), "wf-t", None, &max(), &now(0)).unwrap();
+    alone.command("wf-t", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
+    alone.tick_all(&now(2), &now(9)).unwrap();
+    let lib = store.library().unwrap();
+    let wf = store.get("wf-t").unwrap().unwrap().0;
+    assert!(wf.steps["detect"].runs.is_empty(), "nobody offers it: nothing is minted");
+    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "detect", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+}
+
+fn alone_faces(d: &Driver) -> Vec<PerformerFace> {
+    d.performers.iter().map(|p| p.describe()).collect()
 }
 
 #[test]

@@ -4,7 +4,7 @@
 use crate::definition::{DoneBy, Locality, OutputDefinition, Policy, Ref, WorkflowDefinition, DECISION};
 use crate::history::Entry;
 use crate::library::Library;
-use crate::workflow::{Actor, Gate, Input, Outcome, Output, Parameter, PerformerFace, Placement, Progress, Run, RunState, Stamp, Step, StepStatus, Waiting, Workflow, WORKFLOW};
+use crate::workflow::{Actor, Gate, Input, Outcome, Output, Parameter, PerformerFace, Placement, Progress, Run, RunState, Stamp, Step, StepStatus, Unplaced, Waiting, Workflow, WORKFLOW};
 use crate::{Error, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -195,6 +195,7 @@ pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&
                 confirmed: None,
                 placement: None,
                 skipped: None,
+                offered: Vec::new(),
                 runs: Vec::new(),
             },
         );
@@ -428,6 +429,28 @@ pub fn note_placements(def: &WorkflowDefinition, wf: &mut Workflow, performers: 
     entries
 }
 
+/// Note, on each Step waiting for a placement, the Performers offering
+/// its verb, and clear the note where the wait is over. Whether the
+/// document changed. No History: nobody acted.
+pub fn note_offers(def: &WorkflowDefinition, wf: &mut Workflow, performers: &[PerformerFace]) -> bool {
+    let mut changed = false;
+    let names: Vec<String> = wf.steps.keys().cloned().collect();
+    for name in names {
+        let waiting = matches!(wf.gate(def, &name, performers), Gate::Closed(StepStatus::Waiting(Waiting::Placement)));
+        let step = &wf.steps[&name];
+        let offered: Vec<String> = if waiting {
+            performers.iter().filter(|p| p.verbs.contains(&step.definition)).map(|p| p.name.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        if step.offered != offered {
+            wf.steps.get_mut(&name).unwrap().offered = offered;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// What to do now, in step order.
 pub fn plan(def: &WorkflowDefinition, wf: &Workflow, performers: &[PerformerFace]) -> Vec<Effect> {
     let mut out = Vec::new();
@@ -515,15 +538,10 @@ pub fn mint(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, step: &s
 }
 
 fn wf_placement(step: &Step, performers: &[PerformerFace]) -> Result<PerformerFace, Error> {
-    let offers = |p: &&PerformerFace| p.verbs.contains(&step.definition);
-    let found = if let Some(placed) = &step.placement {
-        performers.iter().find(|p| p.name == placed.performer).filter(offers)
-    } else if let Some(named) = &step.policy.placement.performer {
-        performers.iter().find(|p| &p.name == named).filter(offers)
-    } else {
-        performers.iter().find(offers)
-    };
-    found.cloned().ok_or_else(|| refused(format!("no performer offers {}", step.definition)))
+    Workflow::placement_among(step, performers).cloned().map_err(|why| match why {
+        Unplaced::Nobody => refused(format!("no performer offers {}", step.definition)),
+        Unplaced::Several => refused(format!("several performers offer {} and none is chosen", step.definition)),
+    })
 }
 
 /// The request to start a minted Run again (after a crash between
