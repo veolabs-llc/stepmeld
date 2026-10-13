@@ -385,6 +385,7 @@ fn show(store: &SqliteStore, wf: &Workflow) -> Result<(), Error> {
             StepStatus::Waiting(Waiting::Go) => "waiting for a start".into(),
             StepStatus::Waiting(Waiting::Confirmation { locality }) => format!("waiting for the {} placement to be confirmed", locality.as_str()),
             StepStatus::Waiting(Waiting::Performer) => "no performer offers it".into(),
+            StepStatus::Waiting(Waiting::Placement) => "waiting for a placement: several performers offer it (`place`)".into(),
             StepStatus::Running => step
                 .latest()
                 .and_then(|r| r.progress.as_ref())

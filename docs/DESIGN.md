@@ -93,7 +93,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 |---|---|
 | **Performer** | What does a Step's work (§4.2). Declares its verbs and its locality; chosen per Step. |
 | **Locality** | A Performer's answer to where: this machine, the local network, the cloud. A Workflow has none of its own. |
-| **Placement** | The act and record of choosing a Performer for a Run, by an Actor or a Policy. |
+| **Placement** | The act and record of choosing a Performer for a Run, by an Actor or a Policy. With one Performer offering the verb there is nothing to choose and it is the placement; with several and none chosen the Step waits for one (since 2026-10-13; before, the first in the driver's list was taken, which is no answer once drivers with different lists share a store). |
 | **Handle** | The Performer's own id for a Run's work. |
 | **Outcome** | How a Run ended: succeeded, failed, canceled or lost, with a class, a reason, a Summary and, on success, the Outputs. Refused is a start that never ran. "Could not be asked" is never an Outcome. |
 | **Summary** | The Performer's account of what it did: a headline and opaque details. |
@@ -133,9 +133,15 @@ whose Gates are open start together, in different localities. A Step
 fed by two branches waits for both by its Inputs Predicate; one Output
 feeding five Steps opens five Gates.
 
-With a server, several processes may hold the same StateStore. One
-driver advances a Workflow at a time, under a lease held in the
-StateStore.
+Several processes may hold the same StateStore, each a driver with its
+own Performers. One driver advances a Workflow at a time, under a lease
+held in the StateStore. A driver is told the faces of the Performers the
+others serve (`Driver::with_elsewhere`): a Gate and a placement are
+judged over all of them, any driver may mint a Run for any of them, and
+a Run is started, observed and canceled only by a driver that has its
+Performer. Performer names are one namespace across the drivers of a
+store. A Run whose driver has gone stays live until that driver, or
+someone, says otherwise: the engine does not judge a driver's absence.
 
 ### 4.2 Performer
 
@@ -391,7 +397,8 @@ and its tests, and none contradicts the rules above.
    Command clears it. A person's `start` counts as a confirmation.
 6. **The driver notes a prospective placement** on a Step waiting for
    confirmation, so a reader with only the document sees the same
-   status the driver does.
+   status the driver does. It notes the Performers offering the verb
+   (`offered`) on a Step waiting for a placement, for the same reason.
 7. **Children tick before parents**, so a parent sees what its child
    did this tick; a child created mid-tick is ticked in the same call.
 8. **Policies live on the verb and on the Step**, not on the recipe:

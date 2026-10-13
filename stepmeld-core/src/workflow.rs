@@ -253,6 +253,11 @@ pub struct Step {
     /// A `skip` given by an Actor. Final.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped: Option<Stamp>,
+    /// The Performers offering the verb, noted by a driver while a
+    /// placement is somebody's to make (several offer it, none chosen),
+    /// so a reader with only the document sees the wait and the choice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offered: Vec<String>,
     #[serde(default)]
     pub runs: Vec<Run>,
 }
@@ -301,6 +306,15 @@ impl Step {
     }
 }
 
+/// Why a Step has no Performer to go to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unplaced {
+    /// No Performer offers the verb (or the one named does not).
+    Nobody,
+    /// Several offer it and none is chosen.
+    Several,
+}
+
 /// Why a Gate is closed on something other than upstream work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "on", rename_all = "kebab-case")]
@@ -322,6 +336,9 @@ pub enum Waiting {
     },
     /// No Performer offers the verb.
     Performer,
+    /// Several Performers offer the verb and neither an Actor nor the
+    /// Policy has chosen among them: a placement is somebody's to make.
+    Placement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -671,11 +688,15 @@ impl Workflow {
         // (a reader with only the document), the placement the driver
         // noted stands in.
         let locality = if performers.is_empty() {
+            if step.placement.is_none() && step.offered.len() > 1 {
+                return Closed(StepStatus::Waiting(Waiting::Placement));
+            }
             step.placement.as_ref().map(|p| p.locality)
         } else {
-            match self.placement_for(step, performers) {
-                Some(face) => Some(face.locality),
-                None => return Closed(StepStatus::Waiting(Waiting::Performer)),
+            match Self::placement_among(step, performers) {
+                Ok(face) => Some(face.locality),
+                Err(Unplaced::Nobody) => return Closed(StepStatus::Waiting(Waiting::Performer)),
+                Err(Unplaced::Several) => return Closed(StepStatus::Waiting(Waiting::Placement)),
             }
         };
         let confirmed = step.confirmed.is_some() || step.go.as_ref().is_some_and(|g| g.by.is_someone());
@@ -688,16 +709,27 @@ impl Workflow {
     }
 
     /// The Performer a Run of `step` would go to: the one placed by an
-    /// Actor, else the Policy's, else the first offering the verb.
+    /// Actor, else the Policy's, else the only one offering the verb.
+    /// With several offering it and none chosen there is no answer:
+    /// "the first" is an accident of one driver's list, and drivers
+    /// that share a store need not list alike.
     pub fn placement_for<'a>(&self, step: &Step, performers: &'a [PerformerFace]) -> Option<&'a PerformerFace> {
+        Self::placement_among(step, performers).ok()
+    }
+
+    /// `placement_for`, saying why there is none.
+    pub fn placement_among<'a>(step: &Step, performers: &'a [PerformerFace]) -> Result<&'a PerformerFace, Unplaced> {
         let offers = |p: &&PerformerFace| p.verbs.contains(&step.definition);
-        if let Some(placed) = &step.placement {
-            return performers.iter().find(|p| p.name == placed.performer).filter(offers);
+        let named = step.placement.as_ref().map(|p| &p.performer).or(step.policy.placement.performer.as_ref());
+        if let Some(named) = named {
+            return performers.iter().find(|p| &p.name == named).filter(offers).ok_or(Unplaced::Nobody);
         }
-        if let Some(named) = &step.policy.placement.performer {
-            return performers.iter().find(|p| &p.name == named).filter(offers);
+        let mut offering = performers.iter().filter(offers);
+        match (offering.next(), offering.next()) {
+            (Some(only), None) => Ok(only),
+            (None, _) => Err(Unplaced::Nobody),
+            (Some(_), Some(_)) => Err(Unplaced::Several),
         }
-        performers.iter().find(offers)
     }
 
     pub fn status(&self, def: &WorkflowDefinition) -> WorkflowStatus {

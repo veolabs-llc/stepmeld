@@ -57,6 +57,7 @@
         "confirmed": { "$ref": "#/$defs/stamp" },
         "placement": { "type": "object", "required": ["performer", "locality", "by"], "additionalProperties": false, "properties": { "performer": { "type": "string" }, "locality": { "$ref": "#/$defs/locality" }, "by": { "$ref": "#/$defs/actor" } } },
         "skipped": { "$ref": "#/$defs/stamp", "description": "A `skip` given by an Actor. Final." },
+        "offered": { "type": "array", "items": { "type": "string" }, "description": "The Performers offering the verb, noted by a driver while a placement is somebody's to make (several offer it, none chosen). Absent otherwise." },
         "runs": { "type": "array", "items": { "$ref": "#/$defs/run" } }
       }
     },
