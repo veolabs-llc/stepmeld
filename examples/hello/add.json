@@ -1,0 +1,17 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "name": "add",
+  "version": 1,
+  "label": "Add two integers",
+  "description": "Adds a and b, taking three beats so that its progress can be watched.",
+  "inputs": [
+    {"name": "a", "tag": "integer", "required": true},
+    {"name": "b", "tag": "integer", "required": true}
+  ],
+  "parameters": [
+    {"name": "beat-seconds", "tag": "number", "required": true, "default": 1, "label": "Seconds per beat"}
+  ],
+  "outputs": [
+    {"name": "sum", "tag": "integer"}
+  ]
+}

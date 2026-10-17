@@ -1,0 +1,9 @@
+{
+  "contract": "stepmeld/workflow-definition.v1",
+  "name": "hello",
+  "version": 1,
+  "label": "Hello: add two integers",
+  "steps": [
+    {"name": "add", "step": {"name": "add", "version": 1}}
+  ]
+}

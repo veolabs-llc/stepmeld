@@ -1,0 +1,476 @@
+{
+  "contract": "stepmeld/workflow.v1",
+  "created": {
+    "at": "2026-10-06T00:00:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
+  "definition": {
+    "name": "report",
+    "version": 1
+  },
+  "id": "report-1",
+  "started": {
+    "at": "2026-10-06T00:01:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
+  "steps": {
+    "draft": {
+      "definition": {
+        "name": "draft",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "notes": {
+          "bound": true,
+          "required": true,
+          "tag": "notes",
+          "value": "notes-1"
+        }
+      },
+      "outputs": {
+        "text": {
+          "tag": "text",
+          "value": "text-1"
+        }
+      },
+      "parameters": {
+        "style": {
+          "required": false,
+          "tag": "string",
+          "value": "plain"
+        }
+      },
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:05:00Z",
+          "handle": "local-1",
+          "id": "report-1/draft/1",
+          "inputs": {
+            "notes": "notes-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "text": "text-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {
+            "style": "plain"
+          },
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:04:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "draft"
+            }
+          }
+        }
+      ]
+    },
+    "notes": {
+      "definition": {
+        "name": "gather-notes",
+        "version": 1
+      },
+      "done_by": "person",
+      "inputs": {},
+      "outputs": {
+        "notes": {
+          "tag": "notes",
+          "value": "notes-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:02:00Z",
+          "id": "report-1/notes/1",
+          "inputs": {},
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "notes": "notes-1"
+            },
+            "state": "succeeded",
+            "summary": {
+              "headline": "completed by person:max"
+            }
+          },
+          "parameters": {},
+          "performer": "person:max",
+          "started": {
+            "at": "2026-10-06T00:02:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    },
+    "publish": {
+      "definition": {
+        "name": "publish",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "document": {
+          "bound": true,
+          "required": true,
+          "tag": "document",
+          "value": "doc-1"
+        }
+      },
+      "outputs": {
+        "release": {
+          "tag": "release",
+          "value": "release-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:17:00Z",
+          "handle": "local-3",
+          "id": "report-1/publish/1",
+          "inputs": {
+            "document": "doc-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "release": "release-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {},
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:16:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "publish"
+            }
+          }
+        }
+      ]
+    },
+    "review": {
+      "definition": {
+        "name": "review-draft",
+        "version": 1
+      },
+      "done_by": "person",
+      "inputs": {
+        "text": {
+          "bound": true,
+          "required": true,
+          "tag": "text",
+          "value": "text-1"
+        }
+      },
+      "outputs": {
+        "decision": {
+          "options": [
+            "accept",
+            "revise"
+          ],
+          "tag": "decision",
+          "value": "revise"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:06:00Z",
+          "id": "report-1/review/1",
+          "inputs": {
+            "text": "text-1"
+          },
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "decision": "revise"
+            },
+            "state": "succeeded",
+            "summary": {
+              "headline": "completed by person:max"
+            }
+          },
+          "parameters": {},
+          "performer": "person:max",
+          "started": {
+            "at": "2026-10-06T00:06:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    },
+    "revise": {
+      "definition": {
+        "name": "revise",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "text": {
+          "bound": true,
+          "required": true,
+          "tag": "text",
+          "value": "text-1"
+        }
+      },
+      "outputs": {
+        "text": {
+          "tag": "text",
+          "value": "text-1r"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:08:00Z",
+          "handle": "local-2",
+          "id": "report-1/revise/1",
+          "inputs": {
+            "text": "text-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "text": "text-1r"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {},
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:07:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "revise"
+            }
+          }
+        }
+      ]
+    },
+    "typeset": {
+      "confirmed": {
+        "at": "2026-10-06T00:09:00Z",
+        "by": {
+          "id": "max",
+          "kind": "person"
+        }
+      },
+      "definition": {
+        "name": "typeset",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "notes": {
+          "bound": true,
+          "required": true,
+          "tag": "notes",
+          "value": "notes-1"
+        },
+        "text": {
+          "bound": true,
+          "required": true,
+          "tag": "text",
+          "value": "text-1r"
+        }
+      },
+      "outputs": {
+        "document": {
+          "tag": "document",
+          "value": "doc-1"
+        }
+      },
+      "parameters": {
+        "dpi": {
+          "chosen": {
+            "at": "2026-10-06T00:13:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          },
+          "required": false,
+          "tag": "integer",
+          "value": 300
+        }
+      },
+      "placement": {
+        "by": {
+          "kind": "policy",
+          "rule": "placement",
+          "step": "typeset"
+        },
+        "locality": "cloud",
+        "performer": "batch"
+      },
+      "policy": {
+        "on_failure": {
+          "classes": [
+            "lost"
+          ],
+          "do": "retake",
+          "max": 1
+        },
+        "on_stale": "wait",
+        "placement": {
+          "confirm": [
+            "cloud"
+          ]
+        },
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:11:00Z",
+          "handle": "batch-1",
+          "id": "report-1/typeset/1",
+          "inputs": {
+            "notes": "notes-1",
+            "text": "text-1r"
+          },
+          "locality": "cloud",
+          "number": 1,
+          "outcome": {
+            "class": "lost",
+            "reason": "the performer no longer knows this run",
+            "state": "lost"
+          },
+          "parameters": {
+            "dpi": 600
+          },
+          "performer": "batch",
+          "started": {
+            "at": "2026-10-06T00:10:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "typeset"
+            }
+          }
+        },
+        {
+          "ended_at": "2026-10-06T00:12:00Z",
+          "handle": "batch-2",
+          "id": "report-1/typeset/2",
+          "inputs": {
+            "notes": "notes-1",
+            "text": "text-1r"
+          },
+          "locality": "cloud",
+          "number": 2,
+          "outcome": {
+            "class": "out-of-memory",
+            "reason": "out of memory at 600 dpi",
+            "state": "failed"
+          },
+          "parameters": {
+            "dpi": 600
+          },
+          "performer": "batch",
+          "started": {
+            "at": "2026-10-06T00:11:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "retake",
+              "step": "typeset"
+            }
+          }
+        },
+        {
+          "ended_at": "2026-10-06T00:16:00Z",
+          "handle": "batch-3",
+          "id": "report-1/typeset/3",
+          "inputs": {
+            "notes": "notes-1",
+            "text": "text-1r"
+          },
+          "locality": "cloud",
+          "number": 3,
+          "outcome": {
+            "outputs": {
+              "document": "doc-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {
+            "dpi": 300
+          },
+          "performer": "batch",
+          "started": {
+            "at": "2026-10-06T00:15:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

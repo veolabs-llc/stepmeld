@@ -3,19 +3,26 @@
   "done_by": "performer",
   "inputs": [
     {
-      "name": "model",
+      "name": "notes",
       "required": true,
-      "tag": "sparse-model"
+      "tag": "notes"
     }
   ],
-  "name": "refine",
+  "name": "draft",
   "outputs": [
     {
-      "name": "model",
-      "tag": "sparse-model"
+      "name": "text",
+      "tag": "text"
     }
   ],
-  "parameters": [],
+  "parameters": [
+    {
+      "default": "plain",
+      "name": "style",
+      "required": false,
+      "tag": "string"
+    }
+  ],
   "policy": {
     "on_failure": {
       "do": "stop"

@@ -1,28 +1,25 @@
 {
   "contract": "stepmeld/step-definition.v1",
-  "done_by": "performer",
+  "done_by": "person",
   "inputs": [
     {
-      "name": "photos",
+      "name": "text",
       "required": true,
-      "tag": "photo-set"
+      "tag": "text"
     }
   ],
-  "name": "solve",
+  "name": "review-draft",
   "outputs": [
     {
-      "name": "model",
-      "tag": "sparse-model"
+      "name": "decision",
+      "options": [
+        "accept",
+        "revise"
+      ],
+      "tag": "decision"
     }
   ],
-  "parameters": [
-    {
-      "default": "exhaustive",
-      "name": "matcher",
-      "required": false,
-      "tag": "string"
-    }
-  ],
+  "parameters": [],
   "policy": {
     "on_failure": {
       "do": "stop"

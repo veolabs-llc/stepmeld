@@ -7,12 +7,12 @@
   "contract": "stepmeld/history.v1",
   "detail": {
     "outputs": {
-      "photos": "ps-1"
+      "notes": "notes-1"
     }
   },
   "kind": "completed",
-  "run": "layer-1/photos/1",
+  "run": "report-1/notes/1",
   "seq": 3,
-  "step": "photos",
-  "workflow": "layer-1"
+  "step": "notes",
+  "workflow": "report-1"
 }

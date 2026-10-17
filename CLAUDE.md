@@ -9,9 +9,10 @@ a scheduler).
   file and the docs is a preference that worked once. When one bites,
   name the incident and negotiate it.
 - This repository is public (MIT or Apache-2.0) and upstream of
-  everything that uses it. Nothing here names a domain (no photos,
-  runs-as-artifacts, scenes), a provider, a UI, or a downstream
-  repository, product or machine. A Value is opaque; a tag is a string
+  everything that uses it. Nothing here names a domain, a provider, a
+  UI, or a downstream repository, product or machine. Examples are
+  neutral (a report, an addition), never drawn from the field of
+  anyone who uses the engine. A Value is opaque; a tag is a string
   compared for equality.
 - The documents are the contract, not the Rust types: `contracts/`
   holds the JSON schemas and golden fixtures, and `stepmeld-core` is

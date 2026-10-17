@@ -12,8 +12,6 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-import jsonschema
-
 PREFIX = "stepmeld/"
 
 
@@ -36,6 +34,10 @@ def schema(name: str) -> dict:
 
 @lru_cache(maxsize=None)
 def _validator(name: str):
+    # imported here, not above: a verb (`stepmeld.verb`) never validates,
+    # so it runs where jsonschema is not installed
+    import jsonschema
+
     return jsonschema.Draft202012Validator(schema(name))
 
 

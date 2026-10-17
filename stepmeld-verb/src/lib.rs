@@ -101,7 +101,7 @@ impl Run {
         self.request.parameters.get(name)
     }
 
-    /// A field of a reference Value (`{"project": ..., "run": ...}`),
+    /// A field of a reference Value (`{"file": ..., "sheet": ...}`),
     /// refused in words when it is not there.
     pub fn field<'a>(&self, value: &'a Value, what: &str, name: &str) -> Result<&'a str> {
         value
@@ -243,11 +243,11 @@ mod tests {
             step: "s".into(),
             run: "wf/s/1".into(),
             definition: Ref::new(verb, 1),
-            inputs: BTreeMap::from([("cloud".to_string(), json!({"project": "p", "run": "r"}))]),
+            inputs: BTreeMap::from([("source".to_string(), json!({"file": "notes.txt", "sheet": "s1"}))]),
             parameters: BTreeMap::from([("slug".to_string(), json!("x"))]),
             outputs: vec![OutputDefinition {
-                name: "chunkset".into(),
-                tag: "chunk-set".into(),
+                name: "counts".into(),
+                tag: "counts".into(),
                 options: None,
                 label: None,
             }],
@@ -260,15 +260,15 @@ mod tests {
     }
 
     fn ok(run: &mut Run) -> Result<()> {
-        let cloud = run.input("cloud")?;
-        let project = run.field(cloud, "point cloud", "project")?.to_string();
-        run.progress(Some("chunking"), Some(1), Some(2), Some("passes"));
+        let source = run.input("source")?;
+        let file = run.field(source, "document reference", "file")?.to_string();
+        run.progress(Some("counting"), Some(1), Some(2), Some("passes"));
         run.save_state(json!({"job": "j-1"}))?;
-        run.succeed(BTreeMap::from([("chunkset".to_string(), json!({"project": project, "chunkset": "cs-1"}))]), "chunked", None)
+        run.succeed(BTreeMap::from([("counts".to_string(), json!({"file": file, "counts": "c-1"}))]), "counted", None)
     }
 
     fn refuses(run: &mut Run) -> Result<()> {
-        run.field(&json!("ps-1"), "photo set", "project")?;
+        run.field(&json!("notes.txt"), "document reference", "file")?;
         Ok(())
     }
 
@@ -293,7 +293,7 @@ mod tests {
         }
     }
 
-    const VERBS: &[(&str, Verb)] = &[("chunk", ok), ("refuses", refuses), ("forgets", forgets), ("panics", panics), ("owes", owes), ("waits", hears_the_cancel)];
+    const VERBS: &[(&str, Verb)] = &[("count", ok), ("refuses", refuses), ("forgets", forgets), ("panics", panics), ("owes", owes), ("waits", hears_the_cancel)];
 
     fn valid(dir: &Path, file: &str, contract: &str) {
         let doc: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
@@ -304,7 +304,7 @@ mod tests {
     /// verb told of a cancel ends canceled in its own words.
     #[test]
     fn the_files_hold_to_their_contracts_and_a_cancel_is_heard() {
-        let (_, _, dir) = run_verb("chunk");
+        let (_, _, dir) = run_verb("count");
         valid(&dir, "request.json", "stepmeld/run-request.v1");
         valid(&dir, "progress.json", "stepmeld/run-progress.v1");
         valid(&dir, "outcome.json", "stepmeld/run-outcome.v1");
@@ -330,10 +330,10 @@ mod tests {
 
     #[test]
     fn a_verb_that_succeeds_writes_outputs_progress_and_state() {
-        let (code, o, dir) = run_verb("chunk");
+        let (code, o, dir) = run_verb("count");
         assert_eq!(code, 0);
-        assert_eq!(o.outputs["chunkset"], json!({"project": "p", "chunkset": "cs-1"}));
-        assert_eq!(o.summary.unwrap().headline, "chunked");
+        assert_eq!(o.outputs["counts"], json!({"file": "notes.txt", "counts": "c-1"}));
+        assert_eq!(o.summary.unwrap().headline, "counted");
         let p: Progress = serde_json::from_slice(&std::fs::read(dir.join("progress.json")).unwrap()).unwrap();
         assert_eq!((p.done, p.total), (Some(1), Some(2)));
         assert!(dir.join("resumable").exists());
@@ -345,14 +345,14 @@ mod tests {
     fn refusals_faults_and_owed_outputs_are_outcomes() {
         let (code, o, _) = run_verb("refuses");
         assert_eq!((code, o.class.as_deref()), (1, Some("refused")));
-        assert!(o.reason.unwrap().contains("photo set"));
+        assert!(o.reason.unwrap().contains("document reference"));
         let (_, o, _) = run_verb("forgets");
         assert_eq!(o.class.as_deref(), Some("fault"));
         let (_, o, _) = run_verb("panics");
         assert_eq!(o.class.as_deref(), Some("fault"));
         assert!(o.reason.unwrap().contains("boom"));
         let (_, o, _) = run_verb("owes");
-        assert!(o.reason.unwrap().contains("chunkset"));
+        assert!(o.reason.unwrap().contains("counts"));
         let (_, o, _) = run_verb("nope");
         assert_eq!(o.class.as_deref(), Some("refused"));
     }

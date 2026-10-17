@@ -1,22 +1,18 @@
 {
   "contract": "stepmeld/step-definition.v1",
-  "done_by": "person",
+  "done_by": "performer",
   "inputs": [
     {
-      "name": "model",
+      "name": "text",
       "required": true,
-      "tag": "sparse-model"
+      "tag": "text"
     }
   ],
-  "name": "review-solve",
+  "name": "revise",
   "outputs": [
     {
-      "name": "decision",
-      "options": [
-        "accept",
-        "refine"
-      ],
-      "tag": "decision"
+      "name": "text",
+      "tag": "text"
     }
   ],
   "parameters": [],
