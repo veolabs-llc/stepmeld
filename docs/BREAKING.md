@@ -20,9 +20,9 @@ running until the program ends or the deadline passes; then the
 program is stopped and the outcome written as before.
 
 **Who notices:** a verb program that does not watch for `cancel.json`
-now runs on for up to the grace period after a cancel. A program gone
-after a cancel is canceled, no longer started again even when it wrote
-`resumable`.
+now runs on for up to the grace period after a cancel. A program that
+exits in that window without an outcome is canceled, even when it
+wrote `resumable`.
 
 **What to do:** nothing, to keep the old effect a little later; or
 check `run.cancel_asked()` (Python) / `Run::cancel_asked()` (Rust),
