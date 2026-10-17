@@ -18,7 +18,10 @@ a scheduler).
   holds the JSON schemas and golden fixtures, and `stepmeld-core` is
   held to them by test. Scenario fixtures hold the core itself; a
   second implementation in another language is held to the same files.
-  Contract changes are expand, then contract.
+  Contract changes are expand, then contract, except while the test
+  harness is reshaping the engine (Max, 2026-10-17): the v1 contracts
+  then change in place, each break recorded in `docs/BREAKING.md`, and
+  one bump to v2 ends the exception once the harness settles.
 - The core is a pure function over documents: no clock, no I/O, no
   threads inside it. Time is passed in. Persistence, Performers and
   drivers sit at the edge.
