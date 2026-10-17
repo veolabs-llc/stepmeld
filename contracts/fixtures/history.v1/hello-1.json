@@ -7,7 +7,7 @@
   "contract": "stepmeld/history.v1",
   "detail": {
     "definition": {
-      "name": "find-targets",
+      "name": "hello",
       "version": 1
     }
   },

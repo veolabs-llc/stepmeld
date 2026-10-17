@@ -219,137 +219,140 @@ impl Rig {
 }
 
 // ---------------------------------------------------------------------
-// The one-step example: Detect targets.
+// The one-step example: add two integers (the README's walkthrough).
 
-fn detect_library(store: &MemoryStore) {
-    store
-        .put_step(&verb("detect-targets", &[("images", "file-list")], &[("min-size", "integer", Some(Value::from(12)))], &[("targets", "target-table")]))
-        .unwrap();
+fn add_library(store: &MemoryStore) {
+    let mut add = verb("add", &[("a", "integer"), ("b", "integer")], &[("beat-seconds", "number", Some(Value::from(1)))], &[("sum", "integer")]);
+    add.label = Some("Add two integers".into());
+    store.put_step(&add).unwrap();
     // the verb and the recipe may share a label, never a name: verbs are one namespace
-    let mut w = WorkflowDefinition::new("find-targets", 1);
-    w.label = Some("Detect targets".into());
-    w.steps = vec![entry("detect", "detect-targets")];
+    let mut w = WorkflowDefinition::new("hello", 1);
+    w.label = Some("Add two integers".into());
+    w.steps = vec![entry("add", "add")];
     store.put_workflow_definition(&w).unwrap();
 }
 
 #[test]
-fn one_step_workflow_runs_when_its_input_is_given() {
+fn one_step_workflow_runs_when_its_inputs_are_given() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "find-targets", "wf-1");
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-1");
 
     // created: the step waits for the one input nobody feeds
-    assert_eq!(rig.status("detect"), StepStatus::Waiting(Waiting::Input { name: "images".into() }));
+    assert_eq!(rig.status("add"), StepStatus::Waiting(Waiting::Input { name: "a".into() }));
     assert_eq!(rig.workflow_status(), WorkflowStatus::Waiting);
     rig.tick();
     assert!(local.started().is_empty(), "nothing starts with its gate closed");
 
-    // the file list arrives; the gate opens; a tick mints and starts a run
-    rig.command(set("detect", "images", serde_json::json!(["a.jpg", "b.jpg"]))).unwrap();
-    assert_eq!(rig.status("detect"), StepStatus::Ready);
+    // the two numbers arrive; the gate opens; a tick mints and starts a run
+    rig.command(set("add", "a", 2.into())).unwrap();
+    assert_eq!(rig.status("add"), StepStatus::Waiting(Waiting::Input { name: "b".into() }));
+    rig.command(set("add", "b", 3.into())).unwrap();
+    assert_eq!(rig.status("add"), StepStatus::Ready);
     let wf = rig.tick();
-    assert_eq!(wf.step_status(&rig.def(), "detect"), StepStatus::Running);
+    assert_eq!(wf.step_status(&rig.def(), "add"), StepStatus::Running);
     let req = &local.started()[0];
-    assert_eq!(req.parameters["min-size"], Value::from(12), "the default is in effect");
-    assert_eq!(req.inputs["images"], serde_json::json!(["a.jpg", "b.jpg"]));
-    assert_eq!(wf.step("detect").unwrap().latest().unwrap().started.by, Actor::policy("start-automatically", "detect"));
+    assert_eq!(req.parameters["beat-seconds"], Value::from(1), "the default is in effect");
+    assert_eq!((&req.inputs["a"], &req.inputs["b"]), (&Value::from(2), &Value::from(3)));
+    assert_eq!(wf.step("add").unwrap().latest().unwrap().started.by, Actor::policy("start-automatically", "add"));
 
     // progress is read, then the outcome; the output is bound
-    let h = rig.handle(&local, "detect");
+    let h = rig.handle(&local, "add");
     local.progress(
         &h,
         Progress {
-            phase: Some("detecting".into()),
+            phase: Some("adding".into()),
             done: Some(1),
-            total: Some(2),
-            unit: Some("images".into()),
+            total: Some(3),
+            unit: Some("beats".into()),
             at: now(3),
         },
     );
     let wf = rig.tick();
-    assert_eq!(wf.step("detect").unwrap().latest().unwrap().progress.as_ref().unwrap().done, Some(1));
-    let mut outcome = Outcome::succeeded(outs(&[("targets", serde_json::json!({"rows": 86}))]));
-    outcome.summary = Some(Summary {
-        headline: "86 targets in 2 images".into(),
-        details: None,
-    });
+    assert_eq!(wf.step("add").unwrap().latest().unwrap().progress.as_ref().unwrap().done, Some(1));
+    let mut outcome = Outcome::succeeded(outs(&[("sum", 5.into())]));
+    outcome.summary = Some(Summary { headline: "2 + 3 = 5".into(), details: None });
     local.finish(&h, outcome);
     let wf = rig.tick();
-    assert_eq!(wf.step_status(&rig.def(), "detect"), StepStatus::Succeeded);
-    assert_eq!(wf.step("detect").unwrap().outputs["targets"].value, Some(serde_json::json!({"rows": 86})));
+    assert_eq!(wf.step_status(&rig.def(), "add"), StepStatus::Succeeded);
+    assert_eq!(wf.step("add").unwrap().outputs["sum"].value, Some(Value::from(5)));
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
-    assert_eq!(rig.history_kinds(), ["created", "started", "set@detect", "run-minted@detect", "run-started@detect", "progress@detect", "run-ended@detect"]);
+    assert_eq!(rig.history_kinds(), ["created", "started", "set@add", "set@add", "run-minted@add", "run-started@add", "progress@add", "run-ended@add"]);
 
     // a set on a succeeded step makes it stale; nothing restarts on its own
-    rig.command(param("detect", "min-size", Value::from(8))).unwrap();
-    assert_eq!(rig.status("detect"), StepStatus::Stale);
+    rig.command(param("add", "beat-seconds", Value::from(0))).unwrap();
+    assert_eq!(rig.status("add"), StepStatus::Stale);
     rig.tick();
     assert_eq!(local.started().len(), 1);
-    rig.command(start("detect")).unwrap();
+    rig.command(start("add")).unwrap();
     rig.tick();
     assert_eq!(local.started().len(), 2, "a start retakes a stale step");
-    assert_eq!(local.started()[1].parameters["min-size"], Value::from(8));
-    assert_eq!(rig.wf().step("detect").unwrap().runs.len(), 2, "runs are append-only");
-    rig.write_fixtures("find-targets");
+    assert_eq!(local.started()[1].parameters["beat-seconds"], Value::from(0));
+    assert_eq!(rig.wf().step("add").unwrap().runs.len(), 2, "runs are append-only");
+    rig.write_fixtures("hello");
 }
 
 #[test]
 fn a_bound_input_cannot_be_set_and_a_running_step_cannot_be_started() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "find-targets", "wf-2");
-    rig.command(set("detect", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-2");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
-    assert!(matches!(rig.command(start("detect")), Err(Error::Refused(w)) if w.contains("running")));
-    assert!(matches!(rig.command(set("detect", "nope", Value::Null)), Err(Error::Refused(w)) if w.contains("running")));
+    assert!(matches!(rig.command(start("add")), Err(Error::Refused(w)) if w.contains("running")));
+    assert!(matches!(rig.command(set("add", "nope", Value::Null)), Err(Error::Refused(w)) if w.contains("running")));
 }
 
 #[test]
 fn a_refusal_is_a_failed_run_that_never_ran() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
     local.set_refusal(Some("no such file a.jpg"));
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "find-targets", "wf-3");
-    rig.command(set("detect", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-3");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
     let wf = rig.tick();
-    let run = wf.step("detect").unwrap().latest().unwrap();
+    let run = wf.step("add").unwrap().latest().unwrap();
     assert_eq!(run.outcome.as_ref().unwrap().class.as_deref(), Some("refused"));
-    assert_eq!(rig.status("detect"), StepStatus::Failed);
+    assert_eq!(rig.status("add"), StepStatus::Failed);
     assert_eq!(rig.workflow_status(), WorkflowStatus::Failed);
 }
 
 #[test]
 fn an_unreachable_performer_changes_nothing() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "find-targets", "wf-4");
-    rig.command(set("detect", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-4");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
     let before = rig.wf();
     local.set_unreachable(Some("network"));
     rig.tick();
     assert_eq!(rig.wf(), before);
     local.set_unreachable(None);
-    local.forget(&rig.handle(&local, "detect"));
+    local.forget(&rig.handle(&local, "add"));
     let wf = rig.tick();
-    assert_eq!(wf.step("detect").unwrap().latest().unwrap().outcome.as_ref().unwrap().state, RunState::Lost, "absent is lost");
+    assert_eq!(wf.step("add").unwrap().latest().unwrap().outcome.as_ref().unwrap().state, RunState::Lost, "absent is lost");
 }
 
 #[test]
 fn a_success_without_the_declared_outputs_is_a_fault() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "find-targets", "wf-5");
-    rig.command(set("detect", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-5");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "detect"), Outcome::succeeded(BTreeMap::new()));
+    local.finish(&rig.handle(&local, "add"), Outcome::succeeded(BTreeMap::new()));
     let wf = rig.tick();
-    let o = wf.step("detect").unwrap().latest().unwrap().outcome.clone().unwrap();
+    let o = wf.step("add").unwrap().latest().unwrap().outcome.clone().unwrap();
     assert_eq!((o.state, o.class.as_deref()), (RunState::Failed, Some("fault")));
 }
 
@@ -658,16 +661,9 @@ fn scenario_c_publish_as_a_nested_workflow() {
 #[test]
 fn scenario_d_the_same_verb_twice() {
     let store = Arc::new(MemoryStore::new());
-    store.put_step(&person_verb("choose-photos", &[], &[("photos", "photo-set")], None)).unwrap();
-    store
-        .put_step(&verb("detect-targets", &[("images", "photo-set")], &[("min-size", "integer", Some(12.into()))], &[("targets", "target-table")]))
-        .unwrap();
-    let mut compare = verb(
-        "compare-targets",
-        &[("left", "target-table"), ("right", "target-table")],
-        &[("tolerance", "number", Some(0.005.into()))],
-        &[("report", "table")],
-    );
+    store.put_step(&person_verb("take-sample", &[], &[("sample", "sample")], None)).unwrap();
+    store.put_step(&verb("measure", &[("sample", "sample")], &[("resolution", "integer", Some(12.into()))], &[("reading", "reading")])).unwrap();
+    let mut compare = verb("compare-readings", &[("left", "reading"), ("right", "reading")], &[("tolerance", "number", Some(0.005.into()))], &[("report", "table")]);
     compare.outputs.push(OutputDefinition {
         name: "decision".into(),
         tag: DECISION.into(),
@@ -675,21 +671,21 @@ fn scenario_d_the_same_verb_twice() {
         label: None,
     });
     store.put_step(&compare).unwrap();
-    store.put_step(&person_verb("notify-surveyor", &[("report", "table")], &[], None)).unwrap();
-    let mut w = WorkflowDefinition::new("target-drift", 1);
+    store.put_step(&person_verb("notify-owner", &[("report", "table")], &[], None)).unwrap();
+    let mut w = WorkflowDefinition::new("reading-drift", 1);
     w.steps = vec![
-        entry("early", "choose-photos"),
-        entry("late", "choose-photos"),
-        entry("detect-early", "detect-targets"),
-        entry("detect-late", "detect-targets"),
-        entry("compare", "compare-targets"),
-        entry("flag", "notify-surveyor"),
+        entry("early", "take-sample"),
+        entry("late", "take-sample"),
+        entry("measure-early", "measure"),
+        entry("measure-late", "measure"),
+        entry("compare", "compare-readings"),
+        entry("flag", "notify-owner"),
     ];
     w.bindings = vec![
-        bind("early.photos", "detect-early.images"),
-        bind("late.photos", "detect-late.images"),
-        bind("detect-early.targets", "compare.left"),
-        bind("detect-late.targets", "compare.right"),
+        bind("early.sample", "measure-early.sample"),
+        bind("late.sample", "measure-late.sample"),
+        bind("measure-early.reading", "compare.left"),
+        bind("measure-late.reading", "compare.right"),
         Binding {
             from: PortRef("compare.report".into()),
             to: PortRef("flag.report".into()),
@@ -701,54 +697,54 @@ fn scenario_d_the_same_verb_twice() {
         },
     ];
     store.put_workflow_definition(&w).unwrap();
-    let local = performer("local", Locality::ThisMachine, &["detect-targets", "compare-targets"]);
-    let fleet = performer("workstation", Locality::LocalNetwork, &["detect-targets"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone(), fleet.clone()], "target-drift", "drift-1");
+    let local = performer("local", Locality::ThisMachine, &["measure", "compare-readings"]);
+    let fleet = performer("workstation", Locality::LocalNetwork, &["measure"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone(), fleet.clone()], "reading-drift", "drift-1");
 
-    // one side first: detect-early starts; nothing waits on "the previous step"
-    rig.command(complete("early", &[("photos", "ps-early".into())])).unwrap();
+    // one side first: measure-early starts; nothing waits on "the previous step"
+    rig.command(complete("early", &[("sample", "s-early".into())])).unwrap();
     rig.tick();
     // two Performers offer the verb and nobody chose: it waits to be placed
-    assert_eq!(rig.status("detect-early"), StepStatus::Waiting(Waiting::Placement));
+    assert_eq!(rig.status("measure-early"), StepStatus::Waiting(Waiting::Placement));
     assert!(local.started().is_empty() && fleet.started().is_empty());
     rig.command(Command::Place {
-        step: "detect-early".into(),
+        step: "measure-early".into(),
         performer: "local".into(),
         locality: Locality::ThisMachine,
     })
     .unwrap();
     rig.tick();
-    assert_eq!(rig.status("detect-early"), StepStatus::Running);
-    assert_eq!(rig.status("detect-late"), StepStatus::NotReady);
+    assert_eq!(rig.status("measure-early"), StepStatus::Running);
+    assert_eq!(rig.status("measure-late"), StepStatus::NotReady);
     assert_eq!(rig.status("compare"), StepStatus::NotReady);
 
     // the other side, placed on the fleet with its own parameter
-    rig.command(complete("late", &[("photos", "ps-late".into())])).unwrap();
-    rig.command(param("detect-late", "min-size", 6.into())).unwrap();
+    rig.command(complete("late", &[("sample", "s-late".into())])).unwrap();
+    rig.command(param("measure-late", "resolution", 6.into())).unwrap();
     rig.command(Command::Place {
-        step: "detect-late".into(),
+        step: "measure-late".into(),
         performer: "workstation".into(),
         locality: Locality::LocalNetwork,
     })
     .unwrap();
     rig.tick();
-    assert_eq!(rig.status("detect-late"), StepStatus::Running);
-    assert_eq!(fleet.started()[0].parameters["min-size"], Value::from(6));
-    assert_eq!(local.started()[0].parameters["min-size"], Value::from(12));
+    assert_eq!(rig.status("measure-late"), StepStatus::Running);
+    assert_eq!(fleet.started()[0].parameters["resolution"], Value::from(6));
+    assert_eq!(local.started()[0].parameters["resolution"], Value::from(12));
 
     // one side fails and is retaken alone
-    fleet.finish(&rig.handle(&fleet, "detect-late"), Outcome::failed("failed", "unreadable file"));
-    local.finish(&rig.handle(&local, "detect-early"), Outcome::succeeded(outs(&[("targets", "t-early".into())])));
+    fleet.finish(&rig.handle(&fleet, "measure-late"), Outcome::failed("failed", "unreadable file"));
+    local.finish(&rig.handle(&local, "measure-early"), Outcome::succeeded(outs(&[("reading", "r-early".into())])));
     rig.tick();
-    assert_eq!(rig.status("detect-late"), StepStatus::Failed);
+    assert_eq!(rig.status("measure-late"), StepStatus::Failed);
     assert_eq!(rig.status("compare"), StepStatus::NotReady);
-    rig.command(complete("late", &[("photos", "ps-late-fixed".into())])).unwrap();
-    assert_eq!(rig.status("detect-late"), StepStatus::Failed, "a failed step with a new input still waits for a start");
-    rig.command(start("detect-late")).unwrap();
+    rig.command(complete("late", &[("sample", "s-late-fixed".into())])).unwrap();
+    assert_eq!(rig.status("measure-late"), StepStatus::Failed, "a failed step with a new input still waits for a start");
+    rig.command(start("measure-late")).unwrap();
     rig.tick();
-    fleet.finish(&rig.handle(&fleet, "detect-late"), Outcome::succeeded(outs(&[("targets", "t-late".into())])));
+    fleet.finish(&rig.handle(&fleet, "measure-late"), Outcome::succeeded(outs(&[("reading", "r-late".into())])));
     rig.tick();
-    assert_eq!(local.started().len(), 2, "detect-early was untouched; compare started");
+    assert_eq!(local.started().len(), 2, "measure-early was untouched; compare started");
 
     // the join and the branch
     assert_eq!(rig.status("compare"), StepStatus::Running);
@@ -766,18 +762,19 @@ fn scenario_d_the_same_verb_twice() {
 #[test]
 fn drivers_that_share_a_store_each_run_their_own() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let desk = performer("desk", Locality::ThisMachine, &["detect-targets"]);
-    let bench = performer("bench", Locality::LocalNetwork, &["detect-targets"]);
+    add_library(&store);
+    let desk = performer("desk", Locality::ThisMachine, &["add"]);
+    let bench = performer("bench", Locality::LocalNetwork, &["add"]);
     let here = Driver::new(store.clone(), "here").with_nesting().with_performer(desk.clone()).with_elsewhere(vec![bench.describe()]);
     let there = Driver::new(store.clone(), "there").with_nesting().with_performer(bench.clone()).with_elsewhere(vec![desk.describe()]);
-    here.create(&Ref::new("find-targets", 1), "wf-s", None, &max(), &now(0)).unwrap();
+    here.create(&Ref::new("hello", 1), "wf-s", None, &max(), &now(0)).unwrap();
     here.command("wf-s", &Command::StartWorkflow, &max(), &now(0)).unwrap();
-    here.command("wf-s", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
+    here.command("wf-s", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
+    here.command("wf-s", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     let status = |_: &Driver| {
         let lib = store.library().unwrap();
         let wf = store.get("wf-s").unwrap().unwrap().0;
-        wf.step_status(lib.workflow(&wf.definition).unwrap(), "detect")
+        wf.step_status(lib.workflow(&wf.definition).unwrap(), "add")
     };
     // both offer it: nobody starts anything until it is placed
     here.tick_all(&now(2), &now(9)).unwrap();
@@ -787,7 +784,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     here.command(
         "wf-s",
         &Command::Place {
-            step: "detect".into(),
+            step: "add".into(),
             performer: "bench".into(),
             locality: Locality::LocalNetwork,
         },
@@ -798,7 +795,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     here.tick_all(&now(4), &now(9)).unwrap();
     here.tick_all(&now(5), &now(9)).unwrap();
     let wf = store.get("wf-s").unwrap().unwrap().0;
-    let run = wf.steps["detect"].latest().unwrap();
+    let run = wf.steps["add"].latest().unwrap();
     assert!(run.live() && run.handle.is_none() && run.performer == "bench", "minted here, not started, not failed: {run:?}");
     assert!(desk.started().is_empty());
     // its own driver starts it, and this one watches without touching
@@ -806,22 +803,23 @@ fn drivers_that_share_a_store_each_run_their_own() {
     assert_eq!(bench.started().len(), 1);
     here.tick_all(&now(7), &now(9)).unwrap();
     assert_eq!(status(&here), StepStatus::Running);
-    let handle = bench.handle_of(&store.get("wf-s").unwrap().unwrap().0.steps["detect"].latest().unwrap().id).unwrap();
-    bench.finish(&handle, Outcome::succeeded(outs(&[("targets", "t".into())])));
+    let handle = bench.handle_of(&store.get("wf-s").unwrap().unwrap().0.steps["add"].latest().unwrap().id).unwrap();
+    bench.finish(&handle, Outcome::succeeded(outs(&[("sum", 5.into())])));
     here.tick_all(&now(8), &now(9)).unwrap();
     assert_eq!(status(&here), StepStatus::Running, "only its own driver hears it end");
     there.tick_all(&now(8), &now(9)).unwrap();
     assert_eq!(status(&here), StepStatus::Succeeded);
     // a Performer no driver of the store is known to have is still a refusal
     let alone = Driver::new(store.clone(), "alone").with_nesting();
-    alone.create(&Ref::new("find-targets", 1), "wf-t", None, &max(), &now(0)).unwrap();
+    alone.create(&Ref::new("hello", 1), "wf-t", None, &max(), &now(0)).unwrap();
     alone.command("wf-t", &Command::StartWorkflow, &max(), &now(0)).unwrap();
-    alone.command("wf-t", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
+    alone.command("wf-t", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
+    alone.command("wf-t", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     alone.tick_all(&now(2), &now(9)).unwrap();
     let lib = store.library().unwrap();
     let wf = store.get("wf-t").unwrap().unwrap().0;
-    assert!(wf.steps["detect"].runs.is_empty(), "nobody offers it: nothing is minted");
-    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "detect", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert!(wf.steps["add"].runs.is_empty(), "nobody offers it: nothing is minted");
+    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
 }
 
 fn alone_faces(d: &Driver) -> Vec<PerformerFace> {
@@ -833,16 +831,17 @@ fn alone_faces(d: &Driver) -> Vec<PerformerFace> {
 #[test]
 fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
     let driver = Driver::new(store.clone(), "test").with_nesting().with_performer(local.clone());
-    driver.create(&Ref::new("find-targets", 1), "wf-r", None, &max(), &now(0)).unwrap();
-    driver.command("wf-r", &set("detect", "images", serde_json::json!(["a.jpg"])), &max(), &now(1)).unwrap();
+    driver.create(&Ref::new("hello", 1), "wf-r", None, &max(), &now(0)).unwrap();
+    driver.command("wf-r", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
+    driver.command("wf-r", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     driver.tick_all(&now(2), &now(9)).unwrap();
     let lib = store.library().unwrap();
     let wf = store.get("wf-r").unwrap().unwrap().0;
     let def = lib.workflow(&wf.definition).unwrap().clone();
-    assert_eq!(wf.step_status(&def, "detect"), StepStatus::Waiting(Waiting::Start));
+    assert_eq!(wf.step_status(&def, "add"), StepStatus::Waiting(Waiting::Start));
     assert_eq!(wf.status(&def), WorkflowStatus::Waiting);
     assert!(local.started().is_empty(), "nothing is minted before the go");
     stepmeld_core::contracts::validate(&serde_json::to_value(&wf).unwrap(), "stepmeld/workflow.v1").unwrap();
@@ -858,10 +857,11 @@ fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
     }
     // a nested child: the parent's Run is its go
     let mut outer = WorkflowDefinition::new("outer", 1);
-    outer.steps = vec![entry("inner", "find-targets")];
+    outer.steps = vec![entry("inner", "hello")];
     store.put_workflow_definition(&outer).unwrap();
     driver.create(&Ref::new("outer", 1), "wf-o", None, &max(), &now(5)).unwrap();
-    driver.command("wf-o", &set("inner", "detect.images", serde_json::json!(["b.jpg"])), &max(), &now(6)).unwrap();
+    driver.command("wf-o", &set("inner", "add.a", 4.into()), &max(), &now(6)).unwrap();
+    driver.command("wf-o", &set("inner", "add.b", 5.into()), &max(), &now(6)).unwrap();
     driver.command("wf-o", &Command::StartWorkflow, &max(), &now(7)).unwrap();
     driver.tick_all(&now(8), &now(20)).unwrap();
     let child = store.list().unwrap().into_iter().find(|id| id.starts_with("wf-o~")).expect("a child was created");
@@ -872,10 +872,11 @@ fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
 #[test]
 fn a_cancel_stops_the_live_run_and_the_workflow() {
     let store = Arc::new(MemoryStore::new());
-    detect_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["detect-targets"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "find-targets", "wf-6");
-    rig.command(set("detect", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-6");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
     rig.command(Command::Cancel {
         step: None,
@@ -883,10 +884,10 @@ fn a_cancel_stops_the_live_run_and_the_workflow() {
     })
     .unwrap();
     let wf = rig.tick();
-    let run = wf.step("detect").unwrap().latest().unwrap();
+    let run = wf.step("add").unwrap().latest().unwrap();
     assert_eq!(run.outcome.as_ref().unwrap().state, RunState::Canceled);
     assert_eq!(rig.workflow_status(), WorkflowStatus::Canceled);
-    assert!(local.run(&rig.handle(&local, "detect")).unwrap().canceled.is_some());
+    assert!(local.run(&rig.handle(&local, "add")).unwrap().canceled.is_some());
 }
 
 // ---------------------------------------------------------------------
@@ -1038,14 +1039,15 @@ fn scenario_e_a_skipped_step_skips_what_only_it_feeds() {
 #[test]
 fn definitions_are_checked() {
     let store = MemoryStore::new();
-    detect_library(&store);
+    add_library(&store);
     let mut w = WorkflowDefinition::new("bad", 1);
-    w.steps = vec![entry("a", "detect-targets"), entry("b", "detect-targets")];
-    w.bindings = vec![bind("a.targets", "b.images")];
+    store.put_step(&verb("describe", &[], &[], &[("words", "text")])).unwrap();
+    w.steps = vec![entry("a", "describe"), entry("b", "add")];
+    w.bindings = vec![bind("a.words", "b.a")];
     assert!(matches!(store.put_workflow_definition(&w), Err(Error::Invalid(m)) if m.contains("tags differ")), "{:?}", store.put_workflow_definition(&w));
-    w.bindings = vec![bind("a.nope", "b.images")];
+    w.bindings = vec![bind("a.nope", "b.a")];
     assert!(matches!(store.put_workflow_definition(&w), Err(Error::Invalid(m)) if m.contains("no output")));
-    w.steps = vec![entry("a", "detect-targets"), entry("a", "detect-targets")];
+    w.steps = vec![entry("a", "add"), entry("a", "add")];
     w.bindings = vec![];
     assert!(matches!(store.put_workflow_definition(&w), Err(Error::Invalid(m)) if m.contains("twice")));
     let mut d = StepDefinition::new("x", 1);

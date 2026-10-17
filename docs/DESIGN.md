@@ -318,8 +318,8 @@ fixtures.
 - **C. Publish as a nested workflow.** §6. Found: the attention flag;
   confirmations per Step at any depth; dotted names are the only new
   syntax.
-- **D. The same verb twice.** Two photo sets, `detect-early` and
-  `detect-late` in parallel in two localities with different Parameters,
+- **D. The same verb twice.** Two samples, `measure-early` and
+  `measure-late` in parallel in two localities with different Parameters,
   joined by `compare` (Decision stable|moved) guarding `flag`. One side
   fails and is retaken alone. Found: nothing new in the vocabulary;
   stale is per Input; step entries want display labels; "any number of
@@ -379,7 +379,7 @@ and its tests, and none contradicts the rules above.
 
 1. **Verbs are one namespace.** A WorkflowDefinition may not take a
    StepDefinition's name and version, since the Library offers both as
-   verbs. Labels may be equal ("Detect targets" twice), names not.
+   verbs. Labels may be equal ("Add two integers" twice), names not.
 2. **Port names.** Inputs and Parameters share a namespace (both are
    given); Outputs have their own (a refine takes `model` and gives
    `model`). A port name on a nested recipe's face is dotted
@@ -450,8 +450,9 @@ and its tests, and none contradicts the rules above.
 3. *(done)* The Rust core as a pure function; in-memory StateStore and
    Performer with conformance suites.
 4. *(done)* `stepmeld-sqlite` and `stepmeld-local`.
-5. *(done)* "Detect targets" end to end through the `stepmeld`
-   command, with a shell script as the verb.
+5. *(done)* A one-step recipe end to end through the `stepmeld`
+   command, with a shell script as the verb (now the README's
+   walkthrough, `examples/hello`).
 6. *(done, downstream)* Real verbs as programs speaking the local
    Performer's protocol, with their recipes; Performers for other
    machines and a cloud batch service; a child recipe for publishing.
