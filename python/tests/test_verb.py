@@ -149,3 +149,13 @@ def test_the_files_hold_to_their_contracts_and_a_cancel_is_heard(tmp_path):
     assert verb.main({"waits": waits}, [str(d)]) == 1
     assert outcome(d) == {"state": "canceled", "class": "canceled", "reason": "stopped its job (asked by person:ann)"}
     assert stepmeld.check(outcome(d), "stepmeld/run-outcome.v1") is None
+
+
+def test_a_verb_runs_without_jsonschema():
+    # a verb never validates; the helper loads with jsonschema unavailable
+    import subprocess
+    import sys
+
+    code = "import sys; sys.modules['jsonschema'] = None; import stepmeld.verb; print('ok')"
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert done.returncode == 0 and done.stdout.strip() == "ok", done.stderr

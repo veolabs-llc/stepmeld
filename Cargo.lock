@@ -796,6 +796,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "stepmeld-example-hello"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "stepmeld-verb",
+ "tempfile",
+]
+
+[[package]]
 name = "stepmeld-local"
 version = "0.1.0"
 dependencies = [

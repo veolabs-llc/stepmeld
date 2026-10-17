@@ -1,6 +1,6 @@
 //! The README's walkthrough from the shell (docs/ORCHESTRATOR-WORKER.md):
 //! the definitions in `examples/hello`, a Worker whose program is a
-//! shell script standing in for `add.py`, `stepmeld work` running it,
+//! shell script standing in for `hello-add`, `stepmeld work` running it,
 //! `stepmeld tick` orchestrating, an Outcome read back. Nothing but the
 //! command touches the engine.
 
@@ -45,7 +45,7 @@ fn work(dir: &Path, worker_store: &str) -> Working {
 fn hello_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    // the program: adds its two inputs, as examples/hello/add.py does
+    // the program: adds its two inputs, as examples/hello's hello-add does
     std::fs::write(
         d.join("add.sh"),
         r#"#!/bin/sh
