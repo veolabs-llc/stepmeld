@@ -77,8 +77,8 @@ mod tests {
 
         let several = parse(
             r#"{"performers": [
-                {"name": "box", "root": "/runs", "programs": [{"verb": {"name": "solve", "version": 1}, "command": ["solver", "step"]}]},
-                {"name": "batch", "locality": "cloud", "root": "/runs", "programs": [{"verb": {"name": "dense", "version": 1}, "command": ["solver", "--executor", "batch", "step"]}]}
+                {"name": "box", "root": "/runs", "programs": [{"verb": {"name": "draft", "version": 1}, "command": ["drafter", "step"]}]},
+                {"name": "batch", "locality": "cloud", "root": "/runs", "programs": [{"verb": {"name": "typeset", "version": 1}, "command": ["typesetter", "--remote", "step"]}]}
             ]}"#,
         )
         .unwrap();

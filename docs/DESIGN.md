@@ -16,11 +16,11 @@ runner, the decision was to design a generic workflow engine and build
 it in a repository of its own, open source, upstream of everything that
 uses it.
 
-The engine is domain-agnostic. A photogrammetry pipeline, a
-visual-effects pipeline and a render farm fit the same model; an
-expressive, multi-user workflow tool is the direction. Several users in
-different domains, which is the second-domain test a generic design
-needs.
+The engine is domain-agnostic: pipelines from unrelated fields fit the
+same model, and an expressive, multi-user workflow tool is the
+direction. Several users in different domains is the second-domain test
+a generic design needs. The examples here (a report, an addition) are
+neutral on purpose.
 
 The name: `stepmeld`, free on crates.io, PyPI, npm and GitHub as of
 2026-10-06.
@@ -66,10 +66,10 @@ recipes; never any values) and what exists once a workflow is minted
 | **Binding** | A connection from one named step's Output to another named step's Input, optionally guarded. The only structure in a recipe; there is no step order. |
 | **InputDefinition** | A name, a tag, whether required. |
 | **ParameterDefinition** | The same, plus a default. |
-| **OutputDefinition** | A name and a tag. A **Decision** is an OutputDefinition whose options are declared (`accept`, `refine`) and whose Value the engine may read. |
+| **OutputDefinition** | A name and a tag. A **Decision** is an OutputDefinition whose options are declared (`accept`, `revise`) and whose Value the engine may read. |
 | **Guard** | A condition on a Binding, over facts the engine holds: step statuses and Decisions. Composed from a few fixed forms; no expression language. |
 | **Policy** | Per-step rules from a fixed menu (§5.6). |
-| **Tag** | An opaque label (`file-list`, `camera-pose`) on a definition and its Value; compared for equality, used to look up presenters and Performers. Not a type system. |
+| **Tag** | An opaque label (`notes`, `document`) on a definition and its Value; compared for equality, used to look up presenters and Performers. Not a type system. |
 
 Every WorkflowDefinition is also offered by the Library as a
 StepDefinition with its derived face (§6), so recipes nest.
@@ -169,7 +169,7 @@ estimate(step)           -> optional: cost or duration, changing nothing
 - Lost is the Performer's word for work it once started and cannot find.
   Final; a lost Run is retaken as a new Run, never revived.
 - A running report may carry an **attention** flag with a reason
-  ("blocked inside: layers failed"; "quota exceeded, waiting"), for a
+  ("blocked inside: upload failed"; "quota exceeded, waiting"), for a
   Performer whose work needs a person without having ended.
 - A Performer never reads or writes a Workflow, never retries, never
   holds for review. It reports; the engine and its Policies decide.
@@ -222,7 +222,7 @@ conformance suite beside it.
    declared options.
 3. **A workflow's face is derived.** Required Inputs no Binding feeds
    are what a user must provide; every Step's Output is addressable by
-   path (`dense.cloud`). A value two Steps need comes from a Step with
+   path (`typeset.document`). A value two Steps need comes from a Step with
    no Inputs, never from the Workflow itself.
 4. **Names are the only per-use difference in a recipe.** Two entries
    for the same StepDefinition differ by name; everything else that
@@ -271,13 +271,13 @@ conformance suite beside it.
    the engine's clock; the engine is told the time, so the fixtures stay
    deterministic.
 10. **Rerunning a verb to run a different verb is not a loop.** A
-    rejected solve is "change something and retake solve", by Command.
+    rejected draft is "change something and retake draft", by Command.
     No cycles in v1.
 
 ## 6. Nesting
 
 Every WorkflowDefinition is offered as a StepDefinition with its derived
-face, names by path: `chunk.cloud`, `layers.layer`. The nested-workflow
+face, names by path: `package.document`, `upload.release`. The nested-workflow
 Performer performs all such verbs: `start` issues `create` for a child
 Workflow (Actor: the parent's Run), the handle is the child's id,
 `observe` reads the child's status and derives progress, `cancel`
@@ -288,29 +288,29 @@ running with the attention flag, so the person fixes it inside the
 child and the parent proceeds when the child does.
 
 A chain of follow-on jobs is a child recipe: publishing, say, as
-`chunk` then `layers` and `warm` in parallel. What such a chain would
+`package` then `upload` and `announce` in parallel. What such a chain would
 otherwise need as a scheduler of its own (leases, capabilities,
 `waiting`, `blocked`, `interrupted`) is here Gates, Performers and the
 attention flag.
 
 Nesting also lets one recipe extend another across a boundary: an open
-"photogrammetry" recipe ends at dense, and a product's "photogrammetry
-layer" nests it and adds publish. The open recipe never names a viewer.
+recipe ends at `typeset`, and a product's recipe nests it and adds
+`publish`. The open recipe never names where its output is published.
 
 ## 7. The scenarios
 
 Four walks tested the vocabulary; they become the first conformance
 fixtures.
 
-- **A. Photogrammetry layer.** `photos` (a person) -> `solve` ->
-  `review` (a person; Decision accept|refine) -> `refine` (guarded) ->
-  `dense` (Input `model` bound to `refine.model`, else `solve.model`;
-  confirm before cloud; retake once on lost) -> `publish`. Dense's Run 1
-  lost (Policy retakes), Run 2 failed out of memory (Policy stops; a
-  person sets image-size and starts Run 3). Found: "waiting on a person"
+- **A. A report.** `notes` (a person) -> `draft` ->
+  `review` (a person; Decision accept|revise) -> `revise` (guarded) ->
+  `typeset` (Input `text` bound to `revise.text`, else `draft.text`;
+  confirm before cloud; retake once on lost) -> `publish`. Typeset's
+  Run 1 lost (Policy retakes), Run 2 failed out of memory (Policy stops;
+  a person sets `dpi` and starts Run 3). Found: "waiting on a person"
   needs its reason; a Decision is just a readable Output; Policy as
   Actor reads fine.
-- **B. Rerunning upstream.** Changing `solve.matcher` after everything
+- **B. Rerunning upstream.** Changing `draft.style` after everything
   succeeded. Found: the stale rules (§5.7), the current-Run rule (§5.8),
   "superseded" as a store's word for a Run a later Run replaced (a
   cleanup can reclaim one nothing references), and that re-reviewing may be
@@ -344,7 +344,7 @@ onto the engine:
 
 The complexity sits with recipe authors, not with people who run
 recipes. A user picks a WorkflowDefinition and sees Steps with reasons
-("needs photos", "waiting for your OK", "running on the workstation"); they
+("needs notes", "waiting for your OK", "running on the workstation"); they
 never meet a Binding. Authors meet Bindings, but the recipe format may
 infer the obvious ones (one Input below one Output of the same tag) as
 sugar compiled to explicit Bindings before anything runs. Defaults cover
@@ -381,14 +381,14 @@ and its tests, and none contradicts the rules above.
    StepDefinition's name and version, since the Library offers both as
    verbs. Labels may be equal ("Add two integers" twice), names not.
 2. **Port names.** Inputs and Parameters share a namespace (both are
-   given); Outputs have their own (a refine takes `model` and gives
-   `model`). A port name on a nested recipe's face is dotted
-   (`chunk.cloud`); a step name never is, so `step.port` splits at the
+   given); Outputs have their own (a revise takes `text` and gives
+   `text`). A port name on a nested recipe's face is dotted
+   (`package.document`); a step name never is, so `step.port` splits at the
    first dot.
 3. **Alternative Bindings are taken in order, and an earlier one that
-   cannot be told yet holds the answer.** `dense.model <- refine.model,
-   else solve.model` waits while the review is undecided rather than
-   taking solve's model early.
+   cannot be told yet holds the answer.** `typeset.text <- revise.text,
+   else draft.text` waits while the review is undecided rather than
+   taking the draft's text early.
 4. **A source that succeeded once keeps its Outputs while it is
    retaken**, so downstream Inputs hold the last good Value until the
    new Run succeeds (rule 7's "stale spreads only on success").

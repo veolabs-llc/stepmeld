@@ -1,76 +1,76 @@
 {
   "bindings": [
     {
-      "from": "photos.photos",
-      "to": "solve.photos"
+      "from": "notes.notes",
+      "to": "draft.notes"
     },
     {
-      "from": "photos.photos",
-      "to": "dense.photos"
+      "from": "notes.notes",
+      "to": "typeset.notes"
     },
     {
-      "from": "solve.model",
-      "to": "review.model"
+      "from": "draft.text",
+      "to": "review.text"
     },
     {
-      "from": "solve.model",
+      "from": "draft.text",
       "guard": {
         "decision": {
-          "is": "refine",
+          "is": "revise",
           "output": "decision",
           "step": "review"
         }
       },
-      "to": "refine.model"
+      "to": "revise.text"
     },
     {
-      "from": "refine.model",
-      "to": "dense.model"
+      "from": "revise.text",
+      "to": "typeset.text"
     },
     {
-      "from": "solve.model",
-      "to": "dense.model"
+      "from": "draft.text",
+      "to": "typeset.text"
     },
     {
-      "from": "dense.cloud",
-      "to": "publish.cloud"
+      "from": "typeset.document",
+      "to": "publish.document"
     }
   ],
   "contract": "stepmeld/workflow-definition.v1",
-  "name": "photogrammetry-layer",
+  "name": "report",
   "steps": [
     {
-      "name": "photos",
+      "name": "notes",
       "step": {
-        "name": "choose-photos",
+        "name": "gather-notes",
         "version": 1
       }
     },
     {
-      "name": "solve",
+      "name": "draft",
       "step": {
-        "name": "solve",
+        "name": "draft",
         "version": 1
       }
     },
     {
       "name": "review",
       "step": {
-        "name": "review-solve",
+        "name": "review-draft",
         "version": 1
       }
     },
     {
-      "name": "refine",
+      "name": "revise",
       "step": {
-        "name": "refine",
+        "name": "revise",
         "version": 1
       }
     },
     {
-      "name": "dense",
+      "name": "typeset",
       "step": {
-        "name": "dense",
+        "name": "typeset",
         "version": 1
       }
     },

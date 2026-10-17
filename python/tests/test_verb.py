@@ -70,7 +70,7 @@ def test_an_unknown_verb_is_refused(tmp_path):
 
 def test_a_missing_input_is_a_refusal(tmp_path):
     def needs(run):
-        run.input("photos")
+        run.input("pages")
 
     verb.main({"count-lines": needs}, [str(request(tmp_path))])
     assert outcome(tmp_path)["class"] == "refused"

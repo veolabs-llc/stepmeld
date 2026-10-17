@@ -3,27 +3,27 @@
   "done_by": "performer",
   "inputs": [
     {
-      "name": "model",
+      "name": "text",
       "required": true,
-      "tag": "sparse-model"
+      "tag": "text"
     },
     {
-      "name": "photos",
+      "name": "notes",
       "required": true,
-      "tag": "photo-set"
+      "tag": "notes"
     }
   ],
-  "name": "dense",
+  "name": "typeset",
   "outputs": [
     {
-      "name": "cloud",
-      "tag": "point-cloud"
+      "name": "document",
+      "tag": "document"
     }
   ],
   "parameters": [
     {
-      "default": 4096,
-      "name": "image-size",
+      "default": 600,
+      "name": "dpi",
       "required": false,
       "tag": "integer"
     }

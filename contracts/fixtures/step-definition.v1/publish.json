@@ -3,16 +3,16 @@
   "done_by": "performer",
   "inputs": [
     {
-      "name": "cloud",
+      "name": "document",
       "required": true,
-      "tag": "point-cloud"
+      "tag": "document"
     }
   ],
   "name": "publish",
   "outputs": [
     {
-      "name": "layer",
-      "tag": "layer"
+      "name": "release",
+      "tag": "release"
     }
   ],
   "parameters": [],

@@ -2,11 +2,11 @@
   "contract": "stepmeld/step-definition.v1",
   "done_by": "person",
   "inputs": [],
-  "name": "choose-photos",
+  "name": "gather-notes",
   "outputs": [
     {
-      "name": "photos",
-      "tag": "photo-set"
+      "name": "notes",
+      "tag": "notes"
     }
   ],
   "parameters": [],

@@ -311,7 +311,7 @@ fn a_refusal_is_a_failed_run_that_never_ran() {
     let store = Arc::new(MemoryStore::new());
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
-    local.set_refusal(Some("no such file a.jpg"));
+    local.set_refusal(Some("no such file notes.txt"));
     let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-3");
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
@@ -357,142 +357,140 @@ fn a_success_without_the_declared_outputs_is_a_fault() {
 }
 
 // ---------------------------------------------------------------------
-// A. The photogrammetry layer.
+// A. A report: notes, a draft, a review, a revision, typesetting, publishing.
 
-fn photogrammetry_library(store: &MemoryStore) {
-    store.put_step(&person_verb("choose-photos", &[], &[("photos", "photo-set")], None)).unwrap();
-    store
-        .put_step(&verb("solve", &[("photos", "photo-set")], &[("matcher", "string", Some("exhaustive".into()))], &[("model", "sparse-model")]))
-        .unwrap();
-    store.put_step(&person_verb("review-solve", &[("model", "sparse-model")], &[], Some(("decision", &["accept", "refine"])))).unwrap();
-    store.put_step(&verb("refine", &[("model", "sparse-model")], &[], &[("model", "sparse-model")])).unwrap();
-    let mut dense = verb("dense", &[("model", "sparse-model"), ("photos", "photo-set")], &[("image-size", "integer", Some(4096.into()))], &[("cloud", "point-cloud")]);
-    dense.policy.placement.confirm = vec![Locality::Cloud];
-    dense.policy.on_failure = OnFailure::Retake { max: 1, classes: vec!["lost".into()] };
-    store.put_step(&dense).unwrap();
-    store.put_step(&verb("publish", &[("cloud", "point-cloud")], &[], &[("layer", "layer")])).unwrap();
-    let mut w = WorkflowDefinition::new("photogrammetry-layer", 1);
+fn report_library(store: &MemoryStore) {
+    store.put_step(&person_verb("gather-notes", &[], &[("notes", "notes")], None)).unwrap();
+    store.put_step(&verb("draft", &[("notes", "notes")], &[("style", "string", Some("plain".into()))], &[("text", "text")])).unwrap();
+    store.put_step(&person_verb("review-draft", &[("text", "text")], &[], Some(("decision", &["accept", "revise"])))).unwrap();
+    store.put_step(&verb("revise", &[("text", "text")], &[], &[("text", "text")])).unwrap();
+    let mut typeset = verb("typeset", &[("text", "text"), ("notes", "notes")], &[("dpi", "integer", Some(600.into()))], &[("document", "document")]);
+    typeset.policy.placement.confirm = vec![Locality::Cloud];
+    typeset.policy.on_failure = OnFailure::Retake { max: 1, classes: vec!["lost".into()] };
+    store.put_step(&typeset).unwrap();
+    store.put_step(&verb("publish", &[("document", "document")], &[], &[("release", "release")])).unwrap();
+    let mut w = WorkflowDefinition::new("report", 1);
     w.steps = vec![
-        entry("photos", "choose-photos"),
-        entry("solve", "solve"),
-        entry("review", "review-solve"),
-        entry("refine", "refine"),
-        entry("dense", "dense"),
+        entry("notes", "gather-notes"),
+        entry("draft", "draft"),
+        entry("review", "review-draft"),
+        entry("revise", "revise"),
+        entry("typeset", "typeset"),
         entry("publish", "publish"),
     ];
     w.bindings = vec![
-        bind("photos.photos", "solve.photos"),
-        bind("photos.photos", "dense.photos"),
-        bind("solve.model", "review.model"),
+        bind("notes.notes", "draft.notes"),
+        bind("notes.notes", "typeset.notes"),
+        bind("draft.text", "review.text"),
         Binding {
-            from: PortRef("solve.model".into()),
-            to: PortRef("refine.model".into()),
+            from: PortRef("draft.text".into()),
+            to: PortRef("revise.text".into()),
             guard: Some(Guard::Decision {
                 step: "review".into(),
                 output: "decision".into(),
-                is: "refine".into(),
+                is: "revise".into(),
             }),
         },
-        bind("refine.model", "dense.model"),
-        bind("solve.model", "dense.model"),
-        bind("dense.cloud", "publish.cloud"),
+        bind("revise.text", "typeset.text"),
+        bind("draft.text", "typeset.text"),
+        bind("typeset.document", "publish.document"),
     ];
     store.put_workflow_definition(&w).unwrap();
 }
 
 #[test]
-fn scenario_a_photogrammetry_layer() {
+fn scenario_a_report() {
     let store = Arc::new(MemoryStore::new());
-    photogrammetry_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["solve", "refine", "publish"]);
-    let cloud = performer("batch", Locality::Cloud, &["dense"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone(), cloud.clone()], "photogrammetry-layer", "layer-1");
+    report_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["draft", "revise", "publish"]);
+    let cloud = performer("batch", Locality::Cloud, &["typeset"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone(), cloud.clone()], "report", "report-1");
 
-    // 1. created: photos waits on a person, the rest is not ready
-    assert_eq!(rig.status("photos"), StepStatus::Waiting(Waiting::Completion));
-    assert_eq!(rig.status("solve"), StepStatus::NotReady);
-    assert_eq!(rig.status("refine"), StepStatus::NotReady);
+    // 1. created: notes waits on a person, the rest is not ready
+    assert_eq!(rig.status("notes"), StepStatus::Waiting(Waiting::Completion));
+    assert_eq!(rig.status("draft"), StepStatus::NotReady);
+    assert_eq!(rig.status("revise"), StepStatus::NotReady);
 
-    // 2. photos completed: solve starts on this machine
-    rig.command(complete("photos", &[("photos", "ps-1".into())])).unwrap();
-    assert!(matches!(rig.command(start("photos")), Err(Error::Refused(_))), "a person's step is completed, not started");
+    // 2. notes completed: draft starts on this machine
+    rig.command(complete("notes", &[("notes", "notes-1".into())])).unwrap();
+    assert!(matches!(rig.command(start("notes")), Err(Error::Refused(_))), "a person's step is completed, not started");
     rig.tick();
-    assert_eq!(rig.status("solve"), StepStatus::Running);
-    assert_eq!(local.started()[0].inputs["photos"], Value::from("ps-1"));
-    assert_eq!(rig.wf().step("solve").unwrap().latest().unwrap().locality, Some(Locality::ThisMachine));
+    assert_eq!(rig.status("draft"), StepStatus::Running);
+    assert_eq!(local.started()[0].inputs["notes"], Value::from("notes-1"));
+    assert_eq!(rig.wf().step("draft").unwrap().latest().unwrap().locality, Some(Locality::ThisMachine));
 
-    // 3. solve succeeds; review waits on a person; refine and dense cannot tell yet
-    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
+    // 3. draft succeeds; review waits on a person; revise and typeset cannot tell yet
+    local.finish(&rig.handle(&local, "draft"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
     rig.tick();
-    assert_eq!(rig.status("solve"), StepStatus::Succeeded);
+    assert_eq!(rig.status("draft"), StepStatus::Succeeded);
     assert_eq!(rig.status("review"), StepStatus::Waiting(Waiting::Completion));
-    assert_eq!(rig.status("refine"), StepStatus::NotReady);
-    assert_eq!(rig.status("dense"), StepStatus::NotReady, "dense's model may yet come from refine");
+    assert_eq!(rig.status("revise"), StepStatus::NotReady);
+    assert_eq!(rig.status("typeset"), StepStatus::NotReady, "typeset's text may yet come from revise");
 
-    // 4. the decision is refine: the guard holds, refine runs
-    rig.command(complete("review", &[("decision", "refine".into())])).unwrap();
+    // 4. the decision is revise: the guard holds, revise runs
+    rig.command(complete("review", &[("decision", "revise".into())])).unwrap();
     rig.tick();
-    assert_eq!(rig.status("refine"), StepStatus::Running);
-    local.finish(&rig.handle(&local, "refine"), Outcome::succeeded(outs(&[("model", "model-1r".into())])));
+    assert_eq!(rig.status("revise"), StepStatus::Running);
+    local.finish(&rig.handle(&local, "revise"), Outcome::succeeded(outs(&[("text", "text-1r".into())])));
     rig.tick();
 
-    // 5. dense takes refine's model, and waits for the cloud to be confirmed
-    assert_eq!(rig.wf().step("dense").unwrap().inputs["model"].value, Some("model-1r".into()));
-    assert_eq!(rig.status("dense"), StepStatus::Waiting(Waiting::Confirmation { locality: Locality::Cloud }));
-    rig.command(Command::Confirm { step: "dense".into() }).unwrap();
+    // 5. typeset takes revise's text, and waits for the cloud to be confirmed
+    assert_eq!(rig.wf().step("typeset").unwrap().inputs["text"].value, Some("text-1r".into()));
+    assert_eq!(rig.status("typeset"), StepStatus::Waiting(Waiting::Confirmation { locality: Locality::Cloud }));
+    rig.command(Command::Confirm { step: "typeset".into() }).unwrap();
     rig.tick();
-    assert_eq!(rig.status("dense"), StepStatus::Running);
+    assert_eq!(rig.status("typeset"), StepStatus::Running);
 
     // 6. run 1 lost: the policy retakes once
-    cloud.forget(&rig.handle(&cloud, "dense"));
+    cloud.forget(&rig.handle(&cloud, "typeset"));
     rig.tick();
-    let dense = rig.wf().step("dense").unwrap().clone();
-    assert_eq!(dense.runs.len(), 2);
-    assert_eq!(dense.runs[0].outcome.as_ref().unwrap().state, RunState::Lost);
-    assert_eq!(dense.runs[1].started.by, Actor::policy("retake", "dense"));
-    assert!(dense.runs[1].live());
+    let typeset = rig.wf().step("typeset").unwrap().clone();
+    assert_eq!(typeset.runs.len(), 2);
+    assert_eq!(typeset.runs[0].outcome.as_ref().unwrap().state, RunState::Lost);
+    assert_eq!(typeset.runs[1].started.by, Actor::policy("retake", "typeset"));
+    assert!(typeset.runs[1].live());
 
     // 7. run 2 fails out of memory: the policy does not cover it
-    cloud.finish(&rig.handle(&cloud, "dense"), Outcome::failed("out-of-memory", "CUDA out of memory at 4096"));
+    cloud.finish(&rig.handle(&cloud, "typeset"), Outcome::failed("out-of-memory", "out of memory at 600 dpi"));
     rig.tick();
-    assert_eq!(rig.status("dense"), StepStatus::Failed);
+    assert_eq!(rig.status("typeset"), StepStatus::Failed);
     assert_eq!(rig.workflow_status(), WorkflowStatus::Failed);
 
-    // 8. Max sets the image size and starts run 3; a person's start confirms the placement
-    rig.command(param("dense", "image-size", 3200.into())).unwrap();
-    rig.command(start("dense")).unwrap();
+    // 8. a person sets the dpi and starts run 3; a person's start confirms the placement
+    rig.command(param("typeset", "dpi", 300.into())).unwrap();
+    rig.command(start("typeset")).unwrap();
     rig.tick();
-    let dense = rig.wf().step("dense").unwrap().clone();
-    assert_eq!(dense.runs.len(), 3);
-    assert_eq!(dense.runs[2].parameters["image-size"], Value::from(3200));
-    assert_eq!(dense.runs[2].started.by, max());
-    cloud.finish(&rig.handle(&cloud, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    let typeset = rig.wf().step("typeset").unwrap().clone();
+    assert_eq!(typeset.runs.len(), 3);
+    assert_eq!(typeset.runs[2].parameters["dpi"], Value::from(300));
+    assert_eq!(typeset.runs[2].started.by, max());
+    cloud.finish(&rig.handle(&cloud, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
     rig.tick();
 
     // 9. publish runs on its own and the workflow succeeds
     assert_eq!(rig.status("publish"), StepStatus::Running);
-    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("layer", "layer-1".into())])));
+    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("release", "release-1".into())])));
     rig.tick();
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
-    assert_eq!(rig.wf().step("dense").unwrap().runs.len(), 3, "runs 1 and 2 stay in the record");
-    rig.write_fixtures("photogrammetry-layer");
+    assert_eq!(rig.wf().step("typeset").unwrap().runs.len(), 3, "runs 1 and 2 stay in the record");
+    rig.write_fixtures("report");
 }
 
 #[test]
-fn scenario_a_with_accept_skips_refine() {
+fn scenario_a_with_accept_skips_revise() {
     let store = Arc::new(MemoryStore::new());
-    photogrammetry_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["solve", "refine", "dense", "publish"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "photogrammetry-layer", "layer-2");
-    rig.command(complete("photos", &[("photos", "ps-1".into())])).unwrap();
+    report_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["draft", "revise", "typeset", "publish"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "report", "report-2");
+    rig.command(complete("notes", &[("notes", "notes-1".into())])).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
+    local.finish(&rig.handle(&local, "draft"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
     rig.tick();
     rig.command(complete("review", &[("decision", "accept".into())])).unwrap();
     rig.tick();
-    assert_eq!(rig.status("refine"), StepStatus::Skipped);
-    assert_eq!(rig.status("dense"), StepStatus::Running, "dense takes solve's model, on this machine with nothing to confirm");
-    assert_eq!(rig.wf().step("dense").unwrap().inputs["model"].value, Some("model-1".into()));
+    assert_eq!(rig.status("revise"), StepStatus::Skipped);
+    assert_eq!(rig.status("typeset"), StepStatus::Running, "typeset takes draft's text, on this machine with nothing to confirm");
+    assert_eq!(rig.wf().step("typeset").unwrap().inputs["text"].value, Some("text-1".into()));
     assert!(matches!(rig.command(complete("review", &[("decision", "maybe".into())])), Err(Error::Refused(w)) if w.contains("not one of")));
 }
 
@@ -502,9 +500,9 @@ fn scenario_a_with_accept_skips_refine() {
 #[test]
 fn scenario_b_rerunning_upstream_makes_downstream_stale() {
     let store = Arc::new(MemoryStore::new());
-    photogrammetry_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["solve", "refine", "dense", "publish"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "photogrammetry-layer", "layer-3");
+    report_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["draft", "revise", "typeset", "publish"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "report", "report-3");
     let publish_policy = Policy {
         on_stale: OnStale::Rerun,
         ..Default::default()
@@ -514,65 +512,65 @@ fn scenario_b_rerunning_upstream_makes_downstream_stale() {
         policy: publish_policy,
     })
     .unwrap();
-    rig.command(complete("photos", &[("photos", "ps-1".into())])).unwrap();
+    rig.command(complete("notes", &[("notes", "notes-1".into())])).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
+    local.finish(&rig.handle(&local, "draft"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
     rig.tick();
     rig.command(complete("review", &[("decision", "accept".into())])).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
     rig.tick();
-    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("layer", "layer-1".into())])));
+    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("release", "release-1".into())])));
     rig.tick();
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
 
-    // 1. a parameter changes: solve is stale, nothing downstream yet
-    rig.command(param("solve", "matcher", "sequential".into())).unwrap();
-    assert_eq!(rig.status("solve"), StepStatus::Stale);
-    assert_eq!(rig.status("dense"), StepStatus::Succeeded);
+    // 1. a parameter changes: draft is stale, nothing downstream yet
+    rig.command(param("draft", "style", "formal".into())).unwrap();
+    assert_eq!(rig.status("draft"), StepStatus::Stale);
+    assert_eq!(rig.status("typeset"), StepStatus::Succeeded);
     assert_eq!(rig.workflow_status(), WorkflowStatus::Stale);
     rig.tick();
     assert_eq!(local.started().len(), 3, "a stale step does not start on its own");
 
-    // 2. retake solve: while it runs, dense still holds the old model
-    rig.command(start("solve")).unwrap();
+    // 2. retake draft: while it runs, typeset still holds the old text
+    rig.command(start("draft")).unwrap();
     rig.tick();
-    assert_eq!(rig.status("solve"), StepStatus::Running);
-    assert_eq!(rig.wf().step("dense").unwrap().inputs["model"].value, Some("model-1".into()));
-    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-2".into())])));
+    assert_eq!(rig.status("draft"), StepStatus::Running);
+    assert_eq!(rig.wf().step("typeset").unwrap().inputs["text"].value, Some("text-1".into()));
+    local.finish(&rig.handle(&local, "draft"), Outcome::succeeded(outs(&[("text", "text-2".into())])));
     rig.tick();
 
-    // 3. review is stale (a person must look again); dense is stale and waits
-    assert_eq!(rig.status("solve"), StepStatus::Succeeded);
+    // 3. review is stale (a person must look again); typeset is stale and waits
+    assert_eq!(rig.status("draft"), StepStatus::Succeeded);
     assert_eq!(rig.status("review"), StepStatus::Stale);
-    assert_eq!(rig.status("dense"), StepStatus::Stale);
+    assert_eq!(rig.status("typeset"), StepStatus::Stale);
     rig.command(complete("review", &[("decision", "accept".into())])).unwrap();
     assert_eq!(rig.status("review"), StepStatus::Succeeded);
-    assert_eq!(rig.status("refine"), StepStatus::Skipped);
+    assert_eq!(rig.status("revise"), StepStatus::Skipped);
     rig.tick();
-    assert_eq!(rig.status("dense"), StepStatus::Stale, "on stale: wait");
+    assert_eq!(rig.status("typeset"), StepStatus::Stale, "on stale: wait");
 
-    // 4. dense retaken; 5. publish reruns on its own
-    rig.command(start("dense")).unwrap();
+    // 4. typeset retaken; 5. publish reruns on its own
+    rig.command(start("typeset")).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-2".into())])));
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-2".into())])));
     rig.tick();
     assert_eq!(rig.status("publish"), StepStatus::Running, "on stale: rerun");
     assert_eq!(rig.wf().step("publish").unwrap().latest().unwrap().started.by, Actor::policy("rerun-on-stale", "publish"));
-    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("layer", "layer-2".into())])));
+    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("release", "release-2".into())])));
     rig.tick();
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
     let runs = |s: &str| rig.wf().step(s).unwrap().runs.len();
-    assert_eq!((runs("solve"), runs("review"), runs("dense"), runs("publish")), (2, 2, 2, 2));
+    assert_eq!((runs("draft"), runs("review"), runs("typeset"), runs("publish")), (2, 2, 2, 2));
 
     // a failed retake: the step shows failed, downstream keeps the last good outputs
-    rig.command(param("dense", "image-size", 1600.into())).unwrap();
-    rig.command(start("dense")).unwrap();
+    rig.command(param("typeset", "dpi", 150.into())).unwrap();
+    rig.command(start("typeset")).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "dense"), Outcome::failed("failed", "disk full"));
+    local.finish(&rig.handle(&local, "typeset"), Outcome::failed("failed", "disk full"));
     rig.tick();
-    assert_eq!(rig.status("dense"), StepStatus::Failed);
-    assert_eq!(rig.wf().step("publish").unwrap().inputs["cloud"].value, Some("cloud-2".into()));
+    assert_eq!(rig.status("typeset"), StepStatus::Failed);
+    assert_eq!(rig.wf().step("publish").unwrap().inputs["document"].value, Some("doc-2".into()));
     assert_eq!(rig.status("publish"), StepStatus::Succeeded);
 }
 
@@ -582,32 +580,32 @@ fn scenario_b_rerunning_upstream_makes_downstream_stale() {
 #[test]
 fn scenario_c_publish_as_a_nested_workflow() {
     let store = Arc::new(MemoryStore::new());
-    store.put_step(&verb("dense", &[("photos", "photo-set")], &[], &[("cloud", "point-cloud")])).unwrap();
-    store.put_step(&verb("chunk", &[("cloud", "point-cloud")], &[], &[("chunkset", "chunk-set")])).unwrap();
-    store.put_step(&verb("add-to-scene", &[("chunkset", "chunk-set")], &[], &[("layer", "layer")])).unwrap();
-    store.put_step(&verb("warm", &[("chunkset", "chunk-set")], &[], &[])).unwrap();
-    let mut child = WorkflowDefinition::new("publish-layer", 1);
-    child.steps = vec![entry("chunk", "chunk"), entry("layers", "add-to-scene"), entry("warm", "warm")];
-    child.bindings = vec![bind("chunk.chunkset", "layers.chunkset"), bind("chunk.chunkset", "warm.chunkset")];
+    store.put_step(&verb("typeset", &[("notes", "notes")], &[], &[("document", "document")])).unwrap();
+    store.put_step(&verb("package", &[("document", "document")], &[], &[("bundle", "bundle")])).unwrap();
+    store.put_step(&verb("upload", &[("bundle", "bundle")], &[], &[("release", "release")])).unwrap();
+    store.put_step(&verb("announce", &[("bundle", "bundle")], &[], &[])).unwrap();
+    let mut child = WorkflowDefinition::new("publish-document", 1);
+    child.steps = vec![entry("package", "package"), entry("upload", "upload"), entry("announce", "announce")];
+    child.bindings = vec![bind("package.bundle", "upload.bundle"), bind("package.bundle", "announce.bundle")];
     store.put_workflow_definition(&child).unwrap();
-    let mut parent = WorkflowDefinition::new("layer", 1);
-    parent.steps = vec![entry("dense", "dense"), entry("publish", "publish-layer")];
-    parent.bindings = vec![bind("dense.cloud", "publish.chunk.cloud")];
+    let mut parent = WorkflowDefinition::new("release", 1);
+    parent.steps = vec![entry("typeset", "typeset"), entry("publish", "publish-document")];
+    parent.bindings = vec![bind("typeset.document", "publish.package.document")];
     store.put_workflow_definition(&parent).unwrap();
 
     // the recipe's derived face
-    let face = store.library().unwrap().step(&Ref::new("publish-layer", 1)).unwrap();
-    assert_eq!(face.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["chunk.cloud"]);
-    assert_eq!(face.outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["chunk.chunkset", "layers.layer"]);
+    let face = store.library().unwrap().step(&Ref::new("publish-document", 1)).unwrap();
+    assert_eq!(face.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["package.document"]);
+    assert_eq!(face.outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["package.bundle", "upload.release"]);
 
-    let local = performer("local", Locality::ThisMachine, &["dense", "chunk", "add-to-scene", "warm"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "layer", "parent-1");
-    rig.command(set("dense", "photos", "ps-1".into())).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["typeset", "package", "upload", "announce"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "release", "parent-1");
+    rig.command(set("typeset", "notes", "notes-1".into())).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
     rig.tick();
 
-    // the child exists, fed by the parent, with chunk running
+    // the child exists, fed by the parent, with package running
     let child_id = rig.wf().step("publish").unwrap().latest().unwrap().handle.clone().unwrap();
     let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
     assert_eq!(
@@ -618,40 +616,40 @@ fn scenario_c_publish_as_a_nested_workflow() {
             run: "parent-1/publish/1".into()
         }
     );
-    assert_eq!(child_wf.step("chunk").unwrap().inputs["cloud"].value, Some("cloud-1".into()));
-    assert_eq!(child_wf.step_status(&child, "chunk"), StepStatus::Running);
+    assert_eq!(child_wf.step("package").unwrap().inputs["document"].value, Some("doc-1".into()));
+    assert_eq!(child_wf.step_status(&child, "package"), StepStatus::Running);
     assert_eq!(rig.status("publish"), StepStatus::Running);
     let progress = rig.wf().step("publish").unwrap().latest().unwrap().progress.clone().unwrap();
     assert_eq!((progress.done, progress.total), (Some(0), Some(3)));
 
-    // chunk done: layers and warm run together; one fails, and the parent sees attention, not failure
-    let chunk_run = child_wf.step("chunk").unwrap().latest().unwrap().id.clone();
-    local.finish(&local.handle_of(&chunk_run).unwrap(), Outcome::succeeded(outs(&[("chunkset", "cs-1".into())])));
+    // package done: upload and announce run together; one fails, and the parent sees attention, not failure
+    let package_run = child_wf.step("package").unwrap().latest().unwrap().id.clone();
+    local.finish(&local.handle_of(&package_run).unwrap(), Outcome::succeeded(outs(&[("bundle", "bundle-1".into())])));
     rig.tick();
     let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
-    assert_eq!(child_wf.step_status(&child, "layers"), StepStatus::Running);
-    assert_eq!(child_wf.step_status(&child, "warm"), StepStatus::Running);
-    let layers_run = child_wf.step("layers").unwrap().latest().unwrap().id.clone();
-    let warm_run = child_wf.step("warm").unwrap().latest().unwrap().id.clone();
-    local.finish(&local.handle_of(&warm_run).unwrap(), Outcome::succeeded(BTreeMap::new()));
-    local.finish(&local.handle_of(&layers_run).unwrap(), Outcome::failed("failed", "scene locked"));
+    assert_eq!(child_wf.step_status(&child, "upload"), StepStatus::Running);
+    assert_eq!(child_wf.step_status(&child, "announce"), StepStatus::Running);
+    let upload_run = child_wf.step("upload").unwrap().latest().unwrap().id.clone();
+    let announce_run = child_wf.step("announce").unwrap().latest().unwrap().id.clone();
+    local.finish(&local.handle_of(&announce_run).unwrap(), Outcome::succeeded(BTreeMap::new()));
+    local.finish(&local.handle_of(&upload_run).unwrap(), Outcome::failed("failed", "server busy"));
     rig.tick();
     assert_eq!(rig.status("publish"), StepStatus::Running);
     let attention = rig.wf().step("publish").unwrap().latest().unwrap().attention.clone().unwrap();
-    assert!(attention.contains("layers is failed"), "{attention}");
+    assert!(attention.contains("upload is failed"), "{attention}");
 
     // fixed inside the child: the parent proceeds when the child does
     let mut child_driver = Driver::new(store.clone(), "fixer").with_performer(local.clone());
-    child_driver.command(&child_id, &start("layers"), &max(), &now(50)).unwrap();
+    child_driver.command(&child_id, &start("upload"), &max(), &now(50)).unwrap();
     child_driver = child_driver.with_nesting();
     let _ = &mut child_driver;
     rig.tick();
     let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
-    let layers_run = child_wf.step("layers").unwrap().latest().unwrap().id.clone();
-    local.finish(&local.handle_of(&layers_run).unwrap(), Outcome::succeeded(outs(&[("layer", "layer-1".into())])));
+    let upload_run = child_wf.step("upload").unwrap().latest().unwrap().id.clone();
+    local.finish(&local.handle_of(&upload_run).unwrap(), Outcome::succeeded(outs(&[("release", "release-1".into())])));
     rig.tick();
     assert_eq!(rig.status("publish"), StepStatus::Succeeded);
-    assert_eq!(rig.wf().step("publish").unwrap().outputs["layers.layer"].value, Some("layer-1".into()));
+    assert_eq!(rig.wf().step("publish").unwrap().outputs["upload.release"].value, Some("release-1".into()));
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
 }
 
@@ -698,15 +696,15 @@ fn scenario_d_the_same_verb_twice() {
     ];
     store.put_workflow_definition(&w).unwrap();
     let local = performer("local", Locality::ThisMachine, &["measure", "compare-readings"]);
-    let fleet = performer("workstation", Locality::LocalNetwork, &["measure"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone(), fleet.clone()], "reading-drift", "drift-1");
+    let workstation = performer("workstation", Locality::LocalNetwork, &["measure"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone(), workstation.clone()], "reading-drift", "drift-1");
 
     // one side first: measure-early starts; nothing waits on "the previous step"
     rig.command(complete("early", &[("sample", "s-early".into())])).unwrap();
     rig.tick();
     // two Performers offer the verb and nobody chose: it waits to be placed
     assert_eq!(rig.status("measure-early"), StepStatus::Waiting(Waiting::Placement));
-    assert!(local.started().is_empty() && fleet.started().is_empty());
+    assert!(local.started().is_empty() && workstation.started().is_empty());
     rig.command(Command::Place {
         step: "measure-early".into(),
         performer: "local".into(),
@@ -718,7 +716,7 @@ fn scenario_d_the_same_verb_twice() {
     assert_eq!(rig.status("measure-late"), StepStatus::NotReady);
     assert_eq!(rig.status("compare"), StepStatus::NotReady);
 
-    // the other side, placed on the fleet with its own parameter
+    // the other side, placed on the workstation with its own parameter
     rig.command(complete("late", &[("sample", "s-late".into())])).unwrap();
     rig.command(param("measure-late", "resolution", 6.into())).unwrap();
     rig.command(Command::Place {
@@ -729,11 +727,11 @@ fn scenario_d_the_same_verb_twice() {
     .unwrap();
     rig.tick();
     assert_eq!(rig.status("measure-late"), StepStatus::Running);
-    assert_eq!(fleet.started()[0].parameters["resolution"], Value::from(6));
+    assert_eq!(workstation.started()[0].parameters["resolution"], Value::from(6));
     assert_eq!(local.started()[0].parameters["resolution"], Value::from(12));
 
     // one side fails and is retaken alone
-    fleet.finish(&rig.handle(&fleet, "measure-late"), Outcome::failed("failed", "unreadable file"));
+    workstation.finish(&rig.handle(&workstation, "measure-late"), Outcome::failed("failed", "unreadable file"));
     local.finish(&rig.handle(&local, "measure-early"), Outcome::succeeded(outs(&[("reading", "r-early".into())])));
     rig.tick();
     assert_eq!(rig.status("measure-late"), StepStatus::Failed);
@@ -742,7 +740,7 @@ fn scenario_d_the_same_verb_twice() {
     assert_eq!(rig.status("measure-late"), StepStatus::Failed, "a failed step with a new input still waits for a start");
     rig.command(start("measure-late")).unwrap();
     rig.tick();
-    fleet.finish(&rig.handle(&fleet, "measure-late"), Outcome::succeeded(outs(&[("reading", "r-late".into())])));
+    workstation.finish(&rig.handle(&workstation, "measure-late"), Outcome::succeeded(outs(&[("reading", "r-late".into())])));
     rig.tick();
     assert_eq!(local.started().len(), 2, "measure-early was untouched; compare started");
 
@@ -893,17 +891,17 @@ fn a_cancel_stops_the_live_run_and_the_workflow() {
 // ---------------------------------------------------------------------
 // E. Skipping a Step nobody will ever feed.
 
-/// A -> B -> C: B takes A's cloud and a transform nobody feeds; C's
-/// cloud comes from B, else from A (`fallback`), or from B alone.
+/// A -> B -> C: B takes A's document and a glossary nobody feeds; C's
+/// document comes from B, else from A (`fallback`), or from B alone.
 fn skip_library(store: &MemoryStore, fallback: bool) {
-    store.put_step(&verb("dense", &[("images", "file-list")], &[], &[("cloud", "point-cloud")])).unwrap();
-    store.put_step(&verb("reframe", &[("cloud", "point-cloud"), ("reframe", "transform")], &[], &[("cloud", "point-cloud")])).unwrap();
-    store.put_step(&verb("publish", &[("cloud", "point-cloud")], &[], &[("layer", "layer")])).unwrap();
-    let mut w = WorkflowDefinition::new("reframed-layer", 1);
-    w.steps = vec![entry("dense", "dense"), entry("reframe", "reframe"), entry("publish", "publish")];
-    w.bindings = vec![bind("dense.cloud", "reframe.cloud"), bind("reframe.cloud", "publish.cloud")];
+    store.put_step(&verb("typeset", &[("notes", "notes")], &[], &[("document", "document")])).unwrap();
+    store.put_step(&verb("translate", &[("document", "document"), ("glossary", "glossary")], &[], &[("document", "document")])).unwrap();
+    store.put_step(&verb("publish", &[("document", "document")], &[], &[("release", "release")])).unwrap();
+    let mut w = WorkflowDefinition::new("translated-report", 1);
+    w.steps = vec![entry("typeset", "typeset"), entry("translate", "translate"), entry("publish", "publish")];
+    w.bindings = vec![bind("typeset.document", "translate.document"), bind("translate.document", "publish.document")];
     if fallback {
-        w.bindings.push(bind("dense.cloud", "publish.cloud"));
+        w.bindings.push(bind("typeset.document", "publish.document"));
     }
     store.put_workflow_definition(&w).unwrap();
 }
@@ -912,105 +910,105 @@ fn skip(step: &str) -> Command {
     Command::Skip { step: step.into() }
 }
 
-/// solve -> survey (a reframe out) -> dense, whose `reframe` Input is
-/// OPTIONAL and bound from survey: dense computes in the survey's frame
-/// when there is one, and without when survey is skipped.
+/// draft -> outline (an outline out) -> typeset, whose `outline` Input
+/// is OPTIONAL and bound from outline: typeset follows the outline when
+/// there is one, and goes without when outline is skipped.
 fn optional_bound_library(store: &MemoryStore) {
-    store.put_step(&verb("solve", &[("images", "file-list")], &[], &[("model", "sparse-model")])).unwrap();
-    store.put_step(&verb("survey", &[("model", "sparse-model")], &[], &[("reframe", "reframe")])).unwrap();
-    let mut dense = verb("dense", &[("model", "sparse-model"), ("reframe", "reframe")], &[], &[("cloud", "point-cloud")]);
-    dense.inputs[1].required = false;
-    store.put_step(&dense).unwrap();
-    let mut w = WorkflowDefinition::new("registered", 1);
-    w.steps = vec![entry("solve", "solve"), entry("survey", "survey"), entry("dense", "dense")];
-    w.bindings = vec![bind("solve.model", "survey.model"), bind("solve.model", "dense.model"), bind("survey.reframe", "dense.reframe")];
+    store.put_step(&verb("draft", &[("notes", "notes")], &[], &[("text", "text")])).unwrap();
+    store.put_step(&verb("outline", &[("text", "text")], &[], &[("outline", "outline")])).unwrap();
+    let mut typeset = verb("typeset", &[("text", "text"), ("outline", "outline")], &[], &[("document", "document")]);
+    typeset.inputs[1].required = false;
+    store.put_step(&typeset).unwrap();
+    let mut w = WorkflowDefinition::new("outlined", 1);
+    w.steps = vec![entry("draft", "draft"), entry("outline", "outline"), entry("typeset", "typeset")];
+    w.bindings = vec![bind("draft.text", "outline.text"), bind("draft.text", "typeset.text"), bind("outline.outline", "typeset.outline")];
     store.put_workflow_definition(&w).unwrap();
 }
 
 /// An optional Input fed by a Binding waits for its source like a
-/// required one (2026-10-11: before, dense started the moment its model
-/// arrived and went stale when the reframe did). Skipping the source
+/// required one (before, a step started the moment its required Input
+/// arrived and went stale when the optional one did). Skipping the source
 /// lets the step run without it.
 #[test]
 fn scenario_f_an_optional_bound_input_waits_for_its_source() {
     let store = Arc::new(MemoryStore::new());
     optional_bound_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["solve", "survey", "dense"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "registered", "opt-1");
-    rig.command(set("solve", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["draft", "outline", "typeset"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "outlined", "opt-1");
+    rig.command(set("draft", "notes", "notes-1".into())).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
+    local.finish(&rig.handle(&local, "draft"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
     rig.tick();
-    // the model is there, the reframe may still come: dense waits
-    assert_eq!(rig.status("survey"), StepStatus::Running);
-    assert_eq!(rig.status("dense"), StepStatus::NotReady, "an optional bound Input waits for its source");
-    local.finish(&rig.handle(&local, "survey"), Outcome::succeeded(outs(&[("reframe", "survey-1".into())])));
+    // the text is there, the outline may still come: typeset waits
+    assert_eq!(rig.status("outline"), StepStatus::Running);
+    assert_eq!(rig.status("typeset"), StepStatus::NotReady, "an optional bound Input waits for its source");
+    local.finish(&rig.handle(&local, "outline"), Outcome::succeeded(outs(&[("outline", "outline-1".into())])));
     rig.tick();
-    assert_eq!(rig.status("dense"), StepStatus::Running);
-    let dense_start = local.started().into_iter().find(|r| r.step == "dense").unwrap();
-    assert_eq!(dense_start.inputs["reframe"], Value::from("survey-1"));
-    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    assert_eq!(rig.status("typeset"), StepStatus::Running);
+    let typeset_start = local.started().into_iter().find(|r| r.step == "typeset").unwrap();
+    assert_eq!(typeset_start.inputs["outline"], Value::from("outline-1"));
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
     rig.tick();
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
 
-    // the same recipe with the survey skipped: dense runs without a reframe
+    // the same recipe with the outline skipped: typeset runs without one
     let store = Arc::new(MemoryStore::new());
     optional_bound_library(&store);
-    let local = performer("local", Locality::ThisMachine, &["solve", "survey", "dense"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "registered", "opt-2");
-    rig.command(set("solve", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["draft", "outline", "typeset"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "outlined", "opt-2");
+    rig.command(set("draft", "notes", "notes-1".into())).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "solve"), Outcome::succeeded(outs(&[("model", "model-1".into())])));
-    rig.command(skip("survey")).unwrap();
+    local.finish(&rig.handle(&local, "draft"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
+    rig.command(skip("outline")).unwrap();
     rig.tick();
-    assert_eq!(rig.status("dense"), StepStatus::Running);
-    let dense_start = local.started().into_iter().find(|r| r.step == "dense").unwrap();
-    assert!(!dense_start.inputs.contains_key("reframe"), "skipped: the optional Input is simply absent");
+    assert_eq!(rig.status("typeset"), StepStatus::Running);
+    let typeset_start = local.started().into_iter().find(|r| r.step == "typeset").unwrap();
+    assert!(!typeset_start.inputs.contains_key("outline"), "skipped: the optional Input is simply absent");
 }
 
 #[test]
 fn scenario_e_a_skipped_step_lets_the_next_binding_carry() {
     let store = Arc::new(MemoryStore::new());
     skip_library(&store, true);
-    let local = performer("local", Locality::ThisMachine, &["dense", "reframe", "publish"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "reframed-layer", "skip-1");
+    let local = performer("local", Locality::ThisMachine, &["typeset", "translate", "publish"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "translated-report", "skip-1");
 
-    // dense runs; reframe then waits on the transform nobody feeds, and
+    // typeset runs; translate then waits on the glossary nobody feeds, and
     // publish cannot tell yet which binding will carry: the workflow
     // would wait forever
-    rig.command(set("dense", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    rig.command(set("typeset", "notes", "notes-1".into())).unwrap();
     rig.tick();
-    assert!(matches!(rig.command(skip("dense")), Err(Error::Refused(w)) if w.contains("running")), "a running step is not skipped");
-    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    assert!(matches!(rig.command(skip("typeset")), Err(Error::Refused(w)) if w.contains("running")), "a running step is not skipped");
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
     rig.tick();
-    assert!(matches!(rig.command(skip("dense")), Err(Error::Refused(w)) if w.contains("succeeded")), "a succeeded step is not skipped");
-    assert_eq!(rig.status("reframe"), StepStatus::Waiting(Waiting::Input { name: "reframe".into() }));
+    assert!(matches!(rig.command(skip("typeset")), Err(Error::Refused(w)) if w.contains("succeeded")), "a succeeded step is not skipped");
+    assert_eq!(rig.status("translate"), StepStatus::Waiting(Waiting::Input { name: "glossary".into() }));
     assert_eq!(rig.status("publish"), StepStatus::NotReady);
     assert_eq!(rig.workflow_status(), WorkflowStatus::Waiting);
 
-    // skip reframe: it is final, and publish takes dense's cloud
-    rig.command(skip("reframe")).unwrap();
-    assert_eq!(rig.status("reframe"), StepStatus::Skipped);
-    assert!(matches!(rig.command(start("reframe")), Err(Error::Refused(w)) if w.contains("final")));
-    assert!(matches!(rig.command(skip("reframe")), Err(Error::Refused(w)) if w.contains("already")));
-    assert_eq!(rig.wf().step("publish").unwrap().inputs["cloud"].value, Some("cloud-1".into()));
+    // skip translate: it is final, and publish takes typeset's document
+    rig.command(skip("translate")).unwrap();
+    assert_eq!(rig.status("translate"), StepStatus::Skipped);
+    assert!(matches!(rig.command(start("translate")), Err(Error::Refused(w)) if w.contains("final")));
+    assert!(matches!(rig.command(skip("translate")), Err(Error::Refused(w)) if w.contains("already")));
+    assert_eq!(rig.wf().step("publish").unwrap().inputs["document"].value, Some("doc-1".into()));
     rig.tick();
     assert_eq!(rig.status("publish"), StepStatus::Running);
-    assert_eq!(local.started()[1].inputs["cloud"], Value::from("cloud-1"));
-    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("layer", "layer-1".into())])));
+    assert_eq!(local.started().iter().find(|r| r.step == "publish").unwrap().inputs["document"], Value::from("doc-1"));
+    local.finish(&rig.handle(&local, "publish"), Outcome::succeeded(outs(&[("release", "release-1".into())])));
     rig.tick();
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
-    assert_eq!(rig.wf().step("reframe").unwrap().skipped.as_ref().unwrap().by, max());
+    assert_eq!(rig.wf().step("translate").unwrap().skipped.as_ref().unwrap().by, max());
     assert_eq!(
         rig.history_kinds(),
         [
             "created",
             "started",
-            "set@dense",
-            "run-minted@dense",
-            "run-started@dense",
-            "run-ended@dense",
-            "skipped@reframe",
+            "set@typeset",
+            "run-minted@typeset",
+            "run-started@typeset",
+            "run-ended@typeset",
+            "skipped@translate",
             "run-minted@publish",
             "run-started@publish",
             "run-ended@publish"
@@ -1022,14 +1020,14 @@ fn scenario_e_a_skipped_step_lets_the_next_binding_carry() {
 fn scenario_e_a_skipped_step_skips_what_only_it_feeds() {
     let store = Arc::new(MemoryStore::new());
     skip_library(&store, false);
-    let local = performer("local", Locality::ThisMachine, &["dense", "reframe", "publish"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "reframed-layer", "skip-2");
-    rig.command(set("dense", "images", serde_json::json!(["a.jpg"]))).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["typeset", "translate", "publish"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "translated-report", "skip-2");
+    rig.command(set("typeset", "notes", "notes-1".into())).unwrap();
     rig.tick();
-    local.finish(&rig.handle(&local, "dense"), Outcome::succeeded(outs(&[("cloud", "cloud-1".into())])));
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
     rig.tick();
-    rig.command(skip("reframe")).unwrap();
-    assert_eq!(rig.status("reframe"), StepStatus::Skipped);
+    rig.command(skip("translate")).unwrap();
+    assert_eq!(rig.status("translate"), StepStatus::Skipped);
     assert_eq!(rig.status("publish"), StepStatus::Skipped, "its only binding will never carry");
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
     rig.tick();
