@@ -1,13 +1,13 @@
 {
   "bindings": [],
   "contract": "stepmeld/workflow-definition.v1",
-  "label": "Detect targets",
-  "name": "find-targets",
+  "label": "Add two integers",
+  "name": "hello",
   "steps": [
     {
-      "name": "detect",
+      "name": "add",
       "step": {
-        "name": "detect-targets",
+        "name": "add",
         "version": 1
       }
     }

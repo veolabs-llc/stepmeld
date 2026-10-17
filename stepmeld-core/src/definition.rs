@@ -218,8 +218,8 @@ impl StepDefinition {
             return Err(invalid("the name is empty or contains a dot".into()));
         }
         // what is given (inputs, parameters) shares one namespace; what
-        // is produced has its own, so a refine may take `model` and
-        // give `model`
+        // is produced has its own, so a revise may take `text` and
+        // give `text`
         let mut given = BTreeSet::new();
         let mut produced = BTreeSet::new();
         let names = self
@@ -260,7 +260,7 @@ impl PortRef {
     }
 
     /// (step, port). A step name never holds a dot; a port name may,
-    /// on a nested recipe's face (`publish.chunk.cloud`).
+    /// on a nested recipe's face (`publish.package.document`).
     pub fn split(&self) -> Option<(&str, &str)> {
         self.0.split_once('.')
     }

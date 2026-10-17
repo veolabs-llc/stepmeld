@@ -7,11 +7,11 @@
   "contract": "stepmeld/history.v1",
   "detail": {
     "definition": {
-      "name": "photogrammetry-layer",
+      "name": "report",
       "version": 1
     }
   },
   "kind": "created",
   "seq": 1,
-  "workflow": "layer-1"
+  "workflow": "report-1"
 }

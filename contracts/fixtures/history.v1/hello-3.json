@@ -6,14 +6,11 @@
   },
   "contract": "stepmeld/history.v1",
   "detail": {
-    "input": "images",
-    "value": [
-      "a.jpg",
-      "b.jpg"
-    ]
+    "input": "a",
+    "value": 2
   },
   "kind": "set",
   "seq": 3,
-  "step": "detect",
+  "step": "add",
   "workflow": "wf-1"
 }

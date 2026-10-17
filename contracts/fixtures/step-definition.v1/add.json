@@ -3,24 +3,30 @@
   "done_by": "performer",
   "inputs": [
     {
-      "name": "images",
+      "name": "a",
       "required": true,
-      "tag": "file-list"
+      "tag": "integer"
+    },
+    {
+      "name": "b",
+      "required": true,
+      "tag": "integer"
     }
   ],
-  "name": "detect-targets",
+  "label": "Add two integers",
+  "name": "add",
   "outputs": [
     {
-      "name": "targets",
-      "tag": "target-table"
+      "name": "sum",
+      "tag": "integer"
     }
   ],
   "parameters": [
     {
-      "default": 12,
-      "name": "min-size",
+      "default": 1,
+      "name": "beat-seconds",
       "required": false,
-      "tag": "integer"
+      "tag": "number"
     }
   ],
   "policy": {

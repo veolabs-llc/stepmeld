@@ -501,7 +501,7 @@ exit 1"#,
 
     /// A launcher for work elsewhere says so, and the gate's confirm
     /// policies see it (2026-10-06: a cloud performer that answered
-    /// this-machine submitted a Batch job past a confirm-before-cloud
+    /// this-machine launched cloud work past a confirm-before-cloud
     /// policy).
     #[test]
     fn a_performer_answers_where_its_work_happens() {
