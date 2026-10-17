@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/worker.v1",
+  "title": "A Worker as every Orchestrator sees it, published by the Worker to the shared store. Its programs and paths stay in its own store.",
+  "type": "object",
+  "required": [
+    "contract",
+    "name",
+    "host",
+    "verbs",
+    "seen"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "stepmeld/worker.v1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Its name; Performer names are Worker names."
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The machine it runs on, as the machine names itself."
+    },
+    "cloud": {
+      "type": "boolean",
+      "description": "Its work happens in the cloud."
+    },
+    "verbs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "description": "The verbs it has a program for."
+    },
+    "seen": {
+      "$ref": "#/$defs/time",
+      "description": "When it last published itself."
+    }
+  },
+  "$defs": {
+    "time": {
+      "type": "string",
+      "description": "RFC 3339, UTC, so that later sorts later."
+    },
+    "ref": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

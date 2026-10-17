@@ -1,0 +1,41 @@
+{
+  "contract": "stepmeld/order.v1",
+  "id": "wf-1/count/1",
+  "worker": "desk",
+  "placed": "2026-10-17T14:00:00Z",
+  "request": {
+    "workflow": "wf-1",
+    "step": "count",
+    "run": "wf-1/count/1",
+    "definition": {
+      "name": "count-words",
+      "version": 1
+    },
+    "inputs": {
+      "text": {
+        "file": "notes.txt"
+      }
+    },
+    "parameters": {
+      "min-length": 3
+    },
+    "outputs": [
+      {
+        "name": "counts",
+        "tag": "word-counts"
+      }
+    ]
+  },
+  "cancel": {
+    "reason": "asked by person:ann",
+    "at": "2026-10-17T14:01:00Z"
+  },
+  "report": {
+    "at": "2026-10-17T14:01:02Z",
+    "outcome": {
+      "state": "canceled",
+      "class": "canceled",
+      "reason": "asked by person:ann"
+    }
+  }
+}

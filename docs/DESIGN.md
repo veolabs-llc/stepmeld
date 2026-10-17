@@ -101,6 +101,9 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **Command** | What an Actor issues: create, set, start, approve, retry, skip, cancel, complete. With Performer reports, the engine's only input. |
 | **History** | The append-only record of Commands, Placements, progress and Outcomes, each with its Actor and time. Not "events": that word is kept for an external signal, should one be needed. |
 | **StateStore** | The engine's persistence: read, conditional write, append, list, and a lease per Workflow. SQLite first; a server later. |
+| **Orchestrator** | A role: advances Workflows (Gates, minting, placement, applying what comes back). Any machine with the shared store can play it (`docs/ORCHESTRATOR-WORKER.md`). |
+| **Worker** | A role: runs the work Orchestrators order, through its own programs, and reports. Keeps its programs in a store of its own and publishes its name and verbs to the shared one. Performer names are Worker names. |
+| **Order** | One Run's work addressed to one Worker in the shared store: the request, a cancel if asked, and the Worker's latest report. A Worker never writes a Workflow. |
 
 Retired words: Definition and Template (for the recipe), Attempt and
 Take (for a Run), chain, route, tool (as an engine noun).
@@ -433,9 +436,10 @@ and its tests, and none contradicts the rules above.
 - Fan-out over lists; roles for human Steps; cross-workflow references;
   `on stale: keep`; a Decision option that marks a Step stale (a
   structured "reject"); timeouts in the Policy menu. All additive.
-- The Performer wire form between machines: where it lives (the
-  server is the natural place) and its transport. On one machine it is
-  the run directory (§10a.11).
+- The Performer wire form between machines: orders in the shared
+  store (`docs/ORCHESTRATOR-WORKER.md`); on one machine, the run
+  directory (§10a.11). A transport other than a shared store (a server)
+  is still open.
 - The exact fixed forms a Guard may take, and whether a numeric
   engine-readable Output kind joins Decision for thresholds.
 

@@ -1,0 +1,13 @@
+{
+  "contract": "stepmeld/worker.v1",
+  "name": "queue",
+  "host": "queue-7",
+  "cloud": true,
+  "verbs": [
+    {
+      "name": "typeset",
+      "version": 1
+    }
+  ],
+  "seen": "2026-10-17T14:00:00Z"
+}
