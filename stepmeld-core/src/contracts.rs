@@ -8,11 +8,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-pub const SCHEMAS: [(&str, &str); 4] = [
+pub const SCHEMAS: [(&str, &str); 8] = [
     ("stepmeld/step-definition.v1", include_str!("../schemas/step-definition.v1.schema.json")),
     ("stepmeld/workflow-definition.v1", include_str!("../schemas/workflow-definition.v1.schema.json")),
     ("stepmeld/workflow.v1", include_str!("../schemas/workflow.v1.schema.json")),
     ("stepmeld/history.v1", include_str!("../schemas/history.v1.schema.json")),
+    // the run directory protocol (contracts/run-directory.v1.md)
+    ("stepmeld/run-request.v1", include_str!("../schemas/run-request.v1.schema.json")),
+    ("stepmeld/run-progress.v1", include_str!("../schemas/run-progress.v1.schema.json")),
+    ("stepmeld/run-outcome.v1", include_str!("../schemas/run-outcome.v1.schema.json")),
+    ("stepmeld/run-cancel.v1", include_str!("../schemas/run-cancel.v1.schema.json")),
 ];
 
 fn compiled() -> &'static HashMap<&'static str, Result<Validator, String>> {
@@ -77,6 +82,22 @@ mod tests {
             let theirs = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/schemas").join(&file)).unwrap();
             assert_eq!(text, theirs, "stepmeld-core/schemas/{file} is a copy of contracts/schemas; copy again");
         }
+    }
+
+    /// A Run's outcome and progress are one shape in two places: inside
+    /// a Workflow, and as files of the run directory.
+    #[test]
+    fn the_run_directory_files_are_the_workflows_shapes() {
+        let schema = |name: &str| -> Value { serde_json::from_str(SCHEMAS.iter().find(|(n, _)| *n == name).unwrap().1).unwrap() };
+        let body = |mut v: Value| {
+            for k in ["$schema", "$id", "title", "$defs"] {
+                v.as_object_mut().unwrap().remove(k);
+            }
+            v
+        };
+        let workflow = schema("stepmeld/workflow.v1");
+        assert_eq!(body(schema("stepmeld/run-outcome.v1")), workflow["$defs"]["outcome"], "run-outcome.v1 is workflow.v1's outcome");
+        assert_eq!(body(schema("stepmeld/run-progress.v1")), workflow["$defs"]["progress"], "run-progress.v1 is workflow.v1's progress");
     }
 
     /// Every golden fixture validates against the contract its

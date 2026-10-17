@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/run-outcome.v1",
+  "title": "outcome.json in a run directory: how the Run ended. Written once, by the program, or by the Performer when the program could not.",
+  "type": "object",
+  "required": [
+    "state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "state": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "canceled",
+        "lost"
+      ]
+    },
+    "class": {
+      "type": "string",
+      "description": "The failure's class, the Performer's word; `refused`, `fault` and `lost` are the engine's."
+    },
+    "reason": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "headline"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "headline": {
+          "type": "string"
+        },
+        "details": {}
+      }
+    },
+    "outputs": {
+      "type": "object"
+    },
+    "metrics": {}
+  }
+}

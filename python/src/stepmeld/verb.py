@@ -5,6 +5,7 @@ Performer (`stepmeld-local`).
       <run-dir>/request.json    read: the StartRequest
       <run-dir>/progress.json   written as the work goes (optional)
       <run-dir>/outcome.json    written once, when the work ends
+      <run-dir>/cancel.json     read: a cancel asked for, and its deadline
       <run-dir>/log.txt         stdout and stderr, kept by the Performer
 
 A verb whose work goes on elsewhere (a launcher following a job on a
@@ -130,6 +131,23 @@ class Run:
         doc: dict = {"state": "failed", "class": class_, "reason": reason}
         doc["summary"] = {"headline": headline or reason, **({"details": details} if details is not None else {})}
         self._end(doc)
+
+    def cancel_asked(self) -> str | None:
+        """The reason a cancel was asked for, once one has been. The verb
+        stops what it started (a job elsewhere), then calls `canceled`,
+        before the deadline in `cancel.json`, after which the Performer
+        stops the program."""
+        path = self.dir / "cancel.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text()).get("reason") or "canceled"
+        except (OSError, ValueError):
+            return "canceled"
+
+    def canceled(self, reason: str) -> None:
+        """End the Run as canceled, in the verb's own words."""
+        self._end({"state": "canceled", "class": "canceled", "reason": reason})
 
     def _end(self, doc: dict) -> None:
         if self.ended:

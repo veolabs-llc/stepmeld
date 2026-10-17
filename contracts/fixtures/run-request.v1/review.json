@@ -1,0 +1,25 @@
+{
+  "workflow": "wf-1",
+  "step": "review",
+  "run": "wf-1/review/2",
+  "definition": {
+    "name": "review",
+    "version": 1
+  },
+  "inputs": {
+    "counts": {
+      "file": "counts.json"
+    }
+  },
+  "parameters": {},
+  "outputs": [
+    {
+      "name": "verdict",
+      "tag": "decision",
+      "options": [
+        "accept",
+        "recount"
+      ]
+    }
+  ]
+}
