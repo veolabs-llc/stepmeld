@@ -1,28 +1,33 @@
-//! `stepmeld`: the engine from a shell. A Library and Workflows in one
-//! SQLite file; this machine's programs as a Performer; recipes nested.
+//! `stepmeld`: the engine from a shell (docs/ORCHESTRATOR-WORKER.md).
+//! The shared store (definitions, Workflows, orders, published Workers)
+//! is one SQLite file; this machine's Worker keeps its programs in
+//! another. `tick` orchestrates, `work` runs this machine's Worker.
 //! Refusals are one line and exit 1; nothing here is a UI.
 
 use clap::{Parser, Subcommand};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use stepmeld_core::definition::{Locality, Ref, StepDefinition, WorkflowDefinition};
 use stepmeld_core::driver::Driver;
 use stepmeld_core::engine::Command;
+use stepmeld_core::orders::{wall_clock, OrderPerformer, Worker};
+use stepmeld_core::performer::Performer;
 use stepmeld_core::store::StateStore;
-use stepmeld_core::workflow::{Actor, StepStatus, Waiting, Workflow};
+use stepmeld_core::workflow::{Actor, Gate, StepStatus, Waiting, Workflow, WorkflowStatus};
 use stepmeld_core::{iso, Error, Value};
-use stepmeld_sqlite::SqliteStore;
+use stepmeld_local::{LocalPerformer, Program};
+use stepmeld_sqlite::{SqliteStore, WorkerStore};
 
 #[derive(Parser)]
-#[command(name = "stepmeld", version, about = "A generic workflow engine: verbs, recipes, gates, performers")]
+#[command(name = "stepmeld", version, about = "A generic workflow engine: verbs, recipes, gates, orchestrators and workers")]
 struct Cli {
-    /// The StateStore: one SQLite file.
+    /// The shared store: definitions, Workflows, orders, published Workers.
     #[arg(long, default_value = "stepmeld.sqlite", global = true)]
     store: PathBuf,
-    /// This machine's programs, one per verb (JSON; see `performers`).
-    #[arg(long, global = true)]
-    performers: Option<PathBuf>,
+    /// This machine's Worker's own store: its name and its programs.
+    #[arg(long, default_value = "stepmeld-worker.sqlite", global = true)]
+    worker_store: PathBuf,
     /// Who is acting: `person:<id>` or `agent:<id>`.
     #[arg(long = "as", global = true)]
     actor: Option<String>,
@@ -84,8 +89,8 @@ enum Cmd {
         #[arg(long)]
         to: String,
     },
-    /// Choose the Performer for a Step's next Run.
-    Place { workflow: String, step: String, performer: String, locality: String },
+    /// Choose the Worker for a Step's next Run.
+    Place { workflow: String, step: String, worker: String },
     /// Pass a Step by, for good: it never runs, and an Input bound from its Outputs takes its next Binding.
     Skip { workflow: String, step: String },
     /// Stop a Step's live Run, or the whole Workflow.
@@ -98,7 +103,7 @@ enum Cmd {
     },
     /// Forget a finished Workflow and the children its Runs made (cancel a live one first).
     Remove { workflow: String },
-    /// Advance every Workflow once; with --watch, keep going until nothing is running.
+    /// Orchestrate: advance every Workflow once; with --watch, keep going until nothing is running.
     Tick {
         #[arg(long)]
         watch: bool,
@@ -115,8 +120,60 @@ enum Cmd {
         #[arg(long)]
         run: Option<u32>,
     },
-    /// What the performers file looks like.
-    Performers,
+    /// This machine's Worker: show it, or set it up.
+    Worker {
+        #[command(subcommand)]
+        what: Option<WorkerCmd>,
+    },
+    /// Run this machine's Worker: take its orders, run them, report; with --watch, until stopped.
+    Work {
+        #[arg(long)]
+        watch: bool,
+        /// Seconds between rounds when watching.
+        #[arg(long, default_value_t = 1)]
+        every: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerCmd {
+    /// The Worker's name, settings and programs.
+    Show,
+    /// Change the Worker's settings.
+    Set {
+        /// Its name in the shared store (default: this machine's host name).
+        #[arg(long)]
+        name: Option<String>,
+        /// Where its Runs keep their files (default: `runs`).
+        #[arg(long)]
+        root: Option<String>,
+        /// Whether its work happens in the cloud.
+        #[arg(long)]
+        cloud: Option<bool>,
+    },
+    /// The programs that perform verbs here.
+    Program {
+        #[command(subcommand)]
+        what: ProgramCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProgramCmd {
+    /// Register the program for a verb: `program add <verb> -- <command...>` (the Run's directory is appended).
+    Add {
+        verb: String,
+        #[arg(long, default_value_t = 1)]
+        version: u32,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Forget the program for a verb.
+    Remove {
+        verb: String,
+        #[arg(long, default_value_t = 1)]
+        version: u32,
+    },
 }
 
 fn main() {
@@ -148,15 +205,46 @@ fn value(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
 }
 
+/// This machine's name, as the machine gives it.
+fn host() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "localhost".into())
+}
+
+/// The Orchestrator: a driver over the shared store with one Performer
+/// per published Worker, and recipes nested.
 fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
     let store = Arc::new(SqliteStore::open(&cli.store)?);
-    let mut driver = Driver::new(store.clone(), &format!("stepmeld@{}", std::process::id())).with_nesting();
-    if let Some(path) = &cli.performers {
-        for p in stepmeld_local::file::load(path)? {
-            driver = driver.with_performer(Arc::new(p));
-        }
+    let mut driver = Driver::new(store.clone(), &format!("stepmeld@{}:{}", host(), std::process::id())).with_nesting();
+    for p in OrderPerformer::for_workers(store.clone(), &host(), wall_clock())? {
+        driver = driver.with_performer(Arc::new(p));
     }
     Ok((store, driver))
+}
+
+fn worker_store(cli: &Cli) -> Result<WorkerStore, Error> {
+    WorkerStore::open(&cli.worker_store, &host())
+}
+
+fn show_worker(cli: &Cli, ws: &WorkerStore) -> Result<(), Error> {
+    let s = ws.settings()?;
+    println!("worker   {}  (on {}; its store {})", s.name, host(), cli.worker_store.display());
+    println!("runs in  {}", s.root);
+    println!("cloud    {}", if s.cloud { "yes" } else { "no" });
+    let programs = ws.programs()?;
+    if programs.is_empty() {
+        println!("programs none yet: `stepmeld worker program add <verb> -- <command...>`");
+    }
+    for (verb, command) in programs {
+        println!("program  {:<20} {}", verb.to_string(), command.join(" "));
+    }
+    Ok(())
 }
 
 fn run(cli: Cli) -> Result<(), Error> {
@@ -165,9 +253,56 @@ fn run(cli: Cli) -> Result<(), Error> {
     let now = iso(now_secs());
     let until = || iso(now_secs() + 60);
     match &cli.command {
-        Cmd::Performers => {
-            println!("{}", serde_json::to_string_pretty(&stepmeld_local::file::example()).unwrap());
-            println!("\nEach program is run as: <command...> <run-dir>; it reads <run-dir>/request.json and writes <run-dir>/outcome.json (and progress.json as it goes).");
+        Cmd::Worker { what } => {
+            let ws = worker_store(&cli)?;
+            match what {
+                None | Some(WorkerCmd::Show) => show_worker(&cli, &ws)?,
+                Some(WorkerCmd::Set { name, root, cloud }) => {
+                    if let Some(n) = name {
+                        ws.set_name(n)?;
+                    }
+                    if let Some(r) = root {
+                        ws.set_root(r)?;
+                    }
+                    if let Some(c) = cloud {
+                        ws.set_cloud(*c)?;
+                    }
+                    show_worker(&cli, &ws)?;
+                }
+                Some(WorkerCmd::Program {
+                    what: ProgramCmd::Add { verb, version, command },
+                }) => {
+                    ws.add_program(&Ref::new(verb, *version), command)?;
+                    println!("program for {verb} v{version}: {}", command.join(" "));
+                }
+                Some(WorkerCmd::Program { what: ProgramCmd::Remove { verb, version } }) => {
+                    if !ws.remove_program(&Ref::new(verb, *version))? {
+                        return Err(Error::Refused(format!("this Worker has no program for {verb} v{version}")));
+                    }
+                    println!("forgot the program for {verb} v{version}");
+                }
+            }
+        }
+        Cmd::Work { watch, every } => {
+            let ws = worker_store(&cli)?;
+            let settings = ws.settings()?;
+            let programs: Vec<Program> = ws.programs()?.into_iter().map(|(verb, command)| Program { verb, command }).collect();
+            if programs.is_empty() {
+                return Err(Error::Refused("this Worker has no programs yet: `stepmeld worker program add <verb> -- <command...>`".into()));
+            }
+            let mechanism = Arc::new(LocalPerformer::new(&settings.name, Path::new(&settings.root), programs));
+            let worker = Worker::new(&settings.name, &host(), settings.cloud, store.clone(), mechanism.clone());
+            let verbs: Vec<String> = mechanism.describe().verbs.iter().map(|v| v.to_string()).collect();
+            println!("worker {} on {}, offering {}", settings.name, host(), verbs.join(", "));
+            loop {
+                for (id, word) in worker.tick(&iso(now_secs()))? {
+                    println!("{id:<40} {word}");
+                }
+                if !*watch {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(*every));
+            }
         }
         Cmd::Add { files } => {
             // verbs first, then recipes in whatever order they resolve:
@@ -243,7 +378,8 @@ fn run(cli: Cli) -> Result<(), Error> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&wf).unwrap());
             } else {
-                show(&store, &wf)?;
+                let faces: Vec<_> = driver.performers.iter().map(|p| p.describe()).collect();
+                show(&store, &wf, &faces)?;
             }
         }
         Cmd::Set { workflow, step, input, parameter, value: v } => {
@@ -292,24 +428,25 @@ fn run(cli: Cli) -> Result<(), Error> {
             driver.command(workflow, &Command::SetPolicy { step: step.clone(), policy }, &by, &now)?;
             println!("policy set on {step}");
         }
-        Cmd::Place { workflow, step, performer, locality } => {
-            let locality = match locality.as_str() {
-                "this-machine" => Locality::ThisMachine,
-                "local-network" => Locality::LocalNetwork,
-                "cloud" => Locality::Cloud,
-                other => return Err(Error::Refused(format!("locality is this-machine, local-network or cloud, not {other:?}"))),
-            };
+        Cmd::Place { workflow, step, worker } => {
+            let locality: Locality = driver
+                .performers
+                .iter()
+                .map(|p| p.describe())
+                .find(|f| &f.name == worker)
+                .map(|f| f.locality)
+                .ok_or_else(|| Error::Refused(format!("no Worker {worker:?} has published itself to this store")))?;
             driver.command(
                 workflow,
                 &Command::Place {
                     step: step.clone(),
-                    performer: performer.clone(),
+                    performer: worker.clone(),
                     locality,
                 },
                 &by,
                 &now,
             )?;
-            println!("placed {step} on {performer}");
+            println!("placed {step} on {worker}");
         }
         Cmd::Skip { workflow, step } => {
             driver.command(workflow, &Command::Skip { step: step.clone() }, &by, &now)?;
@@ -325,10 +462,30 @@ fn run(cli: Cli) -> Result<(), Error> {
         }
         Cmd::Tick { watch, every } => loop {
             let statuses = driver.tick_all(&iso(now_secs()), &until())?;
+            let lib = store.library()?;
+            let faces: Vec<_> = driver.performers.iter().map(|p| p.describe()).collect();
+            let mut busy = false;
             for (id, status) in &statuses {
-                println!("{id:<40} {}", format!("{status:?}").to_lowercase());
+                // judged against the Workers that exist: a Workflow
+                // whose ready Steps no Worker offers is waiting, and
+                // says for what
+                let (mut word, mut why) = (format!("{status:?}").to_lowercase(), Vec::new());
+                if let (Some((wf, _)), true) = (store.get(id)?, matches!(status, WorkflowStatus::Ready | WorkflowStatus::Waiting)) {
+                    if let Some(def) = lib.workflow(&wf.definition) {
+                        let gates: Vec<_> = wf.steps.keys().map(|name| (name, wf.gate(def, name, &faces))).collect();
+                        for (name, gate) in &gates {
+                            if let Gate::Closed(s @ StepStatus::Waiting(_)) = gate {
+                                why.push(format!("{name}: {}", reason(&wf, name, s)));
+                            }
+                        }
+                        if *status == WorkflowStatus::Ready && !gates.iter().any(|(_, g)| *g == Gate::Open) {
+                            word = "waiting".into();
+                        }
+                    }
+                }
+                busy |= word == "running" || word == "ready";
+                println!("{id:<40} {word:<10} {}", why.join("; "));
             }
-            let busy = statuses.values().any(|s| matches!(s, stepmeld_core::workflow::WorkflowStatus::Running | stepmeld_core::workflow::WorkflowStatus::Ready));
             if !*watch || !busy {
                 break;
             }
@@ -364,7 +521,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                 .performers
                 .iter()
                 .find(|p| p.describe().name == r.performer)
-                .ok_or_else(|| Error::Refused(format!("performer {:?} is not in this driver", r.performer)))?;
+                .ok_or_else(|| Error::Refused(format!("Worker {:?} has not published itself to this store", r.performer)))?;
             print!("{}", p.log(handle).unwrap_or_else(|| "(no log kept)\n".into()));
         }
     }
@@ -380,42 +537,16 @@ fn who(a: &Actor) -> String {
     }
 }
 
-fn show(store: &SqliteStore, wf: &Workflow) -> Result<(), Error> {
+fn show(store: &SqliteStore, wf: &Workflow, faces: &[stepmeld_core::workflow::PerformerFace]) -> Result<(), Error> {
     let lib = store.library()?;
     let def = lib.workflow(&wf.definition).ok_or_else(|| Error::Refused(format!("{} is not in the library", wf.definition)))?;
     println!("{}  ({}, {})", wf.id, wf.definition, format!("{:?}", wf.status(def)).to_lowercase());
     for (name, step) in &wf.steps {
-        let status = wf.step_status(def, name);
-        let reason = match &status {
-            StepStatus::Waiting(Waiting::Input { name }) => format!("needs input {name}"),
-            StepStatus::Waiting(Waiting::Parameter { name }) => format!("needs parameter {name}"),
-            StepStatus::Waiting(Waiting::Completion) => "waiting for someone to complete it".into(),
-            StepStatus::Waiting(Waiting::Go) => "waiting for a start".into(),
-            StepStatus::Waiting(Waiting::Start) => "waiting for the workflow to be started (`start <workflow>`)".into(),
-            StepStatus::Waiting(Waiting::Confirmation { locality }) => format!("waiting for the {} placement to be confirmed", locality.as_str()),
-            StepStatus::Waiting(Waiting::Performer) => "no performer offers it".into(),
-            StepStatus::Waiting(Waiting::Placement) => "waiting for a placement: several performers offer it (`place`)".into(),
-            StepStatus::Running => step
-                .latest()
-                .and_then(|r| r.progress.as_ref())
-                .map(|p| {
-                    format!(
-                        "{}{}",
-                        p.phase.clone().unwrap_or_default(),
-                        match (p.done, p.total) {
-                            (Some(d), Some(t)) => format!(" {d} of {t} {}", p.unit.clone().unwrap_or_default()),
-                            _ => String::new(),
-                        }
-                    )
-                })
-                .unwrap_or_default(),
-            StepStatus::Failed => step.latest().and_then(|r| r.outcome.as_ref()).and_then(|o| o.reason.clone()).unwrap_or_default(),
-            StepStatus::Skipped => match &step.skipped {
-                Some(s) => format!("skipped by {}", who(&s.by)),
-                None => "no path leads to it".into(),
-            },
-            _ => String::new(),
+        let status = match wf.gate(def, name, faces) {
+            stepmeld_core::workflow::Gate::Closed(s @ StepStatus::Waiting(_)) => s,
+            _ => wf.step_status(def, name),
         };
+        let reason = reason(wf, name, &status);
         println!("  {:<16} {:<10} {}", name, status.word(), reason);
         for (k, i) in &step.inputs {
             println!("      in   {k:<14} {}", i.value.as_ref().map(Value::to_string).unwrap_or_else(|| "-".into()));
@@ -440,4 +571,40 @@ fn show(store: &SqliteStore, wf: &Workflow) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Where a Step stands, in words: what it waits for, how far it is,
+/// why it failed.
+fn reason(wf: &Workflow, name: &str, status: &StepStatus) -> String {
+    let Some(step) = wf.steps.get(name) else { return String::new() };
+    match status {
+        StepStatus::Waiting(Waiting::Input { name }) => format!("needs input {name}"),
+        StepStatus::Waiting(Waiting::Parameter { name }) => format!("needs parameter {name}"),
+        StepStatus::Waiting(Waiting::Completion) => "waiting for someone to complete it".into(),
+        StepStatus::Waiting(Waiting::Go) => "waiting for a start".into(),
+        StepStatus::Waiting(Waiting::Start) => "waiting for the workflow to be started (`start <workflow>`)".into(),
+        StepStatus::Waiting(Waiting::Confirmation { locality }) => format!("waiting for the {} placement to be confirmed", locality.as_str()),
+        StepStatus::Waiting(Waiting::Performer) => "no Worker offers it (`stepmeld work` where its program is)".into(),
+        StepStatus::Waiting(Waiting::Placement) => "waiting for a placement: several Workers offer it (`place`)".into(),
+        StepStatus::Running => step
+            .latest()
+            .and_then(|r| r.progress.as_ref())
+            .map(|p| {
+                format!(
+                    "{}{}",
+                    p.phase.clone().unwrap_or_default(),
+                    match (p.done, p.total) {
+                        (Some(d), Some(t)) => format!(" {d} of {t} {}", p.unit.clone().unwrap_or_default()),
+                        _ => String::new(),
+                    }
+                )
+            })
+            .unwrap_or_default(),
+        StepStatus::Failed => step.latest().and_then(|r| r.outcome.as_ref()).and_then(|o| o.reason.clone()).unwrap_or_default(),
+        StepStatus::Skipped => match &step.skipped {
+            Some(s) => format!("skipped by {}", who(&s.by)),
+            None => "no path leads to it".into(),
+        },
+        _ => String::new(),
+    }
 }
