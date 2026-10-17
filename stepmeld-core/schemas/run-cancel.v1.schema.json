@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/run-cancel.v1",
+  "title": "cancel.json in a run directory: a cancel asked for. Written by the Performer; the program may end before the deadline, and is stopped at it.",
+  "type": "object",
+  "required": [
+    "reason",
+    "at",
+    "deadline"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "type": "string"
+    },
+    "at": {
+      "$ref": "#/$defs/time",
+      "description": "When the cancel was asked for."
+    },
+    "deadline": {
+      "$ref": "#/$defs/time",
+      "description": "When the Performer stops the program if it has not ended."
+    }
+  },
+  "$defs": {
+    "time": {
+      "type": "string",
+      "description": "RFC 3339, UTC, so that later sorts later."
+    }
+  }
+}

@@ -422,7 +422,10 @@ and its tests, and none contradicts the rules above.
 11. **The local Performer's protocol is files in a directory**
     (`request.json` in; `progress.json`, `outcome.json`, `log.txt`
     out), so a verb can be a program in any language: the first wire
-    form of the Performer contract.
+    form of the Performer contract. Its contract is
+    `contracts/run-directory.v1.md`, with a schema for each file; a
+    cancel there is a request with a deadline (`cancel.json`), so a
+    program with work elsewhere can stop it before it is stopped.
 
 ## 11. Open
 
@@ -430,8 +433,9 @@ and its tests, and none contradicts the rules above.
 - Fan-out over lists; roles for human Steps; cross-workflow references;
   `on stale: keep`; a Decision option that marks a Step stale (a
   structured "reject"); timeouts in the Policy menu. All additive.
-- The Performer wire form: where it lives (the server is the natural
-  place) and its transport.
+- The Performer wire form between machines: where it lives (the
+  server is the natural place) and its transport. On one machine it is
+  the run directory (§10a.11).
 - The exact fixed forms a Guard may take, and whether a numeric
   engine-readable Output kind joins Decision for thresholds.
 

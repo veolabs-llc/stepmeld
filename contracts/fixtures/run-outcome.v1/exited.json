@@ -1,0 +1,5 @@
+{
+  "state": "failed",
+  "class": "exit",
+  "reason": "the program ended with exit status: 2: out of memory"
+}

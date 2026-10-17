@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/run-progress.v1",
+  "title": "progress.json in a run directory: the program's latest word on how far it is. Optional; replaced whole each time.",
+  "type": "object",
+  "required": [
+    "at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "type": "string"
+    },
+    "done": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unit": {
+      "type": "string"
+    },
+    "at": {
+      "$ref": "#/$defs/time"
+    }
+  },
+  "$defs": {
+    "time": {
+      "type": "string",
+      "description": "RFC 3339, UTC, so that later sorts later."
+    }
+  }
+}

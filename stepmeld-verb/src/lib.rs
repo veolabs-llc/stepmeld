@@ -7,6 +7,7 @@
 //!   <run-dir>/progress.json   written as the work goes (optional)
 //!   <run-dir>/state.json      what a fresh start needs to carry on (optional)
 //!   <run-dir>/outcome.json    written once, when the work ends
+//!   <run-dir>/cancel.json     read: a cancel asked for, and its deadline
 //! ```
 //!
 //! [`main`] reads the request, picks the verb by the definition's name,
@@ -169,6 +170,20 @@ impl Run {
         Ok(())
     }
 
+    /// The reason a cancel was asked for, once one has been: the verb
+    /// stops what it started (a job elsewhere), then calls
+    /// [`Run::canceled`], before the deadline in `cancel.json`, after
+    /// which the Performer stops the program.
+    pub fn cancel_asked(&self) -> Option<String> {
+        let asked: Value = serde_json::from_slice(&std::fs::read(self.dir.join("cancel.json")).ok()?).ok()?;
+        Some(asked.get("reason").and_then(Value::as_str).unwrap_or("canceled").to_string())
+    }
+
+    /// End the Run as canceled, in the verb's own words.
+    pub fn canceled(&mut self, reason: &str) -> Result<()> {
+        self.end(&Outcome::canceled(reason))
+    }
+
     pub fn ended(&self) -> bool {
         self.ended
     }
@@ -269,7 +284,42 @@ mod tests {
         run.succeed(BTreeMap::new(), "nothing", None)
     }
 
-    const VERBS: &[(&str, Verb)] = &[("chunk", ok), ("refuses", refuses), ("forgets", forgets), ("panics", panics), ("owes", owes)];
+    fn hears_the_cancel(run: &mut Run) -> Result<()> {
+        loop {
+            if let Some(reason) = run.cancel_asked() {
+                return run.canceled(&format!("stopped its job ({reason})"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    const VERBS: &[(&str, Verb)] = &[("chunk", ok), ("refuses", refuses), ("forgets", forgets), ("panics", panics), ("owes", owes), ("waits", hears_the_cancel)];
+
+    fn valid(dir: &Path, file: &str, contract: &str) {
+        let doc: Value = serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
+        assert_eq!(stepmeld_core::contracts::validate(&doc, contract), Ok(()), "{file}: {doc}");
+    }
+
+    /// What the verb writes is the run directory's contracts, and a
+    /// verb told of a cancel ends canceled in its own words.
+    #[test]
+    fn the_files_hold_to_their_contracts_and_a_cancel_is_heard() {
+        let (_, _, dir) = run_verb("chunk");
+        valid(&dir, "request.json", "stepmeld/run-request.v1");
+        valid(&dir, "progress.json", "stepmeld/run-progress.v1");
+        valid(&dir, "outcome.json", "stepmeld/run-outcome.v1");
+        for verb in ["refuses", "panics", "owes"] {
+            let (_, _, dir) = run_verb(verb);
+            valid(&dir, "outcome.json", "stepmeld/run-outcome.v1");
+        }
+        let dir = tempfile::tempdir().unwrap().keep();
+        request(&dir, "waits");
+        std::fs::write(dir.join("cancel.json"), r#"{"reason":"asked by person:ann","at":"2026-10-17T14:05:00Z","deadline":"2026-10-17T14:05:30Z"}"#).unwrap();
+        assert_eq!(main(VERBS, &[dir.display().to_string()]), 1);
+        let o = outcome(&dir);
+        assert_eq!((o.state, o.reason.as_deref()), (stepmeld_core::workflow::RunState::Canceled, Some("stopped its job (asked by person:ann)")));
+        valid(&dir, "outcome.json", "stepmeld/run-outcome.v1");
+    }
 
     fn run_verb(verb: &str) -> (i32, Outcome, PathBuf) {
         let dir = tempfile::tempdir().unwrap().keep();

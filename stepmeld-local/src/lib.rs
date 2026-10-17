@@ -1,12 +1,13 @@
-//! A [`Performer`] for this machine: each verb is a program. The
-//! protocol between the Performer and the program is files in a
-//! directory, so a program in any language can be a verb:
+//! A [`Performer`] for this machine: each verb is a program, spoken to
+//! through the run directory protocol (`contracts/run-directory.v1.md`),
+//! files in a directory, so a program in any language can be a verb:
 //!
 //! ```text
 //! <program> [args...] <run-dir>
 //!   <run-dir>/request.json    the StartRequest, written before the start
 //!   <run-dir>/progress.json   written by the program as it goes (optional)
 //!   <run-dir>/outcome.json    written by the program when it ends: an Outcome
+//!   <run-dir>/cancel.json     written by the Performer when a cancel is asked
 //!   <run-dir>/log.txt         its stdout and stderr
 //!   <run-dir>/pid             the process id, written by the Performer
 //! ```
@@ -25,6 +26,15 @@
 //! directory instead of calling the Run lost, up to [`RESUMES`] times;
 //! the program reads its state and carries on. A program that never
 //! said it was resumable is lost, as before.
+//!
+//! **Canceling.** A cancel writes `cancel.json` (the reason and a
+//! deadline) and nothing more: the program, which may have work
+//! elsewhere to stop, has until the deadline ([`CANCEL_GRACE`] unless
+//! the Performer is given another) to end on its own, writing its own
+//! outcome or none. At the deadline the Performer stops it and writes a
+//! canceled outcome. A program gone after a cancel is canceled, never
+//! resumed. The Run stays running until then: the engine asks again on
+//! every tick, and each ask is short.
 
 pub mod file;
 
@@ -33,6 +43,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use stepmeld_core::definition::{Locality, Ref};
 use stepmeld_core::engine::{Observation, StartRequest};
 use stepmeld_core::performer::Performer;
@@ -51,8 +62,14 @@ pub struct Program {
 /// is lost.
 pub const RESUMES: u32 = 3;
 
+/// How long a program has, after a cancel is asked, to end on its own
+/// (my choice, 2026-10-17: long enough for a launcher to ask a remote
+/// queue to stop its job, short enough that a cancel is felt).
+pub const CANCEL_GRACE: Duration = Duration::from_secs(30);
+
 pub struct LocalPerformer {
     name: String,
+    grace: Duration,
     /// What this Performer answers to "where": the programs run here,
     /// but a program may be a launcher whose work happens elsewhere
     /// (a job on a cloud queue), and then the Performer says so.
@@ -67,6 +84,7 @@ impl LocalPerformer {
     pub fn new(name: &str, root: &Path, programs: Vec<Program>) -> LocalPerformer {
         LocalPerformer {
             name: name.to_string(),
+            grace: CANCEL_GRACE,
             locality: Locality::ThisMachine,
             root: root.to_path_buf(),
             programs,
@@ -79,6 +97,43 @@ impl LocalPerformer {
     pub fn at(mut self, locality: Locality) -> LocalPerformer {
         self.locality = locality;
         self
+    }
+
+    /// How long a program has to end on its own once a cancel is asked
+    /// (zero: stopped at once).
+    pub fn with_grace(mut self, grace: Duration) -> LocalPerformer {
+        self.grace = grace;
+        self
+    }
+
+    /// The cancel asked for a Run, if one was: its reason, and whether
+    /// its deadline has passed.
+    fn cancel_asked(&self, dir: &Path) -> Option<(String, bool)> {
+        let path = dir.join("cancel.json");
+        let asked: serde_json::Value = Self::read(&path)?;
+        let reason = asked.get("reason").and_then(|r| r.as_str()).unwrap_or("canceled").to_string();
+        let since = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).unwrap_or(Duration::MAX);
+        Some((reason, since >= self.grace))
+    }
+
+    /// Stop the program of a Run, whoever started it.
+    fn stop(&self, handle: &str, dir: &Path) {
+        if let Some(mut child) = self.children.lock().unwrap().remove(handle) {
+            let _ = child.kill();
+            let _ = child.wait();
+        } else if let Some(pid) = std::fs::read_to_string(dir.join("pid")).ok().and_then(|p| p.trim().parse::<u32>().ok()) {
+            let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+
+    /// End a Run as canceled, unless the program said how it ended.
+    fn canceled(dir: &Path, reason: &str) -> Outcome {
+        if let Some(outcome) = Self::read::<Outcome>(&dir.join("outcome.json")) {
+            return outcome;
+        }
+        let outcome = Outcome::canceled(reason);
+        let _ = write_atomic(&dir.join("outcome.json"), &serde_json::to_string_pretty(&outcome).unwrap());
+        outcome
     }
 
     fn dir(&self, handle: &str) -> PathBuf {
@@ -207,6 +262,12 @@ impl Performer for LocalPerformer {
                 progress: Self::read::<Progress>(&dir.join("progress.json")),
                 attention: None,
             },
+            Some(_) if self.cancel_asked(&dir).is_some() => {
+                // gone after a cancel was asked, without saying how it
+                // ended: canceled, never resumed
+                let (reason, _) = self.cancel_asked(&dir).unwrap_or_default();
+                Observation::Ended { outcome: Self::canceled(&dir, &reason) }
+            }
             Some(status) => {
                 // gone without an outcome: a program that can resume is
                 // started again; otherwise a 0 exit with nothing to
@@ -236,21 +297,32 @@ impl Performer for LocalPerformer {
 
     fn cancel(&self, handle: &str, reason: &str) {
         let dir = self.dir(handle);
-        if dir.join("outcome.json").exists() {
+        if !dir.join("request.json").exists() || dir.join("outcome.json").exists() {
             return;
         }
-        if let Some(mut child) = self.children.lock().unwrap().remove(handle) {
-            let _ = child.kill();
-            let _ = child.wait();
-        } else if let Some(pid) = std::fs::read_to_string(dir.join("pid")).ok().and_then(|p| p.trim().parse::<u32>().ok()) {
-            let _ = Command::new("kill").arg(pid.to_string()).status();
+        if self.cancel_asked(&dir).is_none() {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let asked = serde_json::json!({"reason": reason, "at": stepmeld_core::iso(now), "deadline": stepmeld_core::iso(now + self.grace.as_secs())});
+            let _ = write_atomic(&dir.join("cancel.json"), &serde_json::to_string_pretty(&asked).unwrap());
         }
-        let _ = std::fs::write(dir.join("outcome.json"), serde_json::to_string_pretty(&Outcome::canceled(reason)).unwrap());
+        // the program has until the deadline to end on its own; asked
+        // again past it, it is stopped
+        if let Some((reason, true)) = self.cancel_asked(&dir) {
+            self.stop(handle, &dir);
+            Self::canceled(&dir, &format!("{reason} (stopped at the deadline)"));
+        }
     }
 
     fn log(&self, handle: &str) -> Option<String> {
         std::fs::read_to_string(self.dir(handle).join("log.txt")).ok()
     }
+}
+
+/// Write a file the program may be reading: whole, or not at all.
+fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
@@ -334,7 +406,7 @@ mod tests {
     #[test]
     fn progress_is_read_while_it_runs_and_a_cancel_ends_it() {
         let dir = tempfile::tempdir().unwrap();
-        let p = performer(dir.path(), r#"echo '{"phase":"working","done":1,"total":4,"at":"t"}' > "$1/progress.json"; sleep 30"#);
+        let p = performer(dir.path(), r#"echo '{"phase":"working","done":1,"total":4,"at":"t"}' > "$1/progress.json"; sleep 30"#).with_grace(Duration::ZERO);
         let h = p.start(&request("wf/s/1", &[])).unwrap();
         let mut seen = None;
         for _ in 0..100 {
@@ -347,6 +419,84 @@ mod tests {
         assert_eq!(seen.unwrap().done, Some(1));
         p.cancel(&h, "enough");
         assert!(matches!(p.observe(&h), Observation::Ended { outcome } if outcome.class.as_deref() == Some("canceled")));
+    }
+
+    fn doc(dir: &Path, handle: &str, file: &str) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("runs").join(handle).join(file)).unwrap()).unwrap()
+    }
+
+    /// The files of the run directory are the contracts' documents: the
+    /// request the Performer writes, the cancel it asks, the outcome
+    /// either side writes.
+    #[test]
+    fn the_run_directory_holds_to_its_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(dir.path(), r#"while [ ! -f "$1/cancel.json" ]; do sleep 0.02; done"#).with_grace(Duration::ZERO);
+        let mut req = request("wf/s/1", &["words"]);
+        req.inputs.insert("text".into(), serde_json::json!({"file": "notes.txt"}));
+        let h = p.start(&req).unwrap();
+        p.cancel(&h, "enough");
+        assert!(matches!(settle(&p, &h), Observation::Ended { .. }));
+        for (file, contract) in [("request.json", "stepmeld/run-request.v1"), ("cancel.json", "stepmeld/run-cancel.v1"), ("outcome.json", "stepmeld/run-outcome.v1")] {
+            let d = doc(dir.path(), &h, file);
+            assert_eq!(stepmeld_core::contracts::validate(&d, contract), Ok(()), "{file}: {d}");
+        }
+    }
+
+    /// A program told of a cancel ends on its own, in its own words,
+    /// before the deadline: a launcher stops its remote job first.
+    #[test]
+    fn a_program_that_hears_the_cancel_ends_in_its_own_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(
+            dir.path(),
+            r#"while [ ! -f "$1/cancel.json" ]; do sleep 0.02; done
+echo '{"state":"canceled","class":"canceled","reason":"stopped its remote job"}' > "$1/outcome.json""#,
+        );
+        let h = p.start(&request("wf/s/1", &[])).unwrap();
+        p.cancel(&h, "enough");
+        match settle(&p, &h) {
+            Observation::Ended { outcome } => assert_eq!(outcome.reason.as_deref(), Some("stopped its remote job")),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(doc(dir.path(), &h, "cancel.json")["reason"], "enough");
+    }
+
+    /// A program that ignores the cancel runs on until the deadline, and
+    /// is stopped when the cancel is asked again past it.
+    #[test]
+    fn a_program_that_ignores_the_cancel_is_stopped_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(dir.path(), "sleep 30").with_grace(Duration::from_millis(300));
+        let h = p.start(&request("wf/s/1", &[])).unwrap();
+        p.cancel(&h, "enough");
+        assert!(matches!(p.observe(&h), Observation::Running { .. }), "within its grace it runs");
+        std::thread::sleep(Duration::from_millis(400));
+        p.cancel(&h, "enough");
+        match p.observe(&h) {
+            Observation::Ended { outcome } => assert!(outcome.class.as_deref() == Some("canceled") && outcome.reason.as_deref().unwrap_or("").contains("deadline"), "{outcome:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A resumable program gone after a cancel is canceled, never
+    /// started again.
+    #[test]
+    fn a_resumable_program_gone_after_a_cancel_is_not_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(
+            dir.path(),
+            r#"echo '{"job":"j-1"}' > "$1/state.json"; touch "$1/resumable"
+while [ ! -f "$1/cancel.json" ]; do sleep 0.02; done
+exit 1"#,
+        );
+        let h = p.start(&request("wf/s/1", &[])).unwrap();
+        p.cancel(&h, "enough");
+        match settle(&p, &h) {
+            Observation::Ended { outcome } => assert_eq!(outcome.class.as_deref(), Some("canceled")),
+            other => panic!("{other:?}"),
+        }
+        assert!(!dir.path().join("runs").join(&h).join("resumes").exists(), "never resumed");
     }
 
     /// A launcher for work elsewhere says so, and the gate's confirm

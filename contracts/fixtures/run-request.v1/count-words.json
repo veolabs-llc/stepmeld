@@ -1,0 +1,23 @@
+{
+  "workflow": "wf-1",
+  "step": "count",
+  "run": "wf-1/count/1",
+  "definition": {
+    "name": "count-words",
+    "version": 1
+  },
+  "inputs": {
+    "text": {
+      "file": "notes.txt"
+    }
+  },
+  "parameters": {
+    "min-length": 3
+  },
+  "outputs": [
+    {
+      "name": "counts",
+      "tag": "word-counts"
+    }
+  ]
+}

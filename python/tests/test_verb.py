@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import stepmeld
 from stepmeld import verb
 
 
@@ -126,3 +127,25 @@ def test_every_log_line_is_stamped(tmp_path, capsys):
     stamped = [re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (.*)", ln) for ln in lines]
     assert all(stamped), lines
     assert [m.group(2) for m in stamped] == ["one", "two", "three"]
+
+
+def test_the_files_hold_to_their_contracts_and_a_cancel_is_heard(tmp_path):
+    def count(run):
+        run.progress("counting", 1, 2, "lines")
+        run.succeed({"targets": {"file": "counts.json"}}, headline="counted", metrics={"lines": 2})
+
+    d = request(tmp_path / "ok", name="count")
+    verb.main({"count": count}, [str(d)])
+    for file, contract in [("request.json", "stepmeld/run-request.v1"), ("progress.json", "stepmeld/run-progress.v1"), ("outcome.json", "stepmeld/run-outcome.v1")]:
+        assert stepmeld.check(json.loads((d / file).read_text()), contract) is None, file
+
+    def waits(run):
+        while (reason := run.cancel_asked()) is None:
+            pass
+        run.canceled(f"stopped its job ({reason})")
+
+    d = request(tmp_path / "cancel", name="waits", outputs=())
+    (d / "cancel.json").write_text(json.dumps({"reason": "asked by person:ann", "at": "2026-10-17T14:05:00Z", "deadline": "2026-10-17T14:05:30Z"}))
+    assert verb.main({"waits": waits}, [str(d)]) == 1
+    assert outcome(d) == {"state": "canceled", "class": "canceled", "reason": "stopped its job (asked by person:ann)"}
+    assert stepmeld.check(outcome(d), "stepmeld/run-outcome.v1") is None

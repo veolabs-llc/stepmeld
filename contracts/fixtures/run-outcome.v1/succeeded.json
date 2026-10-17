@@ -1,0 +1,17 @@
+{
+  "state": "succeeded",
+  "summary": {
+    "headline": "1,204 words, 311 distinct",
+    "details": {
+      "longest": "internationalization"
+    }
+  },
+  "outputs": {
+    "counts": {
+      "file": "counts.json"
+    }
+  },
+  "metrics": {
+    "seconds": 0.8
+  }
+}

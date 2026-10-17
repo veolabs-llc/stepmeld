@@ -1,0 +1,8 @@
+{
+  "state": "failed",
+  "class": "refused",
+  "reason": "notes.txt does not exist",
+  "summary": {
+    "headline": "notes.txt does not exist"
+  }
+}
