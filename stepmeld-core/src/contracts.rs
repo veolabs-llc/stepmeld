@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-pub const SCHEMAS: [(&str, &str); 8] = [
+pub const SCHEMAS: [(&str, &str); 10] = [
     ("stepmeld/step-definition.v1", include_str!("../schemas/step-definition.v1.schema.json")),
     ("stepmeld/workflow-definition.v1", include_str!("../schemas/workflow-definition.v1.schema.json")),
     ("stepmeld/workflow.v1", include_str!("../schemas/workflow.v1.schema.json")),
@@ -18,6 +18,9 @@ pub const SCHEMAS: [(&str, &str); 8] = [
     ("stepmeld/run-progress.v1", include_str!("../schemas/run-progress.v1.schema.json")),
     ("stepmeld/run-outcome.v1", include_str!("../schemas/run-outcome.v1.schema.json")),
     ("stepmeld/run-cancel.v1", include_str!("../schemas/run-cancel.v1.schema.json")),
+    // Orchestrators and Workers (docs/ORCHESTRATOR-WORKER.md)
+    ("stepmeld/order.v1", include_str!("../schemas/order.v1.schema.json")),
+    ("stepmeld/worker.v1", include_str!("../schemas/worker.v1.schema.json")),
 ];
 
 fn compiled() -> &'static HashMap<&'static str, Result<Validator, String>> {
@@ -98,6 +101,10 @@ mod tests {
         let workflow = schema("stepmeld/workflow.v1");
         assert_eq!(body(schema("stepmeld/run-outcome.v1")), workflow["$defs"]["outcome"], "run-outcome.v1 is workflow.v1's outcome");
         assert_eq!(body(schema("stepmeld/run-progress.v1")), workflow["$defs"]["progress"], "run-progress.v1 is workflow.v1's progress");
+        let order = schema("stepmeld/order.v1");
+        assert_eq!(order["$defs"]["outcome"], workflow["$defs"]["outcome"], "an order's outcome is a Run's");
+        assert_eq!(order["$defs"]["progress"], workflow["$defs"]["progress"], "an order's progress is a Run's");
+        assert_eq!(order["$defs"]["request"], body(schema("stepmeld/run-request.v1")), "an order's request is the run directory's");
     }
 
     /// Every golden fixture validates against the contract its

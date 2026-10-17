@@ -9,6 +9,34 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## Orchestrators and Workers; the command's performers file is gone
+
+*Breaking for the command; additive for the library. Note:
+`docs/ORCHESTRATOR-WORKER.md`. Contracts: `stepmeld/order.v1`,
+`stepmeld/worker.v1`.*
+
+**Before:** `stepmeld --performers <file>` told the command this
+machine's programs, and `tick` ran them in the same process. **Now:**
+a Worker registers its programs in its own store
+(`stepmeld worker program add <verb> -- <command...>`, kept in
+`stepmeld-worker.sqlite`), `stepmeld work` runs it, and `tick` places
+each Run as an order on a Worker that published itself to the shared
+store. `place` takes a Worker's name and no locality: locality comes
+from the Worker.
+
+**Who notices:** anything that calls the command with `--performers`
+or `stepmeld performers` (both are gone), or `place` with a locality.
+A shared store file from before gains its new tables when opened. In
+the library, `StateStore` is unchanged; `OrderBook` is a new trait,
+implemented by the memory and SQLite stores. `stepmeld_local::file`
+still reads a performers file, but the command no longer does.
+
+**What to do:** register each program once with `stepmeld worker
+program add`, run `stepmeld work --watch` on each machine that does
+work, and orchestrate with `stepmeld tick` as before. A driver built in
+code reaches Workers with `OrderPerformer::for_workers` and runs one
+with `orders::Worker`.
+
 ## A cancel is a request with a deadline
 
 *Behaviour change, `stepmeld-local`. Contract: `contracts/run-directory.v1.md`.*

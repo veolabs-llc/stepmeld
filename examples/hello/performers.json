@@ -1,7 +1,0 @@
-{
-  "name": "local",
-  "root": "runs",
-  "programs": [
-    {"verb": {"name": "add", "version": 1}, "command": ["python3", "add.py"]}
-  ]
-}

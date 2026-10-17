@@ -1,6 +1,13 @@
-//! A [`StateStore`] in one SQLite file: definitions, workflows with a
-//! version per write, the history with a sequence per workflow, and
-//! leases. Every conditional write is one transaction.
+//! stepmeld's stores in SQLite files (docs/ORCHESTRATOR-WORKER.md):
+//!
+//! - [`SqliteStore`], the shared store: a [`StateStore`] (definitions,
+//!   workflows with a version per write, the history with a sequence per
+//!   workflow, leases) and an [`OrderBook`] (orders and the Workers that
+//!   published themselves) in one file. Every conditional write is one
+//!   transaction.
+//! - [`WorkerStore`], one Worker's private store: its name, where its
+//!   Runs keep their files, whether it is a cloud Worker, and its
+//!   programs. Nothing in it reaches the shared store.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -8,6 +15,7 @@ use std::sync::Mutex;
 use stepmeld_core::definition::{Ref, StepDefinition, WorkflowDefinition};
 use stepmeld_core::history::Entry;
 use stepmeld_core::library::Library;
+use stepmeld_core::orders::{CancelAsk, Order, OrderBook, Report, WorkerFace};
 use stepmeld_core::store::StateStore;
 use stepmeld_core::workflow::Workflow;
 use stepmeld_core::Error;
@@ -39,7 +47,9 @@ impl SqliteStore {
              CREATE TABLE IF NOT EXISTS definitions (kind TEXT NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (kind, name, version));
              CREATE TABLE IF NOT EXISTS workflows (id TEXT PRIMARY KEY, version INTEGER NOT NULL, doc TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS history (workflow TEXT NOT NULL, seq INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (workflow, seq));
-             CREATE TABLE IF NOT EXISTS leases (workflow TEXT PRIMARY KEY, holder TEXT NOT NULL, until TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS leases (workflow TEXT PRIMARY KEY, holder TEXT NOT NULL, until TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS orders (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, worker TEXT NOT NULL, doc TEXT NOT NULL, cancel TEXT, report TEXT, ended INTEGER NOT NULL DEFAULT 0);",
         )
         .map_err(db)?;
         Ok(SqliteStore {
@@ -210,6 +220,182 @@ impl StateStore for SqliteStore {
     }
 }
 
+/// An order as stored: the Orchestrator's part, then the cancel and the
+/// report, each written by its own side.
+fn order_from(text: &str, cancel: Option<String>, report: Option<String>) -> Result<Order, Error> {
+    let mut order: Order = doc(text, "an order")?;
+    order.cancel = cancel.map(|c| doc::<CancelAsk>(&c, "an order's cancel")).transpose()?;
+    order.report = report.map(|r| doc::<Report>(&r, "an order's report")).transpose()?;
+    Ok(order)
+}
+
+impl OrderBook for SqliteStore {
+    fn publish_worker(&self, face: &WorkerFace) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("INSERT OR REPLACE INTO workers (name, doc) VALUES (?1, ?2)", params![face.name, serde_json::to_string(face).unwrap()])
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn workers(&self) -> Result<Vec<WorkerFace>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT doc FROM workers ORDER BY name").map_err(db)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(db)?;
+        rows.map(|r| r.map_err(db).and_then(|t| doc(&t, "a worker"))).collect()
+    }
+
+    fn place(&self, order: &Order) -> Result<(), Error> {
+        let bare = Order { cancel: None, report: None, ..order.clone() };
+        let conn = self.conn.lock().unwrap();
+        conn.execute("INSERT OR IGNORE INTO orders (id, worker, doc) VALUES (?1, ?2, ?3)", params![order.id, order.worker, serde_json::to_string(&bare).unwrap()])
+            .map_err(db)?;
+        Ok(())
+    }
+
+    fn order(&self, id: &str) -> Result<Option<Order>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, Option<String>, Option<String>)> = conn
+            .query_row("SELECT doc, cancel, report FROM orders WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()
+            .map_err(db)?;
+        row.map(|(d, c, r)| order_from(&d, c, r)).transpose()
+    }
+
+    fn open_orders(&self, worker: &str) -> Result<Vec<Order>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT doc, cancel, report FROM orders WHERE worker = ?1 AND ended = 0 ORDER BY seq").map_err(db)?;
+        let rows = stmt.query_map(params![worker], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?))).map_err(db)?;
+        rows.map(|r| r.map_err(db).and_then(|(d, c, rep)| order_from(&d, c, rep))).collect()
+    }
+
+    fn report(&self, id: &str, report: &Report) -> Result<(), Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = write(&mut conn)?;
+        let ended: Option<i64> = tx.query_row("SELECT ended FROM orders WHERE id = ?1", params![id], |r| r.get(0)).optional().map_err(db)?;
+        match ended {
+            None => return Err(Error::Refused(format!("no order {id:?}"))),
+            Some(1) => return Err(Error::Refused(format!("order {id} has ended"))),
+            Some(_) => {}
+        }
+        tx.execute("UPDATE orders SET report = ?2, ended = ?3 WHERE id = ?1", params![id, serde_json::to_string(report).unwrap(), report.outcome.is_some() as i64])
+            .map_err(db)?;
+        tx.commit().map_err(db)
+    }
+
+    fn ask_cancel(&self, id: &str, ask: &CancelAsk) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE orders SET cancel = ?2 WHERE id = ?1 AND cancel IS NULL AND ended = 0", params![id, serde_json::to_string(ask).unwrap()])
+            .map_err(db)?;
+        Ok(())
+    }
+}
+
+/// One Worker's private store: what only this Worker needs, and what
+/// differs from machine to machine.
+pub struct WorkerStore {
+    conn: Mutex<Connection>,
+    path: String,
+}
+
+/// A Worker's own settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerSettings {
+    /// Its name in the shared store; Performer names are Worker names.
+    pub name: String,
+    /// Where its Runs keep their files.
+    pub root: String,
+    /// Its work happens in the cloud.
+    pub cloud: bool,
+}
+
+impl WorkerStore {
+    /// Open or create the file; a new store takes `default_name` as the
+    /// Worker's name and `runs` as where Runs keep their files.
+    pub fn open(path: &Path, default_name: &str) -> Result<WorkerStore, Error> {
+        let conn = Connection::open(path).map_err(db)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS programs (name TEXT NOT NULL, version INTEGER NOT NULL, command TEXT NOT NULL, PRIMARY KEY (name, version));",
+        )
+        .map_err(db)?;
+        for (key, value) in [("name", default_name), ("root", "runs"), ("cloud", "false")] {
+            conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)", params![key, value]).map_err(db)?;
+        }
+        Ok(WorkerStore {
+            conn: Mutex::new(conn),
+            path: path.display().to_string(),
+        })
+    }
+
+    pub fn describe(&self) -> String {
+        format!("sqlite {}", self.path)
+    }
+
+    fn get(&self, key: &str) -> Result<String, Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0)).map_err(db)
+    }
+
+    fn set(&self, key: &str, value: &str) -> Result<(), Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)", params![key, value]).map_err(db)?;
+        Ok(())
+    }
+
+    pub fn settings(&self) -> Result<WorkerSettings, Error> {
+        Ok(WorkerSettings {
+            name: self.get("name")?,
+            root: self.get("root")?,
+            cloud: self.get("cloud")? == "true",
+        })
+    }
+
+    pub fn set_name(&self, name: &str) -> Result<(), Error> {
+        if name.trim().is_empty() {
+            return Err(Error::Refused("a Worker's name cannot be empty".into()));
+        }
+        self.set("name", name)
+    }
+
+    pub fn set_root(&self, root: &str) -> Result<(), Error> {
+        self.set("root", root)
+    }
+
+    pub fn set_cloud(&self, cloud: bool) -> Result<(), Error> {
+        self.set("cloud", if cloud { "true" } else { "false" })
+    }
+
+    /// Each verb this Worker has a program for, and the command that
+    /// runs it (the Run's directory is appended).
+    pub fn programs(&self) -> Result<Vec<(Ref, Vec<String>)>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT name, version, command FROM programs ORDER BY name, version").map_err(db)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?))).map_err(db)?;
+        rows.map(|r| r.map_err(db).and_then(|(n, v, c)| Ok((Ref::new(&n, v), doc::<Vec<String>>(&c, "a program's command")?)))).collect()
+    }
+
+    /// Register the program for a verb, replacing any before it.
+    pub fn add_program(&self, verb: &Ref, command: &[String]) -> Result<(), Error> {
+        if command.is_empty() {
+            return Err(Error::Refused(format!("the program for {verb} has no command")));
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO programs (name, version, command) VALUES (?1, ?2, ?3)",
+            params![verb.name, verb.version, serde_json::to_string(command).unwrap()],
+        )
+        .map_err(db)?;
+        Ok(())
+    }
+
+    /// Forget the program for a verb; whether there was one.
+    pub fn remove_program(&self, verb: &Ref) -> Result<bool, Error> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute("DELETE FROM programs WHERE name = ?1 AND version = ?2", params![verb.name, verb.version]).map_err(db)? > 0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +403,44 @@ mod tests {
     #[test]
     fn the_sqlite_store_conforms() {
         stepmeld_core::store::conformance::run(&SqliteStore::in_memory().unwrap());
+    }
+
+    #[test]
+    fn the_sqlite_store_keeps_orders_as_the_book_says() {
+        stepmeld_core::orders::conformance::run(&SqliteStore::in_memory().unwrap());
+    }
+
+    #[test]
+    fn a_worker_store_keeps_its_settings_and_programs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.sqlite");
+        let w = WorkerStore::open(&path, "desk").unwrap();
+        assert_eq!(
+            w.settings().unwrap(),
+            WorkerSettings {
+                name: "desk".into(),
+                root: "runs".into(),
+                cloud: false
+            }
+        );
+        w.add_program(&Ref::new("add", 1), &["python3".into(), "add.py".into()]).unwrap();
+        w.set_cloud(true).unwrap();
+        w.set_name("queue").unwrap();
+        assert!(w.add_program(&Ref::new("x", 1), &[]).is_err());
+        drop(w);
+        let again = WorkerStore::open(&path, "other-default").unwrap();
+        assert_eq!(
+            again.settings().unwrap(),
+            WorkerSettings {
+                name: "queue".into(),
+                root: "runs".into(),
+                cloud: true
+            },
+            "a default never replaces a setting"
+        );
+        assert_eq!(again.programs().unwrap(), vec![(Ref::new("add", 1), vec!["python3".to_string(), "add.py".to_string()])]);
+        assert!(again.remove_program(&Ref::new("add", 1)).unwrap());
+        assert!(!again.remove_program(&Ref::new("add", 1)).unwrap());
     }
 
     /// Two processes write one file: a lease taken while another

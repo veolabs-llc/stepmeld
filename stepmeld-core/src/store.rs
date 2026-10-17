@@ -64,6 +64,9 @@ struct MemoryInner {
     workflows: BTreeMap<String, (Workflow, u64)>,
     history: BTreeMap<String, Vec<Entry>>,
     leases: BTreeMap<String, (String, String)>,
+    workers: BTreeMap<String, crate::orders::WorkerFace>,
+    /// In the order placed.
+    orders: Vec<crate::orders::Order>,
 }
 
 impl MemoryStore {
@@ -173,6 +176,53 @@ impl StateStore for MemoryStore {
 }
 
 /// The StateStore contract as tests.
+impl crate::orders::OrderBook for MemoryStore {
+    fn publish_worker(&self, face: &crate::orders::WorkerFace) -> Result<(), Error> {
+        self.inner.lock().unwrap().workers.insert(face.name.clone(), face.clone());
+        Ok(())
+    }
+
+    fn workers(&self) -> Result<Vec<crate::orders::WorkerFace>, Error> {
+        Ok(self.inner.lock().unwrap().workers.values().cloned().collect())
+    }
+
+    fn place(&self, order: &crate::orders::Order) -> Result<(), Error> {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.orders.iter().any(|o| o.id == order.id) {
+            inner.orders.push(order.clone());
+        }
+        Ok(())
+    }
+
+    fn order(&self, id: &str) -> Result<Option<crate::orders::Order>, Error> {
+        Ok(self.inner.lock().unwrap().orders.iter().find(|o| o.id == id).cloned())
+    }
+
+    fn open_orders(&self, worker: &str) -> Result<Vec<crate::orders::Order>, Error> {
+        Ok(self.inner.lock().unwrap().orders.iter().filter(|o| o.worker == worker && !o.ended()).cloned().collect())
+    }
+
+    fn report(&self, id: &str, report: &crate::orders::Report) -> Result<(), Error> {
+        let mut inner = self.inner.lock().unwrap();
+        let order = inner.orders.iter_mut().find(|o| o.id == id).ok_or_else(|| Error::Refused(format!("no order {id:?}")))?;
+        if order.ended() {
+            return Err(Error::Refused(format!("order {id} has ended")));
+        }
+        order.report = Some(report.clone());
+        Ok(())
+    }
+
+    fn ask_cancel(&self, id: &str, ask: &crate::orders::CancelAsk) -> Result<(), Error> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(order) = inner.orders.iter_mut().find(|o| o.id == id) {
+            if order.cancel.is_none() && !order.ended() {
+                order.cancel = Some(ask.clone());
+            }
+        }
+        Ok(())
+    }
+}
+
 pub mod conformance {
     use super::*;
     use crate::workflow::{Actor, Stamp};
@@ -260,5 +310,10 @@ mod tests {
     #[test]
     fn the_memory_store_conforms() {
         super::conformance::run(&super::MemoryStore::new());
+    }
+
+    #[test]
+    fn the_memory_store_keeps_orders_as_the_book_says() {
+        crate::orders::conformance::run(&super::MemoryStore::new());
     }
 }

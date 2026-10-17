@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stepmeld/order.v1",
+  "title": "One Run's work, addressed to one Worker in the shared store. The Orchestrator writes the request and any cancel; the Worker writes the report.",
+  "type": "object",
+  "required": [
+    "contract",
+    "id",
+    "worker",
+    "placed",
+    "request"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "stepmeld/order.v1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The Run's id: one order per Run."
+    },
+    "worker": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The Worker it is addressed to, by name."
+    },
+    "placed": {
+      "$ref": "#/$defs/time"
+    },
+    "request": {
+      "$ref": "#/$defs/request"
+    },
+    "cancel": {
+      "type": "object",
+      "required": [
+        "reason",
+        "at"
+      ],
+      "additionalProperties": false,
+      "description": "A cancel asked for by an Orchestrator; the first ask stands.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "at": {
+          "$ref": "#/$defs/time"
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": [
+        "at"
+      ],
+      "additionalProperties": false,
+      "description": "The Worker's latest word: progress while it runs, the outcome once it ends (final), the log so far.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/time"
+        },
+        "progress": {
+          "$ref": "#/$defs/progress"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "log": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "time": {
+      "type": "string",
+      "description": "RFC 3339, UTC, so that later sorts later."
+    },
+    "progress": {
+      "type": "object",
+      "required": [
+        "at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "type": "string"
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unit": {
+          "type": "string"
+        },
+        "at": {
+          "$ref": "#/$defs/time"
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "canceled",
+            "lost"
+          ]
+        },
+        "class": {
+          "type": "string",
+          "description": "The failure's class, the Performer's word; `refused`, `fault` and `lost` are the engine's."
+        },
+        "reason": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "headline"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "headline": {
+              "type": "string"
+            },
+            "details": {}
+          }
+        },
+        "outputs": {
+          "type": "object"
+        },
+        "metrics": {}
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "workflow",
+        "step",
+        "run",
+        "definition",
+        "inputs",
+        "parameters",
+        "outputs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "minLength": 1
+        },
+        "step": {
+          "$ref": "#/$defs/name"
+        },
+        "run": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Run's id. A Performer asked twice for the same Run starts one program."
+        },
+        "definition": {
+          "$ref": "#/$defs/ref",
+          "description": "The verb: a program may perform several and picks by name."
+        },
+        "inputs": {
+          "type": "object",
+          "description": "Every Input that holds a Value, by name. Values are opaque JSON."
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Every Parameter in effect (the verb's default where no Actor chose), by name."
+        },
+        "outputs": {
+          "type": "array",
+          "description": "What a success must produce: each declared Output, by name and tag.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "tag"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/port"
+              },
+              "tag": {
+                "$ref": "#/$defs/tag"
+              },
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                },
+                "description": "Present on a Decision (tag `decision`): the words its Value may be."
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "ref": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[^.\\s]+$",
+      "description": "No dots: names are joined with ports by a dot."
+    },
+    "port": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "An opaque label, compared for equality."
+    }
+  }
+}
