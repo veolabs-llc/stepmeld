@@ -24,5 +24,6 @@
     "placement": {},
     "start": "automatic"
   },
+  "program": "revise-program",
   "version": 1
 }

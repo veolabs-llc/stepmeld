@@ -1,14 +1,14 @@
 # The run directory protocol, v1
 
 How a Performer and a program that does a Step's work speak to each
-other on one machine: files in a directory, so a verb can be a program
-in any language. It is the first wire form of the Performer contract
-(`docs/DESIGN.md` §4.2); a wire form between machines is still open
-(§11).
+other on one machine: files in a directory, so a program can be
+written in any language. It is the Performer contract's form on one
+machine (`docs/DESIGN.md` §4.2); between machines, Runs travel as
+orders (`docs/ORCHESTRATOR-WORKER.md`).
 
 `stepmeld-local` is the Performer side. `stepmeld-verb` (Rust) and
-`stepmeld.verb` (Python) are the program side, so a verb need not write
-the files by hand.
+`stepmeld.verb` (Python) are the program side, so a program need not
+write the files by hand.
 
 ## Invocation
 
@@ -16,9 +16,10 @@ the files by hand.
 <program> [fixed args...] <run-dir>
 ```
 
-A machine's performers file maps each verb (name and version) to a
-command line; the Performer appends the Run's directory as the last
-argument. Standard input is closed. Standard output and standard error
+A StepDefinition names its program; the request carries that name
+(`program`), and the Worker runs the command it registered under it
+(`stepmeld worker program set <program> -- <command...>`), with the
+Run's directory appended as the last argument. Standard input is closed. Standard output and standard error
 both go to `log.txt`. One directory per Run, named from the Run's id;
 asked to start the same Run again, the Performer starts nothing and
 returns the same handle.

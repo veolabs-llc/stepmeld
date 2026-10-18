@@ -316,7 +316,7 @@ impl WorkerStore {
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS programs (name TEXT NOT NULL, version INTEGER NOT NULL, command TEXT NOT NULL, PRIMARY KEY (name, version));",
+             CREATE TABLE IF NOT EXISTS program_commands (name TEXT PRIMARY KEY, command TEXT NOT NULL);",
         )
         .map_err(db)?;
         for (key, value) in [("name", default_name), ("root", "runs"), ("cloud", "false")] {
@@ -366,33 +366,34 @@ impl WorkerStore {
         self.set("cloud", if cloud { "true" } else { "false" })
     }
 
-    /// Each verb this Worker has a program for, and the command that
-    /// runs it (the Run's directory is appended).
-    pub fn programs(&self) -> Result<Vec<(Ref, Vec<String>)>, Error> {
+    /// Each program this Worker has, by the name StepDefinitions use,
+    /// and the command that runs it here (the Run's directory is
+    /// appended).
+    pub fn programs(&self) -> Result<Vec<(String, Vec<String>)>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT name, version, command FROM programs ORDER BY name, version").map_err(db)?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?))).map_err(db)?;
-        rows.map(|r| r.map_err(db).and_then(|(n, v, c)| Ok((Ref::new(&n, v), doc::<Vec<String>>(&c, "a program's command")?)))).collect()
+        let mut stmt = conn.prepare("SELECT name, command FROM program_commands ORDER BY name").map_err(db)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db)?;
+        rows.map(|r| r.map_err(db).and_then(|(n, c)| Ok((n, doc::<Vec<String>>(&c, "a program's command")?)))).collect()
     }
 
-    /// Register the program for a verb, replacing any before it.
-    pub fn add_program(&self, verb: &Ref, command: &[String]) -> Result<(), Error> {
+    /// Set the command for a program, replacing any before it.
+    pub fn set_program(&self, name: &str, command: &[String]) -> Result<(), Error> {
+        if name.trim().is_empty() || name.chars().any(char::is_whitespace) {
+            return Err(Error::Refused(format!("{name:?} is not a program name (no spaces)")));
+        }
         if command.is_empty() {
-            return Err(Error::Refused(format!("the program for {verb} has no command")));
+            return Err(Error::Refused(format!("program {name} has no command")));
         }
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR REPLACE INTO programs (name, version, command) VALUES (?1, ?2, ?3)",
-            params![verb.name, verb.version, serde_json::to_string(command).unwrap()],
-        )
-        .map_err(db)?;
+        conn.execute("INSERT OR REPLACE INTO program_commands (name, command) VALUES (?1, ?2)", params![name, serde_json::to_string(command).unwrap()])
+            .map_err(db)?;
         Ok(())
     }
 
-    /// Forget the program for a verb; whether there was one.
-    pub fn remove_program(&self, verb: &Ref) -> Result<bool, Error> {
+    /// Forget a program; whether there was one.
+    pub fn remove_program(&self, name: &str) -> Result<bool, Error> {
         let conn = self.conn.lock().unwrap();
-        Ok(conn.execute("DELETE FROM programs WHERE name = ?1 AND version = ?2", params![verb.name, verb.version]).map_err(db)? > 0)
+        Ok(conn.execute("DELETE FROM program_commands WHERE name = ?1", params![name]).map_err(db)? > 0)
     }
 }
 
@@ -423,10 +424,11 @@ mod tests {
                 cloud: false
             }
         );
-        w.add_program(&Ref::new("add", 1), &["hello-verbs".into()]).unwrap();
+        w.set_program("hello-program", &["/opt/bin/hello-program".into()]).unwrap();
         w.set_cloud(true).unwrap();
         w.set_name("queue").unwrap();
-        assert!(w.add_program(&Ref::new("x", 1), &[]).is_err());
+        assert!(w.set_program("x", &[]).is_err());
+        assert!(w.set_program("two words", &["x".into()]).is_err());
         drop(w);
         let again = WorkerStore::open(&path, "other-default").unwrap();
         assert_eq!(
@@ -438,9 +440,9 @@ mod tests {
             },
             "a default never replaces a setting"
         );
-        assert_eq!(again.programs().unwrap(), vec![(Ref::new("add", 1), vec!["hello-verbs".to_string()])]);
-        assert!(again.remove_program(&Ref::new("add", 1)).unwrap());
-        assert!(!again.remove_program(&Ref::new("add", 1)).unwrap());
+        assert_eq!(again.programs().unwrap(), vec![("hello-program".to_string(), vec!["/opt/bin/hello-program".to_string()])]);
+        assert!(again.remove_program("hello-program").unwrap());
+        assert!(!again.remove_program("hello-program").unwrap());
     }
 
     /// Two processes write one file: a lease taken while another
@@ -469,15 +471,16 @@ mod tests {
     fn a_file_store_keeps_what_was_put_across_opens() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.sqlite");
-        let mut def = StepDefinition::new("verb", 1);
-        def.label = Some("A verb".into());
+        let mut def = StepDefinition::new("stepdef_note", 1);
+        def.program = Some("note-program".into());
+        def.label = Some("Take a note".into());
         {
             let store = SqliteStore::open(&path).unwrap();
             store.put_step(&def).unwrap();
             stepmeld_core::store::conformance::run(&store);
         }
         let store = SqliteStore::open(&path).unwrap();
-        assert_eq!(store.library().unwrap().step(&def.reference()).unwrap().label.as_deref(), Some("A verb"));
+        assert_eq!(store.library().unwrap().step(&def.reference()).unwrap().label.as_deref(), Some("Take a note"));
         // the suite removes its Workflow at the end and puts it again: no history
         assert!(store.get("conformance-wf").unwrap().is_some());
         assert!(store.history("conformance-wf").unwrap().is_empty(), "removed and put again, with no history");

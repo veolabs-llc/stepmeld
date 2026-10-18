@@ -1,7 +1,7 @@
 //! The README's walkthrough from the shell (docs/ORCHESTRATOR-WORKER.md):
 //! the definitions in `examples/hello` (add, then multiply the sum), a
-//! Worker whose program is a shell script standing in for
-//! `hello-verbs`, `stepmeld work` running it, `stepmeld tick`
+//! Worker whose program `hello-program` is a shell script standing in
+//! for the example's, `stepmeld work` running it, `stepmeld tick`
 //! orchestrating, the Outcomes read back. Nothing but the command
 //! touches the engine.
 
@@ -46,14 +46,14 @@ fn work(dir: &Path, worker_store: &str) -> Working {
 fn hello_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    // the program: performs add and multiply, as examples/hello's hello-verbs does
+    // the program: does the work of stepdef_add and stepdef_multiply, as examples/hello's hello-program does
     std::fs::write(
         d.join("verbs.sh"),
         r#"#!/bin/sh
 run="$1"
 set -- $(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); i=r["inputs"]; print(r["definition"]["name"], i.get("a", i.get("value")), i.get("b", i.get("factor")))' "$run/request.json")
 verb=$1; x=$2; y=$3
-if [ "$verb" = add ]; then r=$((x + y)); out=sum; sign=+; else r=$((x * y)); out=product; sign=x; fi
+if [ "$verb" = stepdef_add ]; then r=$((x + y)); out=sum; sign=+; else r=$((x * y)); out=product; sign=x; fi
 echo '{"phase":"'"$verb"'","done":0,"total":3,"at":"now"}' > "$run/progress.json"
 echo "$verb $x and $y"
 echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"'"$x $sign $y = $r"'"}}' > "$run/outcome.json"
@@ -69,36 +69,40 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     // a recipe nesting another may be named before it in one add
     std::fs::write(
         d.join("outer.json"),
-        serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "hello-twice", "version": 1, "steps": [{"name": "once", "step": {"name": "hello", "version": 1}}]}).to_string(),
+        serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "hello-twice", "version": 1, "steps": [{"name": "once", "step": {"name": "workflowdef_hello", "version": 1}}]}).to_string(),
     )
     .unwrap();
-    let (ok, out) = stepmeld(d, &["add", "outer.json", "stepdef_add.json", "stepdef_multiply.json", "workflowdef_hello.json"]);
-    assert!(ok && out.contains("added recipe hello-twice v1"), "{out}");
-    let (ok, out) = stepmeld(d, &["add", "outer.json"]);
+    let (ok, out) = stepmeld(d, &["library", "add", "outer.json", "stepdef_add.json", "stepdef_multiply.json", "workflowdef_hello.json"]);
+    assert!(ok && out.contains("added StepDefinition stepdef_add v1") && out.contains("added WorkflowDefinition hello-twice v1"), "{out}");
+    let (ok, out) = stepmeld(d, &["library", "add", "outer.json"]);
     assert!(ok, "adding again is fine: {out}");
     std::fs::write(
         d.join("orphan.json"),
         serde_json::json!({"contract": "stepmeld/workflow-definition.v1", "name": "orphan", "version": 1, "steps": [{"name": "x", "step": {"name": "nope", "version": 1}}]}).to_string(),
     )
     .unwrap();
-    let (ok, out) = stepmeld(d, &["add", "orphan.json"]);
+    let (ok, out) = stepmeld(d, &["library", "add", "orphan.json"]);
     assert!(!ok && out.contains("not in the library"), "{out}");
     let (ok, out) = stepmeld(d, &["library"]);
-    assert!(ok && out.contains("verb    add v1") && out.contains("verb    multiply v1") && out.contains("recipe  hello v1"), "{out}");
+    assert!(
+        ok && out.contains("StepDefinition      stepdef_add v1") && out.contains("(program hello-program)") && out.contains("WorkflowDefinition  workflowdef_hello v1"),
+        "{out}"
+    );
 
     // this machine's Worker: named, and its program registered in its own store
     let (ok, out) = stepmeld(d, &["work"]);
     assert!(!ok && out.contains("no programs yet"), "{out}");
     let (ok, out) = stepmeld(d, &["worker", "set", "--name", "local"]);
     assert!(ok && out.contains("worker   local"), "{out}");
-    for verb in ["add", "multiply"] {
-        let (ok, out) = stepmeld(d, &["worker", "program", "add", verb, "--", "sh", &verbs]);
-        assert!(ok, "{out}");
-    }
+    let (ok, out) = stepmeld(d, &["worker", "program", "set", "hello-program", "--", "sh", &verbs]);
+    assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["worker"]);
-    assert!(ok && out.contains("program  add v1") && out.contains("program  multiply v1") && out.contains("verbs.sh"), "{out}");
+    assert!(
+        ok && out.contains("program  hello-program") && out.contains("verbs.sh") && out.contains("offers   stepdef_add v1, stepdef_multiply v1"),
+        "{out}"
+    );
 
-    let (ok, out) = stepmeld(d, &["create", "hello", "--id", "wf-1"]);
+    let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-1"]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["show", "wf-1"]);
     assert!(ok && out.contains("needs input a"), "{out}");
@@ -124,7 +128,7 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     assert!(ok && out.contains("2 + 3 = 5") && out.contains("sum            5") && out.contains("1  (default)") && out.contains("run 1 on local"), "{out}");
     assert!(out.contains("value          5") && out.contains("product        20") && out.contains("5 x 4 = 20"), "the sum flowed into multiply: {out}");
     let (ok, out) = stepmeld(d, &["log", "wf-1", "multiply"]);
-    assert!(ok && out.contains("multiply 5 and 4"), "{out}");
+    assert!(ok && out.contains("stepdef_multiply 5 and 4"), "{out}");
     let (ok, out) = stepmeld(d, &["history", "wf-1"]);
     assert!(ok && out.contains("run-ended") && out.contains("policy start-automatically"), "{out}");
 
@@ -132,10 +136,10 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     // and a confirm-before-cloud policy holds the step for a person
     let (ok, out) = stepmeld_as(d, "cloud-worker.sqlite", &["worker", "set", "--name", "batch", "--cloud", "true"]);
     assert!(ok && out.contains("cloud    yes"), "{out}");
-    let (ok, out) = stepmeld_as(d, "cloud-worker.sqlite", &["worker", "program", "add", "add", "--", "sh", &verbs]);
+    let (ok, out) = stepmeld_as(d, "cloud-worker.sqlite", &["worker", "program", "set", "hello-program", "--", "sh", &verbs]);
     assert!(ok, "{out}");
     let _cloud = work(d, "cloud-worker.sqlite");
-    let (ok, out) = stepmeld(d, &["create", "hello", "--id", "wf-2"]);
+    let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-2"]);
     assert!(ok, "{out}");
     for (step, input, value) in [("add", "a", "40"), ("add", "b", "2"), ("multiply", "factor", "10")] {
         let (ok, out) = stepmeld(d, &["set", "wf-2", step, "--input", input, "--value", value]);
@@ -147,6 +151,9 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     assert!(ok && out.contains("several Workers offer it"), "{out}");
     let (ok, out) = stepmeld(d, &["place", "wf-2", "add", "nobody"]);
     assert!(!ok && out.contains("no Worker \"nobody\""), "{out}");
+    // both Workers have hello-program, so multiply is placed by hand too
+    let (ok, out) = stepmeld(d, &["place", "wf-2", "multiply", "local"]);
+    assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["policy", "wf-2", "add", "--to", r#"{"placement":{"performer":"batch","confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick"]);

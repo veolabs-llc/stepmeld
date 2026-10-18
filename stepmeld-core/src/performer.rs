@@ -194,7 +194,10 @@ pub mod conformance {
     pub fn run(p: &dyn Performer, request: &StartRequest, finish: &dyn Fn(&str)) {
         let face = p.describe();
         assert!(!face.name.is_empty(), "a performer has a name");
-        assert!(face.verbs.contains(&request.definition), "the performer offers the request's verb");
+        // a Performer an Orchestrator places Runs on offers the request's
+        // StepDefinition; a mechanism behind a Worker lists none, since
+        // its programs say what it runs
+        assert!(face.verbs.is_empty() || face.verbs.contains(&request.definition), "the performer offers the request's StepDefinition");
         assert!(matches!(p.observe("no-such-handle"), Observation::Absent | Observation::Unreachable { .. }), "an unknown handle is absent, never a run");
         let h1 = p.start(request).expect("the request is accepted");
         let h2 = p.start(request).expect("asked again, still accepted");
@@ -227,6 +230,7 @@ mod tests {
             step: "s".into(),
             run: "wf/s/1".into(),
             definition: Ref::new("verb", 1),
+            program: Some("p".into()),
             inputs: BTreeMap::new(),
             parameters: BTreeMap::new(),
             outputs: Vec::new(),

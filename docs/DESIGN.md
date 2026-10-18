@@ -61,7 +61,7 @@ recipes; never any values) and what exists once a workflow is minted
 | Term | Meaning |
 |---|---|
 | **Library** | The WorkflowDefinitions and StepDefinitions available for composing and running. Running never writes to it. |
-| **StepDefinition** | A verb: its InputDefinitions, ParameterDefinitions and OutputDefinitions. What a step's implementation uses (a tool, a program, an image) is hidden inside it; the engine never sees it. |
+| **StepDefinition** | A verb: its InputDefinitions, ParameterDefinitions and OutputDefinitions, and the program that does its work, by name. Which command runs that program is each Worker's to say (`docs/ORCHESTRATOR-WORKER.md` §4); the engine never runs it itself. |
 | **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Versioned, immutable. It declares no inputs or outputs of its own (§5.3). |
 | **Binding** | A connection from one named step's Output to another named step's Input, optionally guarded. The only structure in a recipe; there is no step order. |
 | **InputDefinition** | A name, a tag, whether required. |

@@ -1,16 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stepmeld/step-definition.v1",
-  "title": "A verb: what a Step takes, what it gives, how it is run by default. Holds no Values.",
+  "title": "A StepDefinition: what a Step takes, what it gives, which program does it, how it is run by default. Holds no Values.",
   "type": "object",
   "required": ["contract", "name", "version"],
   "additionalProperties": false,
+  "if": { "properties": { "done_by": { "const": "person" } }, "required": ["done_by"] },
+  "then": { "not": { "required": ["program"] } },
+  "else": { "required": ["program"] },
   "properties": {
     "contract": { "const": "stepmeld/step-definition.v1" },
     "name": { "$ref": "#/$defs/name" },
     "version": { "type": "integer", "minimum": 1 },
     "label": { "type": "string" },
     "description": { "type": "string" },
+    "program": { "type": "string", "pattern": "^\\S+$", "description": "The program that does the work, by name; each Worker maps the name to a command on its own machine. Required when a Performer does the work, absent when a person does." },
     "done_by": { "enum": ["performer", "person"], "default": "performer" },
     "inputs": {
       "type": "array",

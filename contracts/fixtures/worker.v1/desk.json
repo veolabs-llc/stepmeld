@@ -2,11 +2,8 @@
   "contract": "stepmeld/worker.v1",
   "name": "desk",
   "host": "desk.local",
-  "verbs": [
-    {
-      "name": "count-words",
-      "version": 1
-    }
+  "programs": [
+    "count-program"
   ],
   "seen": "2026-10-17T14:00:00Z"
 }

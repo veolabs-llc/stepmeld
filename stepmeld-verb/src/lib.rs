@@ -243,6 +243,7 @@ mod tests {
             step: "s".into(),
             run: "wf/s/1".into(),
             definition: Ref::new(verb, 1),
+            program: Some("count-program".into()),
             inputs: BTreeMap::from([("source".to_string(), json!({"file": "notes.txt", "sheet": "s1"}))]),
             parameters: BTreeMap::from([("slug".to_string(), json!("x"))]),
             outputs: vec![OutputDefinition {

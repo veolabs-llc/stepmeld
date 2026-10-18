@@ -1,9 +1,10 @@
 {
   "contract": "stepmeld/step-definition.v1",
-  "name": "multiply",
+  "name": "stepdef_multiply",
   "version": 1,
   "label": "Multiply by a factor",
   "description": "Multiplies value by factor, taking three beats so that its progress can be watched.",
+  "program": "hello-program",
   "inputs": [
     {"name": "value", "tag": "integer", "required": true},
     {"name": "factor", "tag": "integer", "required": true}

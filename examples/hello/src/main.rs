@@ -1,15 +1,17 @@
-//! The walkthrough's program, `hello-verbs`: one program performing two
-//! verbs, `add` (a + b) and `multiply` (value × factor), each slowly
-//! enough to watch. A Worker registers it once per verb.
+//! The walkthrough's program, `hello-program`: it does the work of two
+//! StepDefinitions, `stepdef_add` (a + b) and `stepdef_multiply`
+//! (value × factor), each slowly enough to watch. Both StepDefinitions
+//! name it (`"program": "hello-program"`), and a Worker registers the
+//! command for it once.
 //!
 //! A tag is a label, not a type: the engine never looks inside a
-//! Value, so each verb checks its own Inputs and refuses, in words, what
-//! it cannot use.
+//! Value, so each StepDefinition's work checks its own Inputs and
+//! refuses, in words, what it cannot use.
 //!
-//! Run by a Worker as `hello-verbs <run-dir>`: it reads the request from
-//! the run directory, picks the verb the request names, and writes
-//! progress and the outcome there, through `stepmeld-verb`
-//! (contracts/run-directory.v1.md).
+//! Run by a Worker as `hello-program <run-dir>`: it reads the request
+//! from the run directory, does the work of the StepDefinition the
+//! request names, and writes progress and the outcome there, through
+//! `stepmeld-verb` (contracts/run-directory.v1.md).
 
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -49,11 +51,12 @@ fn multiply(run: &mut Run) -> Result<()> {
     run.succeed(BTreeMap::from([("product".to_string(), json!(product))]), &format!("{value} × {factor} = {product}"), None)
 }
 
-const VERBS: &[(&str, stepmeld_verb::Verb)] = &[("add", add), ("multiply", multiply)];
+/// The work this program does, by StepDefinition.
+const STEP_DEFINITIONS: &[(&str, stepmeld_verb::Verb)] = &[("stepdef_add", add), ("stepdef_multiply", multiply)];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    std::process::exit(stepmeld_verb::main(VERBS, &args));
+    std::process::exit(stepmeld_verb::main(STEP_DEFINITIONS, &args));
 }
 
 #[cfg(test)]
@@ -62,14 +65,15 @@ mod tests {
     use std::path::Path;
 
     /// A run directory holding the request a Worker would hand over for
-    /// `verb`, with the Outputs its step definition declares.
-    fn run_dir(verb: &str, inputs: Value) -> tempfile::TempDir {
+    /// the StepDefinition in `stepdef_<step>.json`, with its Outputs.
+    fn run_dir(step: &str, inputs: Value) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("stepdef_{verb}.json"));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("stepdef_{step}.json"));
         let definition: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let request = json!({
-            "workflow": "hello-1", "step": verb, "run": format!("hello-1/{verb}/1"),
-            "definition": {"name": verb, "version": 1},
+            "workflow": "hello-1", "step": step, "run": format!("hello-1/{step}/1"),
+            "definition": {"name": definition["name"], "version": 1},
+            "program": definition["program"],
             "inputs": inputs,
             "parameters": {"beat-seconds": 0},
             "outputs": definition["outputs"],
@@ -83,7 +87,7 @@ mod tests {
     }
 
     fn perform(dir: &Path) -> i32 {
-        stepmeld_verb::main(VERBS, &[dir.display().to_string()])
+        stepmeld_verb::main(STEP_DEFINITIONS, &[dir.display().to_string()])
     }
 
     #[test]
@@ -104,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tag_is_not_a_type_so_each_verb_checks() {
+    fn a_tag_is_not_a_type_so_each_step_checks() {
         let d = run_dir("add", json!({"a": 2, "b": "three"}));
         assert_eq!(perform(d.path()), 1);
         let out = file(d.path(), "outcome.json");

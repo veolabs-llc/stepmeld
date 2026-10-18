@@ -22,6 +22,7 @@ fn max() -> Actor {
 
 fn verb(name: &str, inputs: &[(&str, &str)], params: &[(&str, &str, Option<Value>)], outputs: &[(&str, &str)]) -> StepDefinition {
     let mut d = StepDefinition::new(name, 1);
+    d.program = Some(format!("{name}-program"));
     d.inputs = inputs
         .iter()
         .map(|(n, t)| InputDefinition {
@@ -56,6 +57,7 @@ fn verb(name: &str, inputs: &[(&str, &str)], params: &[(&str, &str, Option<Value
 fn person_verb(name: &str, inputs: &[(&str, &str)], outputs: &[(&str, &str)], decision: Option<(&str, &[&str])>) -> StepDefinition {
     let mut d = verb(name, inputs, &[], outputs);
     d.done_by = DoneBy::Person;
+    d.program = None;
     if let Some((n, opts)) = decision {
         d.outputs.push(OutputDefinition {
             name: n.into(),
@@ -1048,7 +1050,15 @@ fn definitions_are_checked() {
     w.steps = vec![entry("a", "add"), entry("a", "add")];
     w.bindings = vec![];
     assert!(matches!(store.put_workflow_definition(&w), Err(Error::Invalid(m)) if m.contains("twice")));
+    // a StepDefinition a Performer does names its program; a person's names none
     let mut d = StepDefinition::new("x", 1);
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("names no program")));
+    d.program = Some("two words".into());
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("not a name")));
+    d.done_by = DoneBy::Person;
+    d.program = Some("x-program".into());
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("a person does it")));
+    d.done_by = DoneBy::Performer;
     d.outputs.push(OutputDefinition {
         name: "d".into(),
         tag: "string".into(),
