@@ -74,6 +74,10 @@ pub struct StartRequest {
     /// the same handle.
     pub run: String,
     pub definition: Ref,
+    /// The program the StepDefinition names; a Worker runs whatever
+    /// command it registered under that name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
     pub inputs: BTreeMap<String, Value>,
     pub parameters: BTreeMap<String, Value>,
     /// What the Performer must produce on success.
@@ -545,6 +549,7 @@ pub fn mint(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, step: &s
         step: step.to_string(),
         run: run_id.clone(),
         definition: s.definition.clone(),
+        program: sdef.program.clone(),
         inputs,
         parameters,
         outputs: sdef.outputs.clone(),
@@ -574,6 +579,7 @@ pub fn request_for(lib: &Library, wf: &Workflow, step: &str, run: &str) -> Resul
         step: step.to_string(),
         run: run.to_string(),
         definition: s.definition.clone(),
+        program: sdef.program.clone(),
         inputs: r.inputs.clone(),
         parameters: r.parameters.clone(),
         outputs: sdef.outputs.clone(),

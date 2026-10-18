@@ -26,9 +26,10 @@ fn person() -> Actor {
     Actor::person("ann")
 }
 
-/// The walkthrough's library: `hello`, one step that adds two integers.
+/// A one-step library, `add-two`: the walkthrough's first step alone.
 fn library(store: &MemoryStore) {
     let mut add = StepDefinition::new("add", 1);
+    add.program = Some("add-program".into());
     for n in ["a", "b"] {
         add.inputs.push(InputDefinition {
             name: n.into(),
@@ -44,7 +45,7 @@ fn library(store: &MemoryStore) {
         label: None,
     });
     store.put_step(&add).unwrap();
-    let mut w = WorkflowDefinition::new("hello", 1);
+    let mut w = WorkflowDefinition::new("add-two", 1);
     w.steps = vec![StepEntry {
         name: "add".into(),
         step: Ref::new("add", 1),
@@ -53,27 +54,28 @@ fn library(store: &MemoryStore) {
     store.put_workflow_definition(&w).unwrap();
 }
 
-/// A Worker on `host` whose mechanism is a memory Performer offering `add`.
+/// A Worker on `host` with the program `add-program`, whose mechanism
+/// is a memory Performer that performs `add`.
 fn worker(store: &Arc<MemoryStore>, name: &str, host: &str, cloud: bool) -> (Worker, Arc<MemoryPerformer>) {
     let mechanism = Arc::new(MemoryPerformer::new(PerformerFace {
         name: format!("{name}-programs"),
         locality: Locality::ThisMachine,
         verbs: vec![Ref::new("add", 1)],
     }));
-    (Worker::new(name, host, cloud, store.clone(), mechanism.clone()), mechanism)
+    (Worker::new(name, host, cloud, vec!["add-program".into()], store.clone(), mechanism.clone()), mechanism)
 }
 
 /// An Orchestrator on `host`: a driver with one Performer per published Worker.
 fn orchestrator(store: &Arc<MemoryStore>, host: &str) -> Driver {
     let mut d = Driver::new(store.clone(), &format!("orchestrator@{host}")).with_nesting();
-    for p in OrderPerformer::for_workers(store.clone(), host, clock()).unwrap() {
+    for p in OrderPerformer::for_workers(store.clone(), &store.library().unwrap(), host, clock()).unwrap() {
         d = d.with_performer(Arc::new(p));
     }
     d
 }
 
 fn begin(d: &Driver, id: &str) {
-    d.create(&Ref::new("hello", 1), id, None, &person(), &now(0)).unwrap();
+    d.create(&Ref::new("add-two", 1), id, None, &person(), &now(0)).unwrap();
     for (input, v) in [("a", 2), ("b", 3)] {
         d.command(
             id,

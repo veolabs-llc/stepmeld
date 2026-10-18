@@ -1,9 +1,10 @@
 {
   "contract": "stepmeld/step-definition.v1",
-  "name": "add",
+  "name": "stepdef_add",
   "version": 1,
   "label": "Add two integers",
   "description": "Adds a and b, taking three beats so that its progress can be watched.",
+  "program": "hello-program",
   "inputs": [
     {"name": "a", "tag": "integer", "required": true},
     {"name": "b", "tag": "integer", "required": true}

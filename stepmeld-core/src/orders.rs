@@ -11,8 +11,9 @@
 //! - [`Worker`]: the loop a Worker runs: publish itself, take its open
 //!   orders, run each through a mechanism (any [`Performer`]), report.
 
-use crate::definition::{Locality, Ref};
+use crate::definition::Locality;
 use crate::engine::{Observation, StartRequest};
+use crate::library::Library;
 use crate::performer::Performer;
 use crate::workflow::{Outcome, PerformerFace, Progress};
 use crate::Error;
@@ -33,17 +34,20 @@ pub struct WorkerFace {
     /// Its work happens in the cloud (it launches work there).
     #[serde(default)]
     pub cloud: bool,
-    pub verbs: Vec<Ref>,
+    /// The programs it has a command for, by name. It offers every
+    /// StepDefinition that names one of them.
+    pub programs: Vec<String>,
     /// When it last published itself.
     pub seen: String,
 }
 
 impl WorkerFace {
     /// The Performer an Orchestrator on `here` (a host name) places
-    /// Runs on for this Worker. Locality comes from the Worker: a cloud
-    /// Worker is `cloud`, one on the Orchestrator's own host
-    /// `this-machine`, any other `local-network`.
-    pub fn performer_face(&self, here: &str) -> PerformerFace {
+    /// Runs on for this Worker: it offers every StepDefinition in the
+    /// Library whose program the Worker has. Locality comes from the
+    /// Worker: a cloud Worker is `cloud`, one on the Orchestrator's own
+    /// host `this-machine`, any other `local-network`.
+    pub fn performer_face(&self, here: &str, lib: &Library) -> PerformerFace {
         let locality = if self.cloud {
             Locality::Cloud
         } else if self.host == here {
@@ -54,7 +58,7 @@ impl WorkerFace {
         PerformerFace {
             name: self.name.clone(),
             locality,
-            verbs: self.verbs.clone(),
+            verbs: lib.steps().filter(|s| s.program.as_ref().is_some_and(|p| self.programs.contains(p))).map(|s| s.reference()).collect(),
         }
     }
 }
@@ -140,9 +144,10 @@ impl OrderPerformer {
         OrderPerformer { book, face, clock }
     }
 
-    /// One Performer per published Worker, as seen from `here`.
-    pub fn for_workers(book: Arc<dyn OrderBook>, here: &str, clock: Clock) -> Result<Vec<OrderPerformer>, Error> {
-        Ok(book.workers()?.iter().map(|w| OrderPerformer::new(book.clone(), w.performer_face(here), clock.clone())).collect())
+    /// One Performer per published Worker, as seen from `here`, offering
+    /// what the Library says the Worker's programs do.
+    pub fn for_workers(book: Arc<dyn OrderBook>, lib: &Library, here: &str, clock: Clock) -> Result<Vec<OrderPerformer>, Error> {
+        Ok(book.workers()?.iter().map(|w| OrderPerformer::new(book.clone(), w.performer_face(here, lib), clock.clone())).collect())
     }
 }
 
@@ -193,29 +198,32 @@ pub struct Worker {
     pub name: String,
     pub host: String,
     pub cloud: bool,
+    /// The programs its mechanism has a command for, by name.
+    pub programs: Vec<String>,
     book: Arc<dyn OrderBook>,
     mechanism: Arc<dyn Performer>,
 }
 
 impl Worker {
-    pub fn new(name: &str, host: &str, cloud: bool, book: Arc<dyn OrderBook>, mechanism: Arc<dyn Performer>) -> Worker {
+    pub fn new(name: &str, host: &str, cloud: bool, programs: Vec<String>, book: Arc<dyn OrderBook>, mechanism: Arc<dyn Performer>) -> Worker {
         Worker {
             name: name.into(),
             host: host.into(),
             cloud,
+            programs,
             book,
             mechanism,
         }
     }
 
-    /// The face this Worker publishes: the verbs its mechanism offers.
+    /// The face this Worker publishes: its programs, by name.
     pub fn face(&self, now: &str) -> WorkerFace {
         WorkerFace {
             contract: WORKER.into(),
             name: self.name.clone(),
             host: self.host.clone(),
             cloud: self.cloud,
-            verbs: self.mechanism.describe().verbs,
+            programs: self.programs.clone(),
             seen: now.into(),
         }
     }
@@ -283,6 +291,7 @@ impl Worker {
 /// The OrderBook contract as tests.
 pub mod conformance {
     use super::*;
+    use crate::definition::Ref;
     use crate::workflow::RunState;
     use std::collections::BTreeMap;
 
@@ -296,7 +305,8 @@ pub mod conformance {
                 workflow: "wf".into(),
                 step: "s".into(),
                 run: id.into(),
-                definition: Ref::new("add", 1),
+                definition: Ref::new("stepdef_add", 1),
+                program: Some("hello-program".into()),
                 inputs: BTreeMap::new(),
                 parameters: BTreeMap::new(),
                 outputs: Vec::new(),
@@ -312,7 +322,7 @@ pub mod conformance {
             name: "w1".into(),
             host: "h".into(),
             cloud: false,
-            verbs: vec![Ref::new("add", 1)],
+            programs: vec!["hello-program".into()],
             seen: "2026-10-17T00:00:00Z".into(),
         };
         book.publish_worker(&face).unwrap();

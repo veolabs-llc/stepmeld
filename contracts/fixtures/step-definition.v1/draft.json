@@ -31,5 +31,6 @@
     "placement": {},
     "start": "automatic"
   },
+  "program": "draft-program",
   "version": 1
 }

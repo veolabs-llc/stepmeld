@@ -157,7 +157,7 @@ pub struct Policy {
     pub placement: PlacementPolicy,
 }
 
-/// A verb.
+/// A StepDefinition: one kind of work, and the program that does it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepDefinition {
     pub contract: String,
@@ -167,6 +167,13 @@ pub struct StepDefinition {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The program that does the work, by name. Each Worker maps the
+    /// name to a command on its own machine (a cloud Worker, say, to a
+    /// launcher), so the same StepDefinition can be placed anywhere a
+    /// Worker has the program. Required when a Performer does the work;
+    /// a person's StepDefinition has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
     #[serde(default)]
     pub done_by: DoneBy,
     #[serde(default)]
@@ -187,6 +194,7 @@ impl StepDefinition {
             version,
             label: None,
             description: None,
+            program: None,
             done_by: DoneBy::Performer,
             inputs: Vec::new(),
             parameters: Vec::new(),
@@ -216,6 +224,12 @@ impl StepDefinition {
         }
         if self.name.is_empty() || self.name.contains('.') {
             return Err(invalid("the name is empty or contains a dot".into()));
+        }
+        match (&self.done_by, self.program.as_deref()) {
+            (DoneBy::Performer, None) => return Err(invalid("it names no program; a StepDefinition a Performer does says which program does it".into())),
+            (DoneBy::Performer, Some(p)) if p.trim().is_empty() || p.chars().any(char::is_whitespace) => return Err(invalid(format!("program {p:?} is not a name (no spaces; the command it runs is registered on each Worker)"))),
+            (DoneBy::Person, Some(_)) => return Err(invalid("a person does it, so it names no program".into())),
+            _ => {}
         }
         // what is given (inputs, parameters) shares one namespace; what
         // is produced has its own, so a revise may take `text` and

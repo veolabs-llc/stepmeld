@@ -30,6 +30,10 @@
       "$ref": "#/$defs/ref",
       "description": "The verb: a program may perform several and picks by name."
     },
+    "program": {
+      "type": "string",
+      "description": "The program the StepDefinition names; a Worker runs the command it registered under that name."
+    },
     "inputs": {
       "type": "object",
       "description": "Every Input that holds a Value, by name. Values are opaque JSON."

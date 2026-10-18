@@ -277,6 +277,7 @@ pub mod conformance {
         assert!(!v.is_empty(), "the id may be used again");
         // definitions come and go by reference, a verb or a recipe alike
         let mut verb = StepDefinition::new("conformance-verb", 1);
+        verb.program = Some("conformance-program".into());
         verb.outputs = vec![crate::definition::OutputDefinition {
             name: "out".into(),
             tag: "thing".into(),

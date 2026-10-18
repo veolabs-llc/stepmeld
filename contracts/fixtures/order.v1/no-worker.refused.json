@@ -10,6 +10,7 @@
       "name": "count-words",
       "version": 1
     },
+    "program": "count-program",
     "inputs": {
       "text": {
         "file": "notes.txt"

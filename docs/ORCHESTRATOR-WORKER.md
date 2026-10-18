@@ -45,8 +45,8 @@ design note had left open (`docs/DESIGN.md` §11):
 
 | | Kept by | Read by | Holds |
 |---|---|---|---|
-| **Private** | the Worker's own store | that Worker | its name, its programs (which command performs which verb), where Runs keep their files, whether it runs work in the cloud |
-| **Published** | the shared store | every Orchestrator | its name, its host, whether it is a cloud Worker, the verbs it offers, when it was last seen |
+| **Private** | the Worker's own store | that Worker | its name, the command for each program it has, where Runs keep their files, whether it runs work in the cloud |
+| **Published** | the shared store | every Orchestrator | its name, its host, whether it is a cloud Worker, the names of the programs it has, when it was last seen |
 
 Machine-specific paths never reach the shared store, which several
 machines may share.
@@ -57,12 +57,23 @@ The flavors of Performer are fixed for a deployment: the same code on
 every Orchestrator and every Worker, with behaviour driven by
 configuration read from the stores. Programs are the per-machine part.
 
+**A StepDefinition names its program** (Max, 2026-10-18), and each
+Worker maps that name to a command on its own machine. So a
+StepDefinition says what does its work, and placement stays free: a
+local Worker maps the name to the program itself, a cloud Worker to a
+launcher that hands the same work to a queue. A Worker offers every
+StepDefinition whose program it has; an Orchestrator works that out
+from the Library and the Worker's published programs. (Registering a
+command per StepDefinition was weighed and set aside: with the program
+named in the StepDefinition it would repeat it.)
+
 - **On an Orchestrator**, a flavor decides *where* a step goes. stepmeld
   ships one: orders to a named Worker. A deployment adds its own flavors
   by implementing the same trait (one that names a cloud provider, say)
   and they are the same everywhere in that deployment.
 - **On a Worker**, a mechanism decides *how* the work runs. stepmeld
-  ships one: a local program per verb, through the run directory.
+  ships one: a local program per program name, through the run
+  directory.
 
 **Locality comes from the Worker** (my choice of rule): a cloud Worker
 is `cloud`; a Worker on the Orchestrator's own host is `this-machine`;
@@ -82,7 +93,7 @@ Orchestrator that takes over the Workflow later reads the same answer.
 | `Worker`: the loop that takes orders, runs them through a mechanism (any Performer) and reports | `stepmeld-core/src/orders.rs` |
 | The Worker's private store | `stepmeld-sqlite` (`WorkerStore`), one SQLite file |
 | Contracts | `stepmeld/order.v1`, `stepmeld/worker.v1` |
-| The command | `stepmeld worker …` sets up this machine's Worker; `stepmeld work` runs it; `stepmeld tick` orchestrates |
+| The command | `stepmeld worker …` sets up this machine's Worker (`worker program set <program> -- <command…>`); `stepmeld work` runs it; `stepmeld tick` orchestrates |
 
 My choices in the first form, each open to change:
 
@@ -94,7 +105,7 @@ My choices in the first form, each open to change:
 - A cancel asked before the Worker took the order ends it as canceled
   without starting it.
 - An order is addressed to one named Worker. "Any Worker that offers
-  the verb" is not built.
+  the StepDefinition" is not built.
 
 ## 6. Not decided yet
 

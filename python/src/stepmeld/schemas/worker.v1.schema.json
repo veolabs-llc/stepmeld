@@ -7,7 +7,7 @@
     "contract",
     "name",
     "host",
-    "verbs",
+    "programs",
     "seen"
   ],
   "additionalProperties": false,
@@ -29,12 +29,13 @@
       "type": "boolean",
       "description": "Its work happens in the cloud."
     },
-    "verbs": {
+    "programs": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/ref"
+        "type": "string",
+        "minLength": 1
       },
-      "description": "The verbs it has a program for."
+      "description": "The programs it has a command for, by name. It offers every StepDefinition that names one of them."
     },
     "seen": {
       "$ref": "#/$defs/time",
@@ -45,23 +46,6 @@
     "time": {
       "type": "string",
       "description": "RFC 3339, UTC, so that later sorts later."
-    },
-    "ref": {
-      "type": "object",
-      "required": [
-        "name",
-        "version"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "version": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
     }
   }
 }

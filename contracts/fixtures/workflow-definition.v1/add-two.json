@@ -2,7 +2,7 @@
   "bindings": [],
   "contract": "stepmeld/workflow-definition.v1",
   "label": "Add two integers",
-  "name": "hello",
+  "name": "add-two",
   "steps": [
     {
       "name": "add",

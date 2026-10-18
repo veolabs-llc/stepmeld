@@ -1,6 +1,8 @@
-//! A [`Performer`] for this machine: each verb is a program, spoken to
+//! A [`Performer`] for this machine, the mechanism behind a Worker: it
+//! runs the program a request names (a StepDefinition names its
+//! program; the Worker registered a command for each name), spoken to
 //! through the run directory protocol (`contracts/run-directory.v1.md`),
-//! files in a directory, so a program in any language can be a verb:
+//! files in a directory, so a program can be written in any language:
 //!
 //! ```text
 //! <program> [args...] <run-dir>
@@ -36,24 +38,23 @@
 //! resumed. The Run stays running until then: the engine asks again on
 //! every tick, and each ask is short.
 
-pub mod file;
-
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use stepmeld_core::definition::{Locality, Ref};
+use stepmeld_core::definition::Locality;
 use stepmeld_core::engine::{Observation, StartRequest};
 use stepmeld_core::performer::Performer;
 use stepmeld_core::workflow::{Outcome, PerformerFace, Progress};
 
-/// How a verb is run.
+/// A program this machine has: the name StepDefinitions use for it,
+/// and the command that runs it here.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Program {
-    pub verb: Ref,
-    /// The program and its leading arguments; the run directory is
+    pub name: String,
+    /// The executable and its leading arguments; the run directory is
     /// appended.
     pub command: Vec<String>,
 }
@@ -140,14 +141,19 @@ impl LocalPerformer {
         self.root.join(handle)
     }
 
-    fn program_for(&self, verb: &Ref) -> Result<Program, String> {
-        self.programs.iter().find(|p| &p.verb == verb).cloned().ok_or_else(|| format!("{} does not perform {verb}", self.name))
+    fn program_for(&self, request: &StartRequest) -> Result<Program, String> {
+        let name = request.program.as_deref().ok_or_else(|| format!("{} names no program", request.definition))?;
+        self.programs
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .ok_or_else(|| format!("{} has no program {name:?} (for {})", self.name, request.definition))
     }
 
     /// Start the program on a run directory: its log appended (a
     /// resume continues the same log), its pid written, the child kept.
     fn spawn(&self, handle: &str, dir: &Path, program: &Program, resume: bool) -> Result<(), String> {
-        let (exe, args) = program.command.split_first().ok_or_else(|| format!("{} has no program for {}", self.name, program.verb))?;
+        let (exe, args) = program.command.split_first().ok_or_else(|| format!("{} has no command for program {}", self.name, program.name))?;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("log.txt")).map_err(|e| format!("cannot open the log: {e}"))?;
         if resume {
             use std::io::Write;
@@ -179,7 +185,7 @@ impl LocalPerformer {
             return Err(format!("resumed {resumes} times already"));
         }
         let request = Self::read::<StartRequest>(&dir.join("request.json")).ok_or("the request cannot be read")?;
-        let program = self.program_for(&request.definition)?;
+        let program = self.program_for(&request)?;
         std::fs::write(dir.join("resumes"), (resumes + 1).to_string()).map_err(|e| e.to_string())?;
         self.spawn(handle, dir, &program, true)
     }
@@ -210,7 +216,9 @@ impl Performer for LocalPerformer {
         PerformerFace {
             name: self.name.clone(),
             locality: self.locality,
-            verbs: self.programs.iter().map(|p| p.verb.clone()).collect(),
+            // what it can run is its programs, by name; which
+            // StepDefinitions those are is the Library's to say
+            verbs: Vec::new(),
         }
     }
 
@@ -220,7 +228,7 @@ impl Performer for LocalPerformer {
         if dir.join("request.json").exists() {
             return Ok(handle);
         }
-        let program = self.program_for(&request.definition)?;
+        let program = self.program_for(request)?;
         std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
         std::fs::write(dir.join("request.json"), serde_json::to_string_pretty(request).unwrap()).map_err(|e| format!("cannot write the request: {e}"))?;
         if let Err(e) = self.spawn(&handle, &dir, &program, false) {
@@ -328,14 +336,15 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stepmeld_core::definition::OutputDefinition;
+    use stepmeld_core::definition::{OutputDefinition, Ref};
 
     fn request(run: &str, outputs: &[&str]) -> StartRequest {
         StartRequest {
             workflow: "wf".into(),
             step: "s".into(),
             run: run.into(),
-            definition: Ref::new("echo-verb", 1),
+            definition: Ref::new("stepdef_echo", 1),
+            program: Some("echo-program".into()),
             inputs: BTreeMap::new(),
             parameters: BTreeMap::new(),
             outputs: outputs
@@ -357,7 +366,7 @@ mod tests {
             "local",
             &root.join("runs"),
             vec![Program {
-                verb: Ref::new("echo-verb", 1),
+                name: "echo-program".into(),
                 command: vec!["sh".into(), path.display().to_string()],
             }],
         )

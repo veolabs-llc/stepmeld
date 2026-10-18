@@ -24,5 +24,6 @@
     "placement": {},
     "start": "automatic"
   },
+  "program": "publish-program",
   "version": 1
 }

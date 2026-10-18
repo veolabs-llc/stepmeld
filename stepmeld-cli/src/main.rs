@@ -12,7 +12,6 @@ use stepmeld_core::definition::{Locality, Ref, StepDefinition, WorkflowDefinitio
 use stepmeld_core::driver::Driver;
 use stepmeld_core::engine::Command;
 use stepmeld_core::orders::{wall_clock, OrderPerformer, Worker};
-use stepmeld_core::performer::Performer;
 use stepmeld_core::store::StateStore;
 use stepmeld_core::workflow::{Actor, Gate, StepStatus, Waiting, Workflow, WorkflowStatus};
 use stepmeld_core::{iso, Error, Value};
@@ -20,7 +19,7 @@ use stepmeld_local::{LocalPerformer, Program};
 use stepmeld_sqlite::{SqliteStore, WorkerStore};
 
 #[derive(Parser)]
-#[command(name = "stepmeld", version, about = "A generic workflow engine: verbs, recipes, gates, orchestrators and workers")]
+#[command(name = "stepmeld", version, about = "A generic workflow engine: StepDefinitions, WorkflowDefinitions, Workflows, Orchestrators and Workers")]
 struct Cli {
     /// The shared store: definitions, Workflows, orders, published Workers.
     #[arg(long, default_value = "stepmeld.sqlite", global = true)]
@@ -40,11 +39,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Add definitions to the Library (step or workflow, told apart by their contract).
-    Add { files: Vec<PathBuf> },
-    /// The Library: verbs and recipes.
-    Library,
-    /// A Workflow from a recipe.
+    /// The Library: show it, or add StepDefinitions and WorkflowDefinitions to it.
+    Library {
+        #[command(subcommand)]
+        what: Option<LibraryCmd>,
+    },
+    /// A Workflow from a WorkflowDefinition.
     Create {
         definition: String,
         #[arg(long, default_value_t = 1)]
@@ -82,7 +82,7 @@ enum Cmd {
     },
     /// Confirm a placement a Policy asks about.
     Confirm { workflow: String, step: String },
-    /// Change a Step's Policy: `--to` takes JSON in the verb's shape (start, on_failure, on_stale, placement).
+    /// Change a Step's Policy: `--to` takes JSON in the StepDefinition's shape (start, on_failure, on_stale, placement).
     Policy {
         workflow: String,
         step: String,
@@ -151,7 +151,7 @@ enum WorkerCmd {
         #[arg(long)]
         cloud: Option<bool>,
     },
-    /// The programs that perform verbs here.
+    /// This Worker's programs: the command that runs each, by the name StepDefinitions use.
     Program {
         #[command(subcommand)]
         what: ProgramCmd,
@@ -160,20 +160,22 @@ enum WorkerCmd {
 
 #[derive(Subcommand)]
 enum ProgramCmd {
-    /// Register the program for a verb: `program add <verb> -- <command...>` (the Run's directory is appended).
-    Add {
-        verb: String,
-        #[arg(long, default_value_t = 1)]
-        version: u32,
+    /// Set the command for a program: `program set <program> -- <command...>` (the Run's directory is appended).
+    Set {
+        program: String,
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
-    /// Forget the program for a verb.
-    Remove {
-        verb: String,
-        #[arg(long, default_value_t = 1)]
-        version: u32,
-    },
+    /// Forget a program.
+    Remove { program: String },
+}
+
+#[derive(Subcommand)]
+enum LibraryCmd {
+    /// Every StepDefinition and WorkflowDefinition.
+    Show,
+    /// Add definitions (StepDefinitions and WorkflowDefinitions, told apart by their contract).
+    Add { files: Vec<PathBuf> },
 }
 
 fn main() {
@@ -218,11 +220,12 @@ fn host() -> String {
 }
 
 /// The Orchestrator: a driver over the shared store with one Performer
-/// per published Worker, and recipes nested.
+/// per published Worker, and WorkflowDefinitions nested.
 fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
     let store = Arc::new(SqliteStore::open(&cli.store)?);
     let mut driver = Driver::new(store.clone(), &format!("stepmeld@{}:{}", host(), std::process::id())).with_nesting();
-    for p in OrderPerformer::for_workers(store.clone(), &host(), wall_clock())? {
+    let lib = store.library()?;
+    for p in OrderPerformer::for_workers(store.clone(), &lib, &host(), wall_clock())? {
         driver = driver.with_performer(Arc::new(p));
     }
     Ok((store, driver))
@@ -232,18 +235,26 @@ fn worker_store(cli: &Cli) -> Result<WorkerStore, Error> {
     WorkerStore::open(&cli.worker_store, &host())
 }
 
-fn show_worker(cli: &Cli, ws: &WorkerStore) -> Result<(), Error> {
+/// The StepDefinitions in the Library that name one of `programs`.
+fn offered(store: &SqliteStore, programs: &[String]) -> Result<Vec<String>, Error> {
+    Ok(store.library()?.steps().filter(|s| s.program.as_ref().is_some_and(|p| programs.contains(p))).map(|s| s.reference().to_string()).collect())
+}
+
+fn show_worker(cli: &Cli, store: &SqliteStore, ws: &WorkerStore) -> Result<(), Error> {
     let s = ws.settings()?;
     println!("worker   {}  (on {}; its store {})", s.name, host(), cli.worker_store.display());
     println!("runs in  {}", s.root);
     println!("cloud    {}", if s.cloud { "yes" } else { "no" });
     let programs = ws.programs()?;
     if programs.is_empty() {
-        println!("programs none yet: `stepmeld worker program add <verb> -- <command...>`");
+        println!("programs none yet: `stepmeld worker program set <program> -- <command...>`");
     }
-    for (verb, command) in programs {
-        println!("program  {:<20} {}", verb.to_string(), command.join(" "));
+    for (name, command) in &programs {
+        println!("program  {:<20} {}", name, command.join(" "));
     }
+    let names: Vec<String> = programs.into_iter().map(|(n, _)| n).collect();
+    let offers = offered(store, &names)?;
+    println!("offers   {}", if offers.is_empty() { "nothing in the Library yet".into() } else { offers.join(", ") });
     Ok(())
 }
 
@@ -256,7 +267,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Worker { what } => {
             let ws = worker_store(&cli)?;
             match what {
-                None | Some(WorkerCmd::Show) => show_worker(&cli, &ws)?,
+                None | Some(WorkerCmd::Show) => show_worker(&cli, &store, &ws)?,
                 Some(WorkerCmd::Set { name, root, cloud }) => {
                     if let Some(n) = name {
                         ws.set_name(n)?;
@@ -267,33 +278,31 @@ fn run(cli: Cli) -> Result<(), Error> {
                     if let Some(c) = cloud {
                         ws.set_cloud(*c)?;
                     }
-                    show_worker(&cli, &ws)?;
+                    show_worker(&cli, &store, &ws)?;
                 }
-                Some(WorkerCmd::Program {
-                    what: ProgramCmd::Add { verb, version, command },
-                }) => {
-                    ws.add_program(&Ref::new(verb, *version), command)?;
-                    println!("program for {verb} v{version}: {}", command.join(" "));
+                Some(WorkerCmd::Program { what: ProgramCmd::Set { program, command } }) => {
+                    ws.set_program(program, command)?;
+                    println!("program {program}: {}", command.join(" "));
                 }
-                Some(WorkerCmd::Program { what: ProgramCmd::Remove { verb, version } }) => {
-                    if !ws.remove_program(&Ref::new(verb, *version))? {
-                        return Err(Error::Refused(format!("this Worker has no program for {verb} v{version}")));
+                Some(WorkerCmd::Program { what: ProgramCmd::Remove { program } }) => {
+                    if !ws.remove_program(program)? {
+                        return Err(Error::Refused(format!("this Worker has no program {program:?}")));
                     }
-                    println!("forgot the program for {verb} v{version}");
+                    println!("forgot program {program}");
                 }
             }
         }
         Cmd::Work { watch, every } => {
             let ws = worker_store(&cli)?;
             let settings = ws.settings()?;
-            let programs: Vec<Program> = ws.programs()?.into_iter().map(|(verb, command)| Program { verb, command }).collect();
+            let programs: Vec<Program> = ws.programs()?.into_iter().map(|(name, command)| Program { name, command }).collect();
             if programs.is_empty() {
-                return Err(Error::Refused("this Worker has no programs yet: `stepmeld worker program add <verb> -- <command...>`".into()));
+                return Err(Error::Refused("this Worker has no programs yet: `stepmeld worker program set <program> -- <command...>`".into()));
             }
+            let names: Vec<String> = programs.iter().map(|p| p.name.clone()).collect();
             let mechanism = Arc::new(LocalPerformer::new(&settings.name, Path::new(&settings.root), programs));
-            let worker = Worker::new(&settings.name, &host(), settings.cloud, store.clone(), mechanism.clone());
-            let verbs: Vec<String> = mechanism.describe().verbs.iter().map(|v| v.to_string()).collect();
-            println!("worker {} on {}, offering {}", settings.name, host(), verbs.join(", "));
+            let worker = Worker::new(&settings.name, &host(), settings.cloud, names.clone(), store.clone(), mechanism);
+            println!("worker {} on {}, with programs {}", settings.name, host(), names.join(", "));
             loop {
                 for (id, word) in worker.tick(&iso(now_secs()))? {
                     println!("{id:<40} {word}");
@@ -304,11 +313,12 @@ fn run(cli: Cli) -> Result<(), Error> {
                 std::thread::sleep(std::time::Duration::from_secs(*every));
             }
         }
-        Cmd::Add { files } => {
-            // verbs first, then recipes in whatever order they resolve:
-            // a recipe that nests another may be named before it
+        Cmd::Library { what: Some(LibraryCmd::Add { files }) } => {
+            // StepDefinitions first, then WorkflowDefinitions in whatever
+            // order they resolve: one that nests another may be named
+            // before it
             let mut steps = Vec::new();
-            let mut recipes = Vec::new();
+            let mut workflows = Vec::new();
             for path in files {
                 let text = std::fs::read_to_string(path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
                 let doc: Value = serde_json::from_str(&text).map_err(|e| Error::Refused(format!("{} is not JSON: {e}", path.display())))?;
@@ -316,21 +326,21 @@ fn run(cli: Cli) -> Result<(), Error> {
                 stepmeld_core::contracts::validate(&doc, &contract).map_err(|e| Error::Refused(format!("{}: {e}", path.display())))?;
                 match contract.as_str() {
                     stepmeld_core::definition::STEP_DEFINITION => steps.push((path.clone(), serde_json::from_value::<StepDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
-                    stepmeld_core::definition::WORKFLOW_DEFINITION => recipes.push((path.clone(), serde_json::from_value::<WorkflowDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
+                    stepmeld_core::definition::WORKFLOW_DEFINITION => workflows.push((path.clone(), serde_json::from_value::<WorkflowDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
                     other => return Err(Error::Refused(format!("{}: contract {other:?} is not a definition", path.display()))),
                 }
             }
             for (_, def) in &steps {
                 store.put_step(def)?;
-                println!("added verb {}", def.reference());
+                println!("added StepDefinition {}", def.reference());
             }
-            while !recipes.is_empty() {
-                let before = recipes.len();
+            while !workflows.is_empty() {
+                let before = workflows.len();
                 let mut kept = Vec::new();
                 let mut errors = Vec::new();
-                for (path, def) in recipes {
+                for (path, def) in workflows {
                     match store.put_workflow_definition(&def) {
-                        Ok(()) => println!("added recipe {}", def.reference()),
+                        Ok(()) => println!("added WorkflowDefinition {}", def.reference()),
                         Err(Error::Invalid(e)) if e.contains("not in the library") => {
                             errors.push(format!("{}: {e}", path.display()));
                             kept.push((path, def));
@@ -341,10 +351,10 @@ fn run(cli: Cli) -> Result<(), Error> {
                 if kept.len() == before {
                     return Err(Error::Refused(errors.join("\n")));
                 }
-                recipes = kept;
+                workflows = kept;
             }
         }
-        Cmd::Library => {
+        Cmd::Library { what: None | Some(LibraryCmd::Show) } => {
             let lib = store.library()?;
             if cli.json {
                 println!(
@@ -353,10 +363,11 @@ fn run(cli: Cli) -> Result<(), Error> {
                 );
             } else {
                 for s in lib.steps() {
-                    println!("verb    {:<28} {}", s.reference().to_string(), s.label.as_deref().unwrap_or(""));
+                    let by = s.program.as_ref().map(|p| format!("  (program {p})")).unwrap_or_else(|| "  (done by a person)".into());
+                    println!("StepDefinition      {:<28} {}{by}", s.reference().to_string(), s.label.as_deref().unwrap_or(""));
                 }
                 for w in lib.workflows() {
-                    println!("recipe  {:<28} {} ({} steps)", w.reference().to_string(), w.label.as_deref().unwrap_or(""), w.steps.len());
+                    println!("WorkflowDefinition  {:<28} {} ({} steps)", w.reference().to_string(), w.label.as_deref().unwrap_or(""), w.steps.len());
                 }
             }
         }
@@ -369,7 +380,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             let lib = store.library()?;
             for id in store.list()? {
                 let (wf, _) = store.get(&id)?.unwrap();
-                let status = lib.workflow(&wf.definition).map(|d| format!("{:?}", wf.status(d)).to_lowercase()).unwrap_or_else(|| "(recipe missing)".into());
+                let status = lib.workflow(&wf.definition).map(|d| format!("{:?}", wf.status(d)).to_lowercase()).unwrap_or_else(|| "(WorkflowDefinition missing)".into());
                 println!("{:<40} {:<24} {}", wf.id, wf.definition.to_string(), status);
             }
         }

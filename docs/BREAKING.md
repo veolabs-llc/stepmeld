@@ -9,6 +9,35 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A StepDefinition names its program; Workers publish programs
+
+*Breaking. Contracts: `stepmeld/step-definition.v1`,
+`stepmeld/run-request.v1`, `stepmeld/order.v1`, `stepmeld/worker.v1`.*
+
+**Before:** a Worker registered a command per StepDefinition and
+published the StepDefinitions it offered; a StepDefinition said nothing
+of what did its work. **Now:** a StepDefinition names its program
+(`"program": "hello-program"`), required unless a person does the
+work; a request and an order carry that name; a Worker registers a
+command per program (`stepmeld worker program set <program> --
+<command...>`) and publishes the names of its programs (`programs`,
+replacing `verbs` in `worker.v1`); an Orchestrator offers a Worker
+every StepDefinition in the Library whose program it has.
+
+**Who notices:** every StepDefinition a Performer does needs a
+`program`, or `library add` refuses it. In the library:
+`stepmeld_local::Program` is keyed by `name` (was `verb`) and the local
+Performer runs the program the request names; `Worker::new` takes the
+program names; `OrderPerformer::for_workers` takes the Library;
+`WorkerStore::set_program`/`remove_program` take a program name;
+`stepmeld_local::file` (the performers file) is gone. The command:
+`stepmeld add` is now `stepmeld library add`, `stepmeld library` shows
+the Library (also `library show`), and `worker program add <verb>` is
+now `worker program set <program>`.
+
+**What to do:** add `"program"` to each StepDefinition, register one
+command per program on each Worker, and use the new subcommands.
+
 ## Orchestrators and Workers; the command's performers file is gone
 
 *Breaking for the command; additive for the library. Note:

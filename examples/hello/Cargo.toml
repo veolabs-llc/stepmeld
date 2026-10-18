@@ -4,12 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The README's walkthrough: a verb that adds two integers, slowly enough to watch"
+description = "The README's walkthrough: one program doing the work of two StepDefinitions, stepdef_add and stepdef_multiply"
 # an example, never published
 publish = false
 
 [[bin]]
-name = "hello-add"
+name = "hello-program"
 path = "src/main.rs"
 
 [dependencies]

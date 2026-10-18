@@ -37,5 +37,6 @@
     "placement": {},
     "start": "automatic"
   },
+  "program": "add-program",
   "version": 1
 }
