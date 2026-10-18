@@ -8,7 +8,7 @@
     }
   },
   "definition": {
-    "name": "hello",
+    "name": "add-two",
     "version": 1
   },
   "id": "wf-1",

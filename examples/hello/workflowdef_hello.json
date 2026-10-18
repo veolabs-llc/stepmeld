@@ -1,0 +1,13 @@
+{
+  "contract": "stepmeld/workflow-definition.v1",
+  "name": "hello",
+  "version": 1,
+  "label": "Hello: add two integers, then multiply the sum",
+  "steps": [
+    {"name": "add", "step": {"name": "add", "version": 1}},
+    {"name": "multiply", "step": {"name": "multiply", "version": 1}}
+  ],
+  "bindings": [
+    {"from": "add.sum", "to": "multiply.value"}
+  ]
+}

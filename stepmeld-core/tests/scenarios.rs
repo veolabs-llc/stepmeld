@@ -219,14 +219,14 @@ impl Rig {
 }
 
 // ---------------------------------------------------------------------
-// The one-step example: add two integers (the README's walkthrough).
+// The one-step example: add two integers (the first step of the README's walkthrough).
 
 fn add_library(store: &MemoryStore) {
     let mut add = verb("add", &[("a", "integer"), ("b", "integer")], &[("beat-seconds", "number", Some(Value::from(1)))], &[("sum", "integer")]);
     add.label = Some("Add two integers".into());
     store.put_step(&add).unwrap();
     // the verb and the recipe may share a label, never a name: verbs are one namespace
-    let mut w = WorkflowDefinition::new("hello", 1);
+    let mut w = WorkflowDefinition::new("add-two", 1);
     w.label = Some("Add two integers".into());
     w.steps = vec![entry("add", "add")];
     store.put_workflow_definition(&w).unwrap();
@@ -237,7 +237,7 @@ fn one_step_workflow_runs_when_its_inputs_are_given() {
     let store = Arc::new(MemoryStore::new());
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-1");
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-1");
 
     // created: the step waits for the one input nobody feeds
     assert_eq!(rig.status("add"), StepStatus::Waiting(Waiting::Input { name: "a".into() }));
@@ -290,7 +290,7 @@ fn one_step_workflow_runs_when_its_inputs_are_given() {
     assert_eq!(local.started().len(), 2, "a start retakes a stale step");
     assert_eq!(local.started()[1].parameters["beat-seconds"], Value::from(0));
     assert_eq!(rig.wf().step("add").unwrap().runs.len(), 2, "runs are append-only");
-    rig.write_fixtures("hello");
+    rig.write_fixtures("add-two");
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn a_bound_input_cannot_be_set_and_a_running_step_cannot_be_started() {
     let store = Arc::new(MemoryStore::new());
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-2");
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-2");
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
@@ -312,7 +312,7 @@ fn a_refusal_is_a_failed_run_that_never_ran() {
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
     local.set_refusal(Some("no such file notes.txt"));
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-3");
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-3");
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     let wf = rig.tick();
@@ -327,7 +327,7 @@ fn an_unreachable_performer_changes_nothing() {
     let store = Arc::new(MemoryStore::new());
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-4");
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-4");
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
@@ -346,7 +346,7 @@ fn a_success_without_the_declared_outputs_is_a_fault() {
     let store = Arc::new(MemoryStore::new());
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-5");
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-5");
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();
@@ -765,7 +765,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     let bench = performer("bench", Locality::LocalNetwork, &["add"]);
     let here = Driver::new(store.clone(), "here").with_nesting().with_performer(desk.clone()).with_elsewhere(vec![bench.describe()]);
     let there = Driver::new(store.clone(), "there").with_nesting().with_performer(bench.clone()).with_elsewhere(vec![desk.describe()]);
-    here.create(&Ref::new("hello", 1), "wf-s", None, &max(), &now(0)).unwrap();
+    here.create(&Ref::new("add-two", 1), "wf-s", None, &max(), &now(0)).unwrap();
     here.command("wf-s", &Command::StartWorkflow, &max(), &now(0)).unwrap();
     here.command("wf-s", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
     here.command("wf-s", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
@@ -809,7 +809,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     assert_eq!(status(&here), StepStatus::Succeeded);
     // a Performer no driver of the store is known to have is still a refusal
     let alone = Driver::new(store.clone(), "alone").with_nesting();
-    alone.create(&Ref::new("hello", 1), "wf-t", None, &max(), &now(0)).unwrap();
+    alone.create(&Ref::new("add-two", 1), "wf-t", None, &max(), &now(0)).unwrap();
     alone.command("wf-t", &Command::StartWorkflow, &max(), &now(0)).unwrap();
     alone.command("wf-t", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
     alone.command("wf-t", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
@@ -832,7 +832,7 @@ fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
     let driver = Driver::new(store.clone(), "test").with_nesting().with_performer(local.clone());
-    driver.create(&Ref::new("hello", 1), "wf-r", None, &max(), &now(0)).unwrap();
+    driver.create(&Ref::new("add-two", 1), "wf-r", None, &max(), &now(0)).unwrap();
     driver.command("wf-r", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
     driver.command("wf-r", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     driver.tick_all(&now(2), &now(9)).unwrap();
@@ -855,7 +855,7 @@ fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
     }
     // a nested child: the parent's Run is its go
     let mut outer = WorkflowDefinition::new("outer", 1);
-    outer.steps = vec![entry("inner", "hello")];
+    outer.steps = vec![entry("inner", "add-two")];
     store.put_workflow_definition(&outer).unwrap();
     driver.create(&Ref::new("outer", 1), "wf-o", None, &max(), &now(5)).unwrap();
     driver.command("wf-o", &set("inner", "add.a", 4.into()), &max(), &now(6)).unwrap();
@@ -872,7 +872,7 @@ fn a_cancel_stops_the_live_run_and_the_workflow() {
     let store = Arc::new(MemoryStore::new());
     add_library(&store);
     let local = performer("local", Locality::ThisMachine, &["add"]);
-    let mut rig = Rig::new(store.clone(), vec![local.clone()], "hello", "wf-6");
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-6");
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     rig.tick();

@@ -60,7 +60,7 @@ pub fn parse(text: &str) -> Result<Vec<LocalPerformer>, serde_json::Error> {
 
 /// What a performers file looks like, for a `performers` help command.
 pub fn example() -> serde_json::Value {
-    serde_json::json!({"name": "local", "root": "runs", "programs": [{"verb": {"name": "add", "version": 1}, "command": ["hello-add"]}]})
+    serde_json::json!({"name": "local", "root": "runs", "programs": [{"verb": {"name": "add", "version": 1}, "command": ["hello-verbs"]}]})
 }
 
 #[cfg(test)]

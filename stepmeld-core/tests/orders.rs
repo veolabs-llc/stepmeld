@@ -26,7 +26,7 @@ fn person() -> Actor {
     Actor::person("ann")
 }
 
-/// The walkthrough's library: `hello`, one step that adds two integers.
+/// A one-step library, `add-two`: the walkthrough's first step alone.
 fn library(store: &MemoryStore) {
     let mut add = StepDefinition::new("add", 1);
     for n in ["a", "b"] {
@@ -44,7 +44,7 @@ fn library(store: &MemoryStore) {
         label: None,
     });
     store.put_step(&add).unwrap();
-    let mut w = WorkflowDefinition::new("hello", 1);
+    let mut w = WorkflowDefinition::new("add-two", 1);
     w.steps = vec![StepEntry {
         name: "add".into(),
         step: Ref::new("add", 1),
@@ -73,7 +73,7 @@ fn orchestrator(store: &Arc<MemoryStore>, host: &str) -> Driver {
 }
 
 fn begin(d: &Driver, id: &str) {
-    d.create(&Ref::new("hello", 1), id, None, &person(), &now(0)).unwrap();
+    d.create(&Ref::new("add-two", 1), id, None, &person(), &now(0)).unwrap();
     for (input, v) in [("a", 2), ("b", 3)] {
         d.command(
             id,
