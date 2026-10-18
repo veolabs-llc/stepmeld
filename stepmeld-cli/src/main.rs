@@ -61,6 +61,8 @@ enum Cmd {
     /// Give an Input or a Parameter a Value.
     Set {
         workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
         step: String,
         #[arg(long, conflicts_with = "parameter")]
         input: Option<String>,
@@ -72,30 +74,58 @@ enum Cmd {
     },
     /// Give the go: the Workflow's (no step named: a root Workflow runs
     /// nothing until then), or a Step's start, retake, or rerun.
-    Start { workflow: String, step: Option<String> },
+    Start {
+        workflow: String,
+        /// A Step to start, retake or rerun, by its name in the WorkflowDefinition; none gives the Workflow its go.
+        #[arg(long)]
+        step: Option<String>,
+    },
     /// Finish a Step a person does: `--output name=json` for each.
     Complete {
         workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
         step: String,
         #[arg(long = "output")]
         outputs: Vec<String>,
     },
     /// Confirm a placement a Policy asks about.
-    Confirm { workflow: String, step: String },
+    Confirm {
+        workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
+        step: String,
+    },
     /// Change a Step's Policy: `--to` takes JSON in the StepDefinition's shape (start, on_failure, on_stale, placement).
     Policy {
         workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
         step: String,
         #[arg(long)]
         to: String,
     },
     /// Choose the Worker for a Step's next Run.
-    Place { workflow: String, step: String, worker: String },
+    Place {
+        workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
+        step: String,
+        /// The Worker, by name.
+        #[arg(long)]
+        worker: String,
+    },
     /// Pass a Step by, for good: it never runs, and an Input bound from its Outputs takes its next Binding.
-    Skip { workflow: String, step: String },
+    Skip {
+        workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
+        step: String,
+    },
     /// Stop a Step's live Run, or the whole Workflow.
     Cancel {
         workflow: String,
+        /// A Step whose live Run to stop, by its name in the WorkflowDefinition; none cancels the Workflow.
         #[arg(long)]
         step: Option<String>,
         #[arg(long)]
@@ -116,6 +146,8 @@ enum Cmd {
     /// A Run's raw output.
     Log {
         workflow: String,
+        /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
+        #[arg(long)]
         step: String,
         #[arg(long)]
         run: Option<u32>,
@@ -558,7 +590,7 @@ fn show(store: &SqliteStore, wf: &Workflow, faces: &[stepmeld_core::workflow::Pe
             _ => wf.step_status(def, name),
         };
         let reason = reason(wf, name, &status);
-        println!("  {:<16} {:<10} {}", name, status.word(), reason);
+        println!("  {:<16} {:<24} {:<10} {}", name, format!("({})", step.definition), status.word(), reason);
         for (k, i) in &step.inputs {
             println!("      in   {k:<14} {}", i.value.as_ref().map(Value::to_string).unwrap_or_else(|| "-".into()));
         }

@@ -4,10 +4,10 @@
   "version": 1,
   "label": "Hello: add two integers, then multiply the sum",
   "steps": [
-    {"name": "add", "step": {"name": "stepdef_add", "version": 1}},
-    {"name": "multiply", "step": {"name": "stepdef_multiply", "version": 1}}
+    {"name": "step_add", "step": {"name": "stepdef_add", "version": 1}},
+    {"name": "step_multiply", "step": {"name": "stepdef_multiply", "version": 1}}
   ],
   "bindings": [
-    {"from": "add.sum", "to": "multiply.value"}
+    {"from": "step_add.sum", "to": "step_multiply.value"}
   ]
 }
