@@ -148,7 +148,11 @@ hello-1  (workflowdef_hello v1, succeeded)
 
 `stepmeld log hello-1 --step step_multiply` prints that Step's program output,
 `stepmeld history hello-1` every event in order, and `stepmeld library`
-the StepDefinitions and WorkflowDefinitions. Without a Worker, `tick`
+the StepDefinitions and WorkflowDefinitions. `stepmeld library remove
+workflowdef_hello` takes a WorkflowDefinition out of the Library (once
+no Workflow uses it) and asks whether to remove the StepDefinitions no
+other WorkflowDefinition uses; `--with-orphans` or `--keep-orphans`
+answers in advance. Without a Worker, `tick`
 says what it waits for: `step_add: no Worker offers it`. Each Run's files
 (`request.json`, `progress.json`, `outcome.json`, `log.txt`) are in the
 Worker's `runs/`; the protocol is `contracts/run-directory.v1.md`.

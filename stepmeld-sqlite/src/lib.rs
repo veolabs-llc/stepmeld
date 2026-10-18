@@ -61,6 +61,26 @@ impl SqliteStore {
     pub fn in_memory() -> Result<SqliteStore, Error> {
         Self::open(Path::new(":memory:"))
     }
+
+    /// Every StepDefinition and WorkflowDefinition stored, read but not
+    /// checked: what a person needs to see, and clean up, in a store
+    /// whose definitions no longer hold together (one written before a
+    /// rule changed, say), where [`StateStore::library`] refuses.
+    pub fn definitions(&self) -> Result<(Vec<StepDefinition>, Vec<WorkflowDefinition>), Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT kind, doc FROM definitions ORDER BY kind, name, version").map_err(db)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db)?;
+        let mut steps = Vec::new();
+        let mut workflows = Vec::new();
+        for row in rows {
+            let (kind, text) = row.map_err(db)?;
+            match kind.as_str() {
+                "step" => steps.push(doc::<StepDefinition>(&text, "a StepDefinition")?),
+                _ => workflows.push(doc::<WorkflowDefinition>(&text, "a WorkflowDefinition")?),
+            }
+        }
+        Ok((steps, workflows))
+    }
 }
 
 /// A transaction that will write, begun IMMEDIATE: it takes the write
@@ -83,7 +103,7 @@ impl StateStore for SqliteStore {
     fn put_step(&self, def: &StepDefinition) -> Result<(), Error> {
         def.check()?;
         if self.library()?.workflow(&def.reference()).is_some() {
-            return Err(Error::Invalid(format!("step definition {}: a workflow definition has that name and version; verbs share one namespace", def.reference())));
+            return Err(Error::Invalid(format!("StepDefinition {}: a WorkflowDefinition has that name and version, and they share one namespace", def.reference())));
         }
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -120,18 +140,7 @@ impl StateStore for SqliteStore {
     }
 
     fn library(&self) -> Result<Library, Error> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT kind, doc FROM definitions ORDER BY kind, name, version").map_err(db)?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db)?;
-        let mut steps = Vec::new();
-        let mut workflows = Vec::new();
-        for row in rows {
-            let (kind, text) = row.map_err(db)?;
-            match kind.as_str() {
-                "step" => steps.push(doc::<StepDefinition>(&text, "a step definition")?),
-                _ => workflows.push(doc::<WorkflowDefinition>(&text, "a workflow definition")?),
-            }
-        }
+        let (steps, workflows) = self.definitions()?;
         Library::from_parts(steps, workflows)
     }
 
@@ -409,6 +418,27 @@ mod tests {
     #[test]
     fn the_sqlite_store_keeps_orders_as_the_book_says() {
         stepmeld_core::orders::conformance::run(&SqliteStore::in_memory().unwrap());
+    }
+
+    /// A definition stored before a rule it now breaks (a StepDefinition
+    /// with no program) is still read, so it can be seen and removed,
+    /// while the Library refuses.
+    #[test]
+    fn definitions_are_read_unchecked() {
+        let store = SqliteStore::in_memory().unwrap();
+        let mut stale = StepDefinition::new("add", 1);
+        stale.label = Some("from before programs".into());
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("INSERT INTO definitions (kind, name, version, doc) VALUES ('step', 'add', 1, ?1)", params![serde_json::to_string(&stale).unwrap()])
+            .unwrap();
+        assert!(store.library().is_err());
+        let (steps, workflows) = store.definitions().unwrap();
+        assert_eq!((steps.len(), workflows.len()), (1, 0));
+        store.remove_definition(&Ref::new("add", 1)).unwrap();
+        assert!(store.library().is_ok());
     }
 
     #[test]

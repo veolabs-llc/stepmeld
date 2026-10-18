@@ -11,6 +11,7 @@ use std::sync::Arc;
 use stepmeld_core::definition::{Locality, Ref, StepDefinition, WorkflowDefinition};
 use stepmeld_core::driver::Driver;
 use stepmeld_core::engine::Command;
+use stepmeld_core::library::Library;
 use stepmeld_core::orders::{wall_clock, OrderPerformer, Worker};
 use stepmeld_core::store::StateStore;
 use stepmeld_core::workflow::{Actor, Gate, StepStatus, Waiting, Workflow, WorkflowStatus};
@@ -208,6 +209,19 @@ enum LibraryCmd {
     Show,
     /// Add definitions (StepDefinitions and WorkflowDefinitions, told apart by their contract).
     Add { files: Vec<PathBuf> },
+    /// Remove a StepDefinition or WorkflowDefinition nothing uses; for a WorkflowDefinition, offer to remove the StepDefinitions it leaves unused.
+    Remove {
+        name: String,
+        /// Which version, when there are several.
+        #[arg(long)]
+        version: Option<u32>,
+        /// Remove the StepDefinitions it leaves unused without asking.
+        #[arg(long, conflicts_with = "keep_orphans")]
+        with_orphans: bool,
+        /// Keep the StepDefinitions it leaves unused without asking.
+        #[arg(long)]
+        keep_orphans: bool,
+    },
 }
 
 fn main() {
@@ -291,11 +305,16 @@ fn show_worker(cli: &Cli, store: &SqliteStore, ws: &WorkerStore) -> Result<(), E
 }
 
 fn run(cli: Cli) -> Result<(), Error> {
+    if let Cmd::Library { what } = &cli.command {
+        return library(&cli, &SqliteStore::open(&cli.store)?, what);
+    }
     let (store, driver) = driver(&cli)?;
     let by = actor(&cli)?;
     let now = iso(now_secs());
     let until = || iso(now_secs() + 60);
     match &cli.command {
+        // handled above, before the Library is checked; here for completeness
+        Cmd::Library { what } => library(&cli, &store, what)?,
         Cmd::Worker { what } => {
             let ws = worker_store(&cli)?;
             match what {
@@ -343,64 +362,6 @@ fn run(cli: Cli) -> Result<(), Error> {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_secs(*every));
-            }
-        }
-        Cmd::Library { what: Some(LibraryCmd::Add { files }) } => {
-            // StepDefinitions first, then WorkflowDefinitions in whatever
-            // order they resolve: one that nests another may be named
-            // before it
-            let mut steps = Vec::new();
-            let mut workflows = Vec::new();
-            for path in files {
-                let text = std::fs::read_to_string(path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
-                let doc: Value = serde_json::from_str(&text).map_err(|e| Error::Refused(format!("{} is not JSON: {e}", path.display())))?;
-                let contract = doc.get("contract").and_then(Value::as_str).unwrap_or("").to_string();
-                stepmeld_core::contracts::validate(&doc, &contract).map_err(|e| Error::Refused(format!("{}: {e}", path.display())))?;
-                match contract.as_str() {
-                    stepmeld_core::definition::STEP_DEFINITION => steps.push((path.clone(), serde_json::from_value::<StepDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
-                    stepmeld_core::definition::WORKFLOW_DEFINITION => workflows.push((path.clone(), serde_json::from_value::<WorkflowDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
-                    other => return Err(Error::Refused(format!("{}: contract {other:?} is not a definition", path.display()))),
-                }
-            }
-            for (_, def) in &steps {
-                store.put_step(def)?;
-                println!("added StepDefinition {}", def.reference());
-            }
-            while !workflows.is_empty() {
-                let before = workflows.len();
-                let mut kept = Vec::new();
-                let mut errors = Vec::new();
-                for (path, def) in workflows {
-                    match store.put_workflow_definition(&def) {
-                        Ok(()) => println!("added WorkflowDefinition {}", def.reference()),
-                        Err(Error::Invalid(e)) if e.contains("not in the library") => {
-                            errors.push(format!("{}: {e}", path.display()));
-                            kept.push((path, def));
-                        }
-                        Err(e) => return Err(e),
-                    }
-                }
-                if kept.len() == before {
-                    return Err(Error::Refused(errors.join("\n")));
-                }
-                workflows = kept;
-            }
-        }
-        Cmd::Library { what: None | Some(LibraryCmd::Show) } => {
-            let lib = store.library()?;
-            if cli.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({"steps": lib.steps().collect::<Vec<_>>(), "workflows": lib.workflows().collect::<Vec<_>>()})).unwrap()
-                );
-            } else {
-                for s in lib.steps() {
-                    let by = s.program.as_ref().map(|p| format!("  (program {p})")).unwrap_or_else(|| "  (done by a person)".into());
-                    println!("StepDefinition      {:<28} {}{by}", s.reference().to_string(), s.label.as_deref().unwrap_or(""));
-                }
-                for w in lib.workflows() {
-                    println!("WorkflowDefinition  {:<28} {} ({} steps)", w.reference().to_string(), w.label.as_deref().unwrap_or(""), w.steps.len());
-                }
             }
         }
         Cmd::Create { definition, version, id, label } => {
@@ -650,4 +611,140 @@ fn reason(wf: &Workflow, name: &str, status: &StepStatus) -> String {
         },
         _ => String::new(),
     }
+}
+
+/// The Library's commands. They read the definitions without checking
+/// them, so a store holding one that breaks a newer rule can still be
+/// shown and cleaned.
+fn library(cli: &Cli, store: &SqliteStore, what: &Option<LibraryCmd>) -> Result<(), Error> {
+    match what {
+        None | Some(LibraryCmd::Show) => {
+            let (steps, workflows) = store.definitions()?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&serde_json::json!({"steps": steps, "workflows": workflows})).unwrap());
+            } else {
+                for s in &steps {
+                    let by = match (&s.done_by, &s.program) {
+                        (stepmeld_core::definition::DoneBy::Person, _) => "  (done by a person)".to_string(),
+                        (_, Some(p)) => format!("  (program {p})"),
+                        (_, None) => "  (no program)".to_string(),
+                    };
+                    // stored before a rule it now breaks: shown, so it can be removed
+                    let stale = s.check().err().map(|e| format!("  NOT VALID NOW: {e}")).unwrap_or_default();
+                    println!("StepDefinition      {:<28} {}{by}{stale}", s.reference().to_string(), s.label.as_deref().unwrap_or(""));
+                }
+                for w in &workflows {
+                    println!("WorkflowDefinition  {:<28} {} ({} steps)", w.reference().to_string(), w.label.as_deref().unwrap_or(""), w.steps.len());
+                }
+            }
+        }
+        Some(LibraryCmd::Add { files }) => {
+            // StepDefinitions first, then WorkflowDefinitions in whatever
+            // order they resolve: one that nests another may be named
+            // before it
+            let mut steps = Vec::new();
+            let mut workflows = Vec::new();
+            for path in files {
+                let text = std::fs::read_to_string(path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
+                let doc: Value = serde_json::from_str(&text).map_err(|e| Error::Refused(format!("{} is not JSON: {e}", path.display())))?;
+                let contract = doc.get("contract").and_then(Value::as_str).unwrap_or("").to_string();
+                stepmeld_core::contracts::validate(&doc, &contract).map_err(|e| Error::Refused(format!("{}: {e}", path.display())))?;
+                match contract.as_str() {
+                    stepmeld_core::definition::STEP_DEFINITION => steps.push((path.clone(), serde_json::from_value::<StepDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
+                    stepmeld_core::definition::WORKFLOW_DEFINITION => workflows.push((path.clone(), serde_json::from_value::<WorkflowDefinition>(doc).map_err(|e| Error::Protocol(e.to_string()))?)),
+                    other => return Err(Error::Refused(format!("{}: contract {other:?} is not a definition", path.display()))),
+                }
+            }
+            for (_, def) in &steps {
+                store.put_step(def)?;
+                println!("added StepDefinition {}", def.reference());
+            }
+            while !workflows.is_empty() {
+                let before = workflows.len();
+                let mut kept = Vec::new();
+                let mut errors = Vec::new();
+                for (path, def) in workflows {
+                    match store.put_workflow_definition(&def) {
+                        Ok(()) => println!("added WorkflowDefinition {}", def.reference()),
+                        Err(Error::Invalid(e)) if e.contains("not in the library") => {
+                            errors.push(format!("{}: {e}", path.display()));
+                            kept.push((path, def));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if kept.len() == before {
+                    return Err(Error::Refused(errors.join("\n")));
+                }
+                workflows = kept;
+            }
+        }
+        Some(LibraryCmd::Remove { name, version, with_orphans, keep_orphans }) => {
+            let (steps, workflows) = store.definitions()?;
+            let all: Vec<(Ref, &str)> = steps.iter().map(|s| (s.reference(), "StepDefinition")).chain(workflows.iter().map(|w| (w.reference(), "WorkflowDefinition"))).collect();
+            let found: Vec<&(Ref, &str)> = all.iter().filter(|(r, _)| &r.name == name && version.is_none_or(|v| r.version == v)).collect();
+            let (target, kind) = match found.as_slice() {
+                [] => {
+                    return Err(Error::Refused(format!(
+                        "the Library has no StepDefinition or WorkflowDefinition {name}{}",
+                        version.map(|v| format!(" v{v}")).unwrap_or_default()
+                    )))
+                }
+                [one] => (one.0.clone(), one.1),
+                many => {
+                    let versions: Vec<String> = many.iter().map(|(r, _)| r.version.to_string()).collect();
+                    return Err(Error::Refused(format!("{name} has versions {}; say which with --version", versions.join(", "))));
+                }
+            };
+            let users = Library::users_of(&workflows, &target);
+            if !users.is_empty() {
+                let names: Vec<String> = users.iter().map(|r| r.to_string()).collect();
+                return Err(Error::Refused(format!("{kind} {target} is used by WorkflowDefinition {}; remove that first", names.join(", "))));
+            }
+            let mut in_use = Vec::new();
+            for id in store.list()? {
+                if let Some((wf, _)) = store.get(&id)? {
+                    if wf.definition == target || wf.steps.values().any(|s| s.definition == target) {
+                        in_use.push(id);
+                    }
+                }
+            }
+            if !in_use.is_empty() {
+                return Err(Error::Refused(format!("{kind} {target} is used by Workflow {}; remove those first (`stepmeld remove <workflow>`)", in_use.join(", "))));
+            }
+            let orphans = Library::orphaned_by(&steps, &workflows, &target);
+            store.remove_definition(&target)?;
+            println!("removed {kind} {target}");
+            if !orphans.is_empty() {
+                let names: Vec<String> = orphans.iter().map(|r| r.to_string()).collect();
+                println!("no other WorkflowDefinition uses StepDefinition {}", names.join(", "));
+                let remove = if *with_orphans {
+                    true
+                } else if *keep_orphans {
+                    false
+                } else {
+                    ask("Remove them too? [y/N] ")
+                };
+                if remove {
+                    for r in &orphans {
+                        store.remove_definition(r)?;
+                        println!("removed StepDefinition {r}");
+                    }
+                } else {
+                    println!("kept them");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A yes-or-no question on the terminal; anything but y or yes, or no
+/// answer at all, is no.
+fn ask(question: &str) -> bool {
+    use std::io::Write;
+    print!("{question}");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
