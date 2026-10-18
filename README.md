@@ -34,18 +34,20 @@ Build and test with `scripts/test.sh` (cargo).
 ## Walkthrough: add two integers
 
 `examples/hello` is a workflow with one step that adds two integers,
-reporting progress as it goes. It has three files:
+reporting progress as it goes. It has three parts:
 
 - `add.json`, the verb (a StepDefinition): two Inputs, `a` and `b`; a
   Parameter, `beat-seconds`, with its default; one Output, `sum`.
 - `hello.json`, the recipe (a WorkflowDefinition): one step, named
   `add`, that uses the verb.
-- `add.py`, the program that does the work. It reads its Inputs,
-  writes progress three times, and writes its Output, through the
-  Python helper `stepmeld.verb`.
+- `src/main.rs`, the program that does the work, `hello-add`. It
+  reads its Inputs, writes progress three times, and writes its
+  Output, through the Rust helper `stepmeld-verb`. (A verb can be a
+  program in any language; `python/`'s `stepmeld.verb` is the same
+  helper for Python.)
 
 A tag such as `integer` is a label, not a type: the engine never looks
-inside a value. A verb checks its own Inputs, as `add.py` does, and
+inside a value. A verb checks its own Inputs, as `hello-add` does, and
 refuses in words what it cannot use.
 
 Two roles take part (`docs/ORCHESTRATOR-WORKER.md`). The
@@ -56,26 +58,26 @@ Worker carries it out and reports. The Worker keeps its own settings
 and programs in `stepmeld-worker.sqlite`. Both files are made in the
 current folder the first time a command needs them.
 
-Install the command and the Python helper (from the repository root):
+Install the command and the example's program (from the repository
+root; both land in `~/.cargo/bin`, which must be on your `PATH`):
 
 ```bash
 cargo install --path stepmeld-cli
 ```
 ```bash
-python3 -m venv .venv && . .venv/bin/activate && pip install ./python
+cargo install --path examples/hello
 ```
 
-Then, from `examples/hello`, with the virtual environment active (the
-Worker runs `python3 add.py`, so `python3` must find the helper):
+Then, from `examples/hello`:
 
 ```bash
 cd examples/hello
 stepmeld add add.json hello.json                    # the verb and the recipe, into the Library
-stepmeld worker program add add -- python3 add.py   # this machine's Worker can perform `add`
+stepmeld worker program add add -- hello-add        # this machine's Worker can perform `add`
 ```
 
-Start the Worker in a second terminal (same folder, same virtual
-environment) and leave it running:
+Start the Worker in a second terminal (same folder) and leave it
+running:
 
 ```bash
 stepmeld work --watch
@@ -92,7 +94,7 @@ stepmeld tick --watch                               # orchestrate until nothing 
 ```
 
 `tick --watch` places the step on the Worker, which takes the order
-and runs `add.py`; each tick reads the Worker's latest report. While it
+and runs `hello-add`; each tick reads the Worker's latest report. While it
 runs, `stepmeld show hello-1` shows the progress the last tick read
 (`adding 2 of 3 beats`); when it is done (the Worker is named after
 your machine):

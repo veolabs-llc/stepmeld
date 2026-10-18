@@ -423,7 +423,7 @@ mod tests {
                 cloud: false
             }
         );
-        w.add_program(&Ref::new("add", 1), &["python3".into(), "add.py".into()]).unwrap();
+        w.add_program(&Ref::new("add", 1), &["hello-add".into()]).unwrap();
         w.set_cloud(true).unwrap();
         w.set_name("queue").unwrap();
         assert!(w.add_program(&Ref::new("x", 1), &[]).is_err());
@@ -438,7 +438,7 @@ mod tests {
             },
             "a default never replaces a setting"
         );
-        assert_eq!(again.programs().unwrap(), vec![(Ref::new("add", 1), vec!["python3".to_string(), "add.py".to_string()])]);
+        assert_eq!(again.programs().unwrap(), vec![(Ref::new("add", 1), vec!["hello-add".to_string()])]);
         assert!(again.remove_program(&Ref::new("add", 1)).unwrap());
         assert!(!again.remove_program(&Ref::new("add", 1)).unwrap());
     }

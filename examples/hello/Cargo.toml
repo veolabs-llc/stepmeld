@@ -1,0 +1,20 @@
+[package]
+name = "stepmeld-example-hello"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The README's walkthrough: a verb that adds two integers, slowly enough to watch"
+# an example, never published
+publish = false
+
+[[bin]]
+name = "hello-add"
+path = "src/main.rs"
+
+[dependencies]
+stepmeld-verb = { path = "../../stepmeld-verb" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
