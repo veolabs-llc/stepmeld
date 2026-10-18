@@ -45,15 +45,23 @@ factor. Each reports progress as it goes. The example has four parts:
   `value` and `factor`, the same Parameter, Output `product`, and the
   same program.
 - `workflowdef_hello.json`, the WorkflowDefinition `workflowdef_hello`:
-  a Step named `add` that uses `stepdef_add`, a Step named `multiply`
-  that uses `stepdef_multiply`, and one Binding, from `add.sum` to
-  `multiply.value`. That Binding is the only order there is: `multiply`
-  waits until `add` has a sum to give it.
+  a Step named `step_add` that uses `stepdef_add`, a Step named
+  `step_multiply` that uses `stepdef_multiply`, and one Binding, from
+  `step_add.sum` to `step_multiply.value`. That Binding is the only
+  order there is: `step_multiply` waits until `step_add` has a sum to
+  give it.
 - `src/main.rs`, the program `hello-program`. It does the work of both
   StepDefinitions: it reads which one the request names, checks the
   Inputs, writes progress three times and writes the Output, through
   the Rust helper `stepmeld-verb`. (A program can be written in any
   language; `python/`'s `stepmeld.verb` is the same helper for Python.)
+
+A **Step** is one use of a StepDefinition inside a WorkflowDefinition.
+Its name is unique within that WorkflowDefinition and is how everything
+else refers to it: Bindings (`step_add.sum`), and the command's
+`--step`. That is also how one StepDefinition can be used twice: two
+Steps with different names, say `step_first_sum` and `step_second_sum`,
+both using `stepdef_add`.
 
 A StepDefinition names its program; each Worker says which command
 runs that program on its own machine. So the same StepDefinition can
@@ -106,31 +114,31 @@ else feeds, and orchestrate it:
 
 ```bash
 stepmeld create workflowdef_hello --id hello-1
-stepmeld set hello-1 add --input a --value 2
-stepmeld set hello-1 add --input b --value 3
-stepmeld set hello-1 multiply --input factor --value 4
+stepmeld set hello-1 --step step_add --input a --value 2
+stepmeld set hello-1 --step step_add --input b --value 3
+stepmeld set hello-1 --step step_multiply --input factor --value 4
 stepmeld start hello-1        # a new Workflow runs nothing until started
 stepmeld tick --watch         # orchestrate until nothing is running
 ```
 
-`set` names a Step (`add`, `multiply`), not a StepDefinition.
-`multiply`'s `value` is not set by hand (`set` refuses: it is fed by a
-Binding). `tick --watch` places `add` on the Worker, which runs
-`hello-program`; when `add` succeeds its sum is carried to `multiply`,
-which then runs in turn. While it runs, `stepmeld show hello-1` shows
+`--step` names a Step, not a StepDefinition. `step_multiply`'s `value`
+is not set by hand (`set` refuses: it is fed by a Binding). `tick
+--watch` places `step_add` on the Worker, which runs `hello-program`;
+when `step_add` succeeds its sum is carried to `step_multiply`, which
+then runs in turn. While it runs, `stepmeld show hello-1` shows
 the progress the last tick read (`adding 2 of 3 beats`); when it is
 done (the Worker is named after your machine):
 
 ```text
 $ stepmeld show hello-1
 hello-1  (workflowdef_hello v1, succeeded)
-  add              succeeded
+  step_add         (stepdef_add v1)         succeeded
       in   a              2
       in   b              3
       par  beat-seconds   1  (default)
       out  sum            5
       run 1 on my-laptop by policy start-automatically: succeeded: 2 + 3 = 5
-  multiply         succeeded
+  step_multiply    (stepdef_multiply v1)    succeeded
       in   factor         4
       in   value          5
       par  beat-seconds   1  (default)
@@ -138,10 +146,10 @@ hello-1  (workflowdef_hello v1, succeeded)
       run 1 on my-laptop by policy start-automatically: succeeded: 5 × 4 = 20
 ```
 
-`stepmeld log hello-1 multiply` prints that Step's program output,
+`stepmeld log hello-1 --step step_multiply` prints that Step's program output,
 `stepmeld history hello-1` every event in order, and `stepmeld library`
 the StepDefinitions and WorkflowDefinitions. Without a Worker, `tick`
-says what it waits for: `add: no Worker offers it`. Each Run's files
+says what it waits for: `step_add: no Worker offers it`. Each Run's files
 (`request.json`, `progress.json`, `outcome.json`, `log.txt`) are in the
 Worker's `runs/`; the protocol is `contracts/run-directory.v1.md`.
 

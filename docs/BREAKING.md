@@ -9,6 +9,20 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## The command names a Step with `--step`
+
+*Breaking for the command.*
+
+**Before:** `stepmeld set <workflow> <step> …`, and likewise `start`,
+`complete`, `confirm`, `policy`, `place`, `skip` and `log`, took the
+Step as a bare second word, easy to mistake for a StepDefinition's
+name. **Now:** each takes `--step <name>`, the Step's name in its
+WorkflowDefinition; `place` also takes `--worker <name>`. `show` prints
+each Step's StepDefinition beside its name.
+
+**What to do:** add `--step` (and `--worker` for `place`) to scripts
+that call these commands.
+
 ## A StepDefinition names its program; Workers publish programs
 
 *Breaking. Contracts: `stepmeld/step-definition.v1`,

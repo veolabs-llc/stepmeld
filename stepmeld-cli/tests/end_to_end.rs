@@ -106,12 +106,12 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["show", "wf-1"]);
     assert!(ok && out.contains("needs input a"), "{out}");
-    for (step, input, value) in [("add", "a", "2"), ("add", "b", "3"), ("multiply", "factor", "4")] {
-        let (ok, out) = stepmeld(d, &["set", "wf-1", step, "--input", input, "--value", value]);
+    for (step, input, value) in [("step_add", "a", "2"), ("step_add", "b", "3"), ("step_multiply", "factor", "4")] {
+        let (ok, out) = stepmeld(d, &["set", "wf-1", "--step", step, "--input", input, "--value", value]);
         assert!(ok, "{out}");
     }
-    // multiply's value comes from add's sum: a person cannot set it
-    let (ok, out) = stepmeld(d, &["set", "wf-1", "multiply", "--input", "value", "--value", "9"]);
+    // step_multiply's value comes from step_add's sum: a person cannot set it
+    let (ok, out) = stepmeld(d, &["set", "wf-1", "--step", "step_multiply", "--input", "value", "--value", "9"]);
     assert!(!ok && out.contains("fed by a binding"), "{out}");
     // no Worker has published itself yet: the tick says so, and stops
     let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
@@ -127,7 +127,11 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     let (ok, out) = stepmeld(d, &["show", "wf-1"]);
     assert!(ok && out.contains("2 + 3 = 5") && out.contains("sum            5") && out.contains("1  (default)") && out.contains("run 1 on local"), "{out}");
     assert!(out.contains("value          5") && out.contains("product        20") && out.contains("5 x 4 = 20"), "the sum flowed into multiply: {out}");
-    let (ok, out) = stepmeld(d, &["log", "wf-1", "multiply"]);
+    assert!(
+        out.contains("step_add         (stepdef_add v1)") && out.contains("step_multiply    (stepdef_multiply v1)"),
+        "a Step names its StepDefinition: {out}"
+    );
+    let (ok, out) = stepmeld(d, &["log", "wf-1", "--step", "step_multiply"]);
     assert!(ok && out.contains("stepdef_multiply 5 and 4"), "{out}");
     let (ok, out) = stepmeld(d, &["history", "wf-1"]);
     assert!(ok && out.contains("run-ended") && out.contains("policy start-automatically"), "{out}");
@@ -141,24 +145,24 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     let _cloud = work(d, "cloud-worker.sqlite");
     let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-2"]);
     assert!(ok, "{out}");
-    for (step, input, value) in [("add", "a", "40"), ("add", "b", "2"), ("multiply", "factor", "10")] {
-        let (ok, out) = stepmeld(d, &["set", "wf-2", step, "--input", input, "--value", value]);
+    for (step, input, value) in [("step_add", "a", "40"), ("step_add", "b", "2"), ("step_multiply", "factor", "10")] {
+        let (ok, out) = stepmeld(d, &["set", "wf-2", "--step", step, "--input", input, "--value", value]);
         assert!(ok, "{out}");
     }
     let (ok, out) = stepmeld(d, &["start", "wf-2"]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick"]);
     assert!(ok && out.contains("several Workers offer it"), "{out}");
-    let (ok, out) = stepmeld(d, &["place", "wf-2", "add", "nobody"]);
+    let (ok, out) = stepmeld(d, &["place", "wf-2", "--step", "step_add", "--worker", "nobody"]);
     assert!(!ok && out.contains("no Worker \"nobody\""), "{out}");
-    // both Workers have hello-program, so multiply is placed by hand too
-    let (ok, out) = stepmeld(d, &["place", "wf-2", "multiply", "local"]);
+    // both Workers have hello-program, so step_multiply is placed by hand too
+    let (ok, out) = stepmeld(d, &["place", "wf-2", "--step", "step_multiply", "--worker", "local"]);
     assert!(ok, "{out}");
-    let (ok, out) = stepmeld(d, &["policy", "wf-2", "add", "--to", r#"{"placement":{"performer":"batch","confirm":["cloud"]}}"#]);
+    let (ok, out) = stepmeld(d, &["policy", "wf-2", "--step", "step_add", "--to", r#"{"placement":{"performer":"batch","confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick"]);
     assert!(ok && out.contains("waiting for the cloud placement to be confirmed"), "{out}");
-    let (ok, out) = stepmeld(d, &["confirm", "wf-2", "add"]);
+    let (ok, out) = stepmeld(d, &["confirm", "wf-2", "--step", "step_add"]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
     assert!(ok, "{out}");
@@ -169,14 +173,14 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     );
 
     // a policy change is a command like any other, and a bad one is refused
-    let (ok, out) = stepmeld(d, &["policy", "wf-1", "add", "--to", r#"{"placement":{"confirm":["cloud"]}}"#]);
+    let (ok, out) = stepmeld(d, &["policy", "wf-1", "--step", "step_add", "--to", r#"{"placement":{"confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["history", "wf-1"]);
     assert!(ok && out.contains("policy-set"), "{out}");
-    let (ok, out) = stepmeld(d, &["policy", "wf-1", "add", "--to", r#"{"start":"sometimes"}"#]);
+    let (ok, out) = stepmeld(d, &["policy", "wf-1", "--step", "step_add", "--to", r#"{"start":"sometimes"}"#]);
     assert!(!ok && out.contains("not a policy"), "{out}");
     // a refusal is one line and exit 1
-    let (ok, out) = stepmeld(d, &["set", "wf-1", "add", "--input", "nope", "--value", "1"]);
+    let (ok, out) = stepmeld(d, &["set", "wf-1", "--step", "step_add", "--input", "nope", "--value", "1"]);
     assert!(!ok && out.trim().lines().count() == 1 && out.contains("no input"), "{out}");
     // a finished Workflow and its children are forgotten; a live one is not
     let (ok, out) = stepmeld(d, &["remove", "wf-1"]);
