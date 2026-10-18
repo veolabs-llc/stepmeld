@@ -67,11 +67,7 @@ impl Library {
     pub fn orphaned_by(steps: &[StepDefinition], workflows: &[WorkflowDefinition], removed: &Ref) -> Vec<Ref> {
         let Some(gone) = workflows.iter().find(|w| &w.reference() == removed) else { return Vec::new() };
         let others: Vec<WorkflowDefinition> = workflows.iter().filter(|w| &w.reference() != removed).cloned().collect();
-        let mut out: Vec<Ref> = steps
-            .iter()
-            .map(|s| s.reference())
-            .filter(|r| gone.steps.iter().any(|e| &e.step == r) && Self::users_of(&others, r).is_empty())
-            .collect();
+        let mut out: Vec<Ref> = steps.iter().map(|s| s.reference()).filter(|r| gone.steps.iter().any(|e| &e.step == r) && Self::users_of(&others, r).is_empty()).collect();
         out.dedup();
         out
     }
