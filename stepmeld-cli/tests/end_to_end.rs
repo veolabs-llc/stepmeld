@@ -190,3 +190,57 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     let (ok, out) = stepmeld(d, &["remove", "wf-1"]);
     assert!(!ok && out.contains("no workflow"), "{out}");
 }
+
+fn stepmeld_answering(dir: &Path, args: &[&str], answer: &str) -> (bool, String) {
+    use std::io::Write;
+    let mut child = command(dir, "worker.sqlite")
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(answer.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+/// `library remove`: nothing in use is removed; removing a
+/// WorkflowDefinition offers the StepDefinitions it leaves unused.
+#[test]
+fn library_remove_and_what_it_leaves_unused() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let hello = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello");
+    for file in ["stepdef_add.json", "stepdef_multiply.json", "workflowdef_hello.json"] {
+        std::fs::copy(hello.join(file), d.join(file)).unwrap();
+    }
+    let (ok, out) = stepmeld(d, &["library", "add", "stepdef_add.json", "stepdef_multiply.json", "workflowdef_hello.json"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["library", "remove", "stepdef_add"]);
+    assert!(!ok && out.contains("used by WorkflowDefinition workflowdef_hello v1"), "{out}");
+    let (ok, out) = stepmeld(d, &["library", "remove", "nothing-by-this-name"]);
+    assert!(!ok && out.contains("has no StepDefinition or WorkflowDefinition"), "{out}");
+    // a Workflow from it holds it in place
+    let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-1"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["library", "remove", "workflowdef_hello"]);
+    assert!(!ok && out.contains("used by Workflow wf-1"), "{out}");
+    let (ok, out) = stepmeld(d, &["remove", "wf-1"]);
+    assert!(ok, "{out}");
+    // answered no: the WorkflowDefinition goes, its StepDefinitions stay
+    let (ok, out) = stepmeld_answering(d, &["library", "remove", "workflowdef_hello"], "n\n");
+    assert!(
+        ok && out.contains("removed WorkflowDefinition workflowdef_hello v1") && out.contains("stepdef_add v1, stepdef_multiply v1") && out.contains("kept them"),
+        "{out}"
+    );
+    let (ok, out) = stepmeld(d, &["library"]);
+    assert!(ok && out.contains("stepdef_add v1") && !out.contains("workflowdef_hello"), "{out}");
+    // answered yes: they go too
+    let (ok, out) = stepmeld(d, &["library", "add", "workflowdef_hello.json"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld_answering(d, &["library", "remove", "workflowdef_hello"], "y\n");
+    assert!(ok && out.contains("removed StepDefinition stepdef_add v1") && out.contains("removed StepDefinition stepdef_multiply v1"), "{out}");
+    let (ok, out) = stepmeld(d, &["library"]);
+    assert!(ok && out.trim().is_empty(), "{out}");
+}

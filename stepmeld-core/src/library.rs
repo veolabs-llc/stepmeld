@@ -20,7 +20,7 @@ impl Library {
     pub fn add_step(&mut self, def: StepDefinition) -> Result<(), Error> {
         def.check()?;
         if self.workflows.contains_key(&def.reference()) {
-            return Err(Error::Invalid(format!("step definition {}: a workflow definition has that name and version; verbs share one namespace", def.reference())));
+            return Err(Error::Invalid(format!("StepDefinition {}: a WorkflowDefinition has that name and version, and they share one namespace", def.reference())));
         }
         self.steps.insert(def.reference(), def);
         Ok(())
@@ -31,7 +31,7 @@ impl Library {
     pub fn add_workflow(&mut self, def: WorkflowDefinition) -> Result<(), Error> {
         self.check_workflow(&def)?;
         if self.steps.contains_key(&def.reference()) {
-            return Err(Error::Invalid(format!("workflow definition {}: a step definition has that name and version; verbs share one namespace", def.reference())));
+            return Err(Error::Invalid(format!("WorkflowDefinition {}: a StepDefinition has that name and version, and they share one namespace", def.reference())));
         }
         self.workflows.insert(def.reference(), def);
         Ok(())
@@ -46,7 +46,7 @@ impl Library {
         }
         for w in workflows {
             if lib.steps.contains_key(&w.reference()) {
-                return Err(Error::Invalid(format!("workflow definition {}: a step definition has that name and version; verbs share one namespace", w.reference())));
+                return Err(Error::Invalid(format!("WorkflowDefinition {}: a StepDefinition has that name and version, and they share one namespace", w.reference())));
             }
             lib.workflows.insert(w.reference(), w);
         }
@@ -54,6 +54,26 @@ impl Library {
             lib.check_workflow(w)?;
         }
         Ok(lib)
+    }
+
+    /// The WorkflowDefinitions among `workflows` that use `r` as one of
+    /// their Steps.
+    pub fn users_of(workflows: &[WorkflowDefinition], r: &Ref) -> Vec<Ref> {
+        workflows.iter().filter(|w| w.steps.iter().any(|e| &e.step == r)).map(|w| w.reference()).collect()
+    }
+
+    /// The StepDefinitions the WorkflowDefinition `removed` uses that no
+    /// other WorkflowDefinition does: what removing it leaves orphaned.
+    pub fn orphaned_by(steps: &[StepDefinition], workflows: &[WorkflowDefinition], removed: &Ref) -> Vec<Ref> {
+        let Some(gone) = workflows.iter().find(|w| &w.reference() == removed) else { return Vec::new() };
+        let others: Vec<WorkflowDefinition> = workflows.iter().filter(|w| &w.reference() != removed).cloned().collect();
+        let mut out: Vec<Ref> = steps
+            .iter()
+            .map(|s| s.reference())
+            .filter(|r| gone.steps.iter().any(|e| &e.step == r) && Self::users_of(&others, r).is_empty())
+            .collect();
+        out.dedup();
+        out
     }
 
     /// A verb: a StepDefinition, or a WorkflowDefinition seen from
@@ -119,7 +139,7 @@ impl Library {
     /// Binding between ports that exist with equal tags, every Guard
     /// over a step and Decision that exist, no cycles.
     pub fn check_workflow(&self, w: &WorkflowDefinition) -> Result<(), Error> {
-        let invalid = |m: String| Error::Invalid(format!("workflow definition {}: {m}", w.reference()));
+        let invalid = |m: String| Error::Invalid(format!("WorkflowDefinition {}: {m}", w.reference()));
         if w.contract != crate::definition::WORKFLOW_DEFINITION {
             return Err(invalid(format!("contract is {:?}", w.contract)));
         }
@@ -206,5 +226,44 @@ fn check_guard(g: &Guard, defs: &BTreeMap<&str, StepDefinition>) -> Result<(), S
         }
         Guard::All(gs) | Guard::Any(gs) => gs.iter().try_for_each(|g| check_guard(g, defs)),
         Guard::Not(g) => check_guard(g, defs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::definition::StepEntry;
+
+    fn step(name: &str) -> StepDefinition {
+        let mut s = StepDefinition::new(name, 1);
+        s.program = Some("p".into());
+        s
+    }
+
+    fn workflow(name: &str, uses: &[&str]) -> WorkflowDefinition {
+        let mut w = WorkflowDefinition::new(name, 1);
+        w.steps = uses
+            .iter()
+            .enumerate()
+            .map(|(i, u)| StepEntry {
+                name: format!("s{i}"),
+                step: Ref::new(u, 1),
+                label: None,
+            })
+            .collect();
+        w
+    }
+
+    /// Removing a WorkflowDefinition orphans the StepDefinitions only it
+    /// used; one another WorkflowDefinition uses, or none used, is not
+    /// its orphan.
+    #[test]
+    fn users_and_orphans() {
+        let steps = vec![step("stepdef_add"), step("stepdef_multiply"), step("stepdef_shared"), step("stepdef_loose")];
+        let workflows = vec![workflow("workflowdef_hello", &["stepdef_add", "stepdef_multiply", "stepdef_shared"]), workflow("workflowdef_other", &["stepdef_shared"])];
+        assert_eq!(Library::users_of(&workflows, &Ref::new("stepdef_shared", 1)), vec![Ref::new("workflowdef_hello", 1), Ref::new("workflowdef_other", 1)]);
+        assert!(Library::users_of(&workflows, &Ref::new("stepdef_loose", 1)).is_empty());
+        assert_eq!(Library::orphaned_by(&steps, &workflows, &Ref::new("workflowdef_hello", 1)), vec![Ref::new("stepdef_add", 1), Ref::new("stepdef_multiply", 1)]);
+        assert!(Library::orphaned_by(&steps, &workflows, &Ref::new("nope", 1)).is_empty());
     }
 }

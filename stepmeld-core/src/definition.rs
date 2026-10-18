@@ -218,7 +218,7 @@ impl StepDefinition {
     /// The definition holds together: the contract word, names unique,
     /// Decisions tagged as such with at least one option.
     pub fn check(&self) -> Result<(), crate::Error> {
-        let invalid = |m: String| crate::Error::Invalid(format!("step definition {}: {m}", self.reference()));
+        let invalid = |m: String| crate::Error::Invalid(format!("StepDefinition {}: {m}", self.reference()));
         if self.contract != STEP_DEFINITION {
             return Err(invalid(format!("contract is {:?}, not {STEP_DEFINITION:?}", self.contract)));
         }
