@@ -1,77 +1,99 @@
-//! The walkthrough's program, `hello-program`: it does the work of two
-//! StepDefinitions, `stepdef_add` (a + b) and `stepdef_multiply`
-//! (value × factor), each slowly enough to watch. Both StepDefinitions
-//! name it (`"program": "hello-program"`), and a Worker registers the
-//! command for it once.
+//! The walkthrough's program, `hello-program`. Both StepDefinitions
+//! name it (`"program": "hello-program"`): it adds for `stepdef_add`
+//! and multiplies for `stepdef_multiply`, slowly enough to watch.
 //!
-//! A tag is a label, not a type: the engine never looks inside a
-//! Value, so each StepDefinition's work checks its own Inputs and
-//! refuses, in words, what it cannot use.
+//! It uses nothing of stepmeld. A Worker runs it as
+//! `hello-program <run-dir>`; it reads `request.json` from that folder
+//! and writes `progress.json` as it goes and `outcome.json` at the end
+//! (the run directory protocol, contracts/run-directory.v1.md).
+//! Whatever it prints goes to the Run's log.
 //!
-//! Run by a Worker as `hello-program <run-dir>`: it reads the request
-//! from the run directory, does the work of the StepDefinition the
-//! request names, and writes progress and the outcome there, through
-//! `stepmeld-verb` (contracts/run-directory.v1.md).
+//! A tag is a label, not a type: the engine never looks inside a value,
+//! so the program checks its own Inputs and refuses, in words, what it
+//! cannot use.
 
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::time::Duration;
-use stepmeld_verb::{refused, Result, Run};
-
-/// Two integer Inputs, or a refusal that says what came instead.
-fn integers(run: &Run, first: &str, second: &str) -> Result<(i64, i64)> {
-    let (x, y) = (run.input(first)?.clone(), run.input(second)?.clone());
-    match (x.as_i64(), y.as_i64()) {
-        (Some(x), Some(y)) => Ok((x, y)),
-        _ => Err(refused(format!("{first} and {second} must be integers, not {x} and {y}"))),
-    }
-}
-
-/// Three beats of progress, `beat-seconds` apart.
-fn beats(run: &Run, phase: &str, what: &str) {
-    let beat = run.parameter("beat-seconds").and_then(Value::as_f64).unwrap_or(1.0).max(0.0);
-    for i in 1..=3 {
-        run.progress(Some(phase), Some(i), Some(3), Some("beats"));
-        run.log(&format!("thinking about {what} ({i}/3)"));
-        std::thread::sleep(Duration::from_secs_f64(beat));
-    }
-}
-
-fn add(run: &mut Run) -> Result<()> {
-    let (a, b) = integers(run, "a", "b")?;
-    let sum = a.checked_add(b).ok_or_else(|| refused(format!("{a} + {b} does not fit in 64 bits")))?;
-    beats(run, "adding", &format!("{a} + {b}"));
-    run.succeed(BTreeMap::from([("sum".to_string(), json!(sum))]), &format!("{a} + {b} = {sum}"), None)
-}
-
-fn multiply(run: &mut Run) -> Result<()> {
-    let (value, factor) = integers(run, "value", "factor")?;
-    let product = value.checked_mul(factor).ok_or_else(|| refused(format!("{value} × {factor} does not fit in 64 bits")))?;
-    beats(run, "multiplying", &format!("{value} × {factor}"));
-    run.succeed(BTreeMap::from([("product".to_string(), json!(product))]), &format!("{value} × {factor} = {product}"), None)
-}
-
-/// The work this program does, by StepDefinition.
-const STEP_DEFINITIONS: &[(&str, stepmeld_verb::Verb)] = &[("stepdef_add", add), ("stepdef_multiply", multiply)];
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    std::process::exit(stepmeld_verb::main(STEP_DEFINITIONS, &args));
+    let dir = std::env::args().next_back().unwrap_or_default();
+    std::process::exit(run(Path::new(&dir)));
+}
+
+/// Do the work the request names; the exit status.
+fn run(dir: &Path) -> i32 {
+    let request: Value = match std::fs::read_to_string(dir.join("request.json")).ok().and_then(|t| serde_json::from_str(&t).ok()) {
+        Some(r) => r,
+        None => {
+            eprintln!("cannot read {}/request.json", dir.display());
+            return 2;
+        }
+    };
+    let step_definition = request["definition"]["name"].as_str().unwrap_or("");
+    let (first, second, output, sign) = match step_definition {
+        "stepdef_add" => ("a", "b", "sum", "+"),
+        "stepdef_multiply" => ("value", "factor", "product", "×"),
+        other => return refuse(dir, &format!("hello-program does no work for {other:?}")),
+    };
+    let (x, y) = match (request["inputs"][first].as_i64(), request["inputs"][second].as_i64()) {
+        (Some(x), Some(y)) => (x, y),
+        _ => return refuse(dir, &format!("{first} and {second} must be integers, not {} and {}", request["inputs"][first], request["inputs"][second])),
+    };
+    let answer = match output {
+        "sum" => x.checked_add(y),
+        _ => x.checked_mul(y),
+    };
+    let Some(answer) = answer else { return refuse(dir, &format!("{x} {sign} {y} does not fit in 64 bits")) };
+
+    let beat = request["parameters"]["beat-seconds"].as_f64().unwrap_or(1.0).max(0.0);
+    let phase = if output == "sum" { "adding" } else { "multiplying" };
+    for i in 1..=3 {
+        write(dir, "progress.json", json!({"phase": phase, "done": i, "total": 3, "unit": "beats", "at": now()}));
+        println!("thinking about {x} {sign} {y} ({i}/3)");
+        std::thread::sleep(Duration::from_secs_f64(beat));
+    }
+    write(dir, "outcome.json", json!({"state": "succeeded", "outputs": {output: answer}, "summary": {"headline": format!("{x} {sign} {y} = {answer}")}}));
+    0
+}
+
+/// End the Run as refused: it cannot do this request, in words.
+fn refuse(dir: &Path, words: &str) -> i32 {
+    write(dir, "outcome.json", json!({"state": "failed", "class": "refused", "reason": words}));
+    1
+}
+
+fn write(dir: &Path, file: &str, doc: Value) {
+    std::fs::write(dir.join(file), doc.to_string()).expect("the run directory is writable");
+}
+
+/// The time now, as the protocol spells it: RFC 3339, UTC.
+fn now() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let (day, month) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     /// A run directory holding the request a Worker would hand over for
-    /// the StepDefinition in `stepdef_<step>.json`, with its Outputs.
-    fn run_dir(step: &str, inputs: Value) -> tempfile::TempDir {
+    /// the StepDefinition in `stepdef_<name>.json`, with its Outputs.
+    fn run_dir(name: &str, inputs: Value) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("stepdef_{step}.json"));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("stepdef_{name}.json"));
         let definition: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let request = json!({
-            "workflow": "hello-1", "step": step, "run": format!("hello-1/{step}/1"),
+            "workflow": "hello-1", "step": format!("step_{name}"), "run": format!("hello-1/step_{name}/1"),
             "definition": {"name": definition["name"], "version": 1},
             "program": definition["program"],
             "inputs": inputs,
@@ -86,36 +108,36 @@ mod tests {
         serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
     }
 
-    fn perform(dir: &Path) -> i32 {
-        stepmeld_verb::main(STEP_DEFINITIONS, &[dir.display().to_string()])
-    }
-
     #[test]
-    fn add_adds_and_reports_progress() {
+    fn it_adds_and_reports_progress() {
         let d = run_dir("add", json!({"a": 2, "b": 3}));
-        assert_eq!(perform(d.path()), 0);
+        assert_eq!(run(d.path()), 0);
         let out = file(d.path(), "outcome.json");
         assert_eq!((out["outputs"]["sum"].clone(), out["summary"]["headline"].clone()), (json!(5), json!("2 + 3 = 5")));
-        assert_eq!(file(d.path(), "progress.json")["done"], 3);
+        let progress = file(d.path(), "progress.json");
+        assert_eq!(progress["done"], 3);
+        // what it writes by hand is what the contracts say
+        assert_eq!(stepmeld_core::contracts::validate(&progress, "stepmeld/run-progress.v1"), Ok(()));
+        assert_eq!(stepmeld_core::contracts::validate(&out, "stepmeld/run-outcome.v1"), Ok(()));
     }
 
     #[test]
-    fn multiply_multiplies() {
+    fn it_multiplies() {
         let d = run_dir("multiply", json!({"value": 5, "factor": 4}));
-        assert_eq!(perform(d.path()), 0);
-        let out = file(d.path(), "outcome.json");
-        assert_eq!((out["outputs"]["product"].clone(), out["summary"]["headline"].clone()), (json!(20), json!("5 × 4 = 20")));
+        assert_eq!(run(d.path()), 0);
+        assert_eq!(file(d.path(), "outcome.json")["summary"]["headline"], "5 × 4 = 20");
     }
 
     #[test]
-    fn a_tag_is_not_a_type_so_each_step_checks() {
+    fn a_tag_is_not_a_type_so_it_checks() {
         let d = run_dir("add", json!({"a": 2, "b": "three"}));
-        assert_eq!(perform(d.path()), 1);
+        assert_eq!(run(d.path()), 1);
         let out = file(d.path(), "outcome.json");
-        assert_eq!(out["class"], "refused");
+        assert_eq!((out["state"].as_str(), out["class"].as_str()), (Some("failed"), Some("refused")));
         assert!(out["reason"].as_str().unwrap().contains("must be integers"), "{out}");
+        assert_eq!(stepmeld_core::contracts::validate(&out, "stepmeld/run-outcome.v1"), Ok(()));
         let d = run_dir("multiply", json!({"value": i64::MAX, "factor": 2}));
-        perform(d.path());
+        assert_eq!(run(d.path()), 1);
         assert!(file(d.path(), "outcome.json")["reason"].as_str().unwrap().contains("does not fit"));
     }
 }

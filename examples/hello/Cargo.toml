@@ -12,9 +12,12 @@ publish = false
 name = "hello-program"
 path = "src/main.rs"
 
+# Nothing of stepmeld: the program speaks the run directory protocol
+# (contracts/run-directory.v1.md) itself, and needs only JSON.
 [dependencies]
-stepmeld-verb = { path = "../../stepmeld-verb" }
 serde_json.workspace = true
 
+# tests only (never in the program): the files it writes are held to the contracts
 [dev-dependencies]
 tempfile = "3"
+stepmeld-core = { path = "../../stepmeld-core" }

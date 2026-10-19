@@ -50,11 +50,16 @@ factor. Each reports progress as it goes. The example has four parts:
   `step_add.sum` to `step_multiply.value`. That Binding is the only
   order there is: `step_multiply` waits until `step_add` has a sum to
   give it.
-- `src/main.rs`, the program `hello-program`. It does the work of both
-  StepDefinitions: it reads which one the request names, checks the
-  Inputs, writes progress three times and writes the Output, through
-  the Rust helper `stepmeld-verb`. (A program can be written in any
-  language; `python/`'s `stepmeld.verb` is the same helper for Python.)
+- `src/main.rs`, the program `hello-program`. It uses nothing of
+  stepmeld, only a JSON library: the Worker runs it with a folder for
+  the Run, it reads `request.json` there (which StepDefinition, which
+  Inputs), writes `progress.json` three times and `outcome.json` at the
+  end, and what it prints becomes the Run's log. That exchange of files
+  is the whole contract between a Worker and a program
+  (`contracts/run-directory.v1.md`), so a program can be written in any
+  language. (`stepmeld-verb` for Rust and `python/`'s `stepmeld.verb`
+  for Python do the same with more care: a crash still leaves an
+  outcome.)
 
 A **Step** is one use of a StepDefinition inside a WorkflowDefinition.
 Its name is unique within that WorkflowDefinition and is how everything
