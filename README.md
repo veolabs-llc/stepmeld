@@ -150,8 +150,28 @@ stepmeld tick --watch         # orchestrate until nothing is running
 is not set by hand (`set` refuses: it is fed by a Binding). `tick
 --watch` places `step_add` on the Worker, which runs `hello-program`;
 when `step_add` succeeds its sum is carried to `step_multiply`, which
-then runs in turn. While it runs, `stepmeld show hello-1` shows the progress the last tick read (`adding 2 of 3
-beats`); when it is done (the Worker is named after your machine):
+then runs in turn. `tick` prints a line whenever a Step or the Workflow
+changes, with its progress or its result (the Worker is named after
+your machine; which progress lines appear depends on timing; a
+Workflow already finished stays quiet):
+
+```text
+hello-1          step_add         running    on my-laptop
+hello-1          step_multiply    not-ready
+hello-1          (workflow)       running
+hello-1          step_add         running    adding 2 of 3 beats
+hello-1          step_add         succeeded  2 + 3 = 5
+hello-1          step_multiply    running    on my-laptop
+hello-1          step_multiply    running    multiplying 1 of 3 beats
+hello-1          step_multiply    running    multiplying 3 of 3 beats
+hello-1          step_multiply    succeeded  5 × 4 = 20
+hello-1          (workflow)       succeeded
+```
+
+The Worker's terminal says the same from its side, one line as it
+takes each order and one as it ends (`hello-1/step_add/1  succeeded
+2 + 3 = 5`). `stepmeld show hello-1` gives the whole picture at any
+time:
 
 ```text
 $ stepmeld show hello-1

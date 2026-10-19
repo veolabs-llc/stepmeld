@@ -378,8 +378,8 @@ fn run(cli: Cli) -> Result<(), Error> {
             let worker = Worker::new(&settings.name, &host(), settings.cloud, names.clone(), store.clone(), mechanism);
             println!("worker {} on {}, with programs {}", settings.name, host(), names.join(", "));
             loop {
-                for (id, word) in worker.tick(&iso(now_secs()))? {
-                    println!("{id:<40} {word}");
+                for m in worker.tick(&iso(now_secs()))? {
+                    println!("{}", format!("{:<32} {:<10} {}", m.order, m.word, m.detail).trim_end());
                 }
                 if !*watch {
                     break;
@@ -487,37 +487,53 @@ fn run(cli: Cli) -> Result<(), Error> {
             let gone = driver.remove(workflow, &now, &until())?;
             println!("removed {}", gone.join(", "));
         }
-        Cmd::Tick { watch, every } => loop {
-            let statuses = driver.tick_all(&iso(now_secs()), &until())?;
+        Cmd::Tick { watch, every } => {
+            // what was last said of each Workflow and Step; a line is
+            // printed only when that changes. Workflows already finished
+            // are taken as said, so they stay quiet unless they move.
+            let faces = |d: &Driver| d.performers.iter().map(|p| p.describe()).collect::<Vec<_>>();
+            let mut said: BTreeMap<(String, String), String> = BTreeMap::new();
             let lib = store.library()?;
-            let faces: Vec<_> = driver.performers.iter().map(|p| p.describe()).collect();
-            let mut busy = false;
-            for (id, status) in &statuses {
-                // judged against the Workers that exist: a Workflow
-                // whose ready Steps no Worker offers is waiting, and
-                // says for what
-                let (mut word, mut why) = (format!("{status:?}").to_lowercase(), Vec::new());
-                if let (Some((wf, _)), true) = (store.get(id)?, matches!(status, WorkflowStatus::Ready | WorkflowStatus::Waiting)) {
-                    if let Some(def) = lib.workflow(&wf.definition) {
-                        let gates: Vec<_> = wf.steps.keys().map(|name| (name, wf.gate(def, name, &faces))).collect();
-                        for (name, gate) in &gates {
-                            if let Gate::Closed(s @ StepStatus::Waiting(_)) = gate {
-                                why.push(format!("{name}: {}", reason(&wf, name, s)));
-                            }
-                        }
-                        if *status == WorkflowStatus::Ready && !gates.iter().any(|(_, g)| *g == Gate::Open) {
-                            word = "waiting".into();
+            for id in store.list()? {
+                if let Some(now) = snapshot(&store, &lib, &faces(&driver), &id)? {
+                    if matches!(now.0.as_str(), "succeeded" | "failed" | "canceled") {
+                        said.insert((id.clone(), String::new()), now.0.clone());
+                        for (step, line) in now.1 {
+                            said.insert((id.clone(), step), line);
                         }
                     }
                 }
-                busy |= word == "running" || word == "ready";
-                println!("{id:<40} {word:<10} {}", why.join("; "));
             }
-            if !*watch || !busy {
-                break;
+            let mut spoke = false;
+            loop {
+                let statuses = driver.tick_all(&iso(now_secs()), &until())?;
+                let lib = store.library()?;
+                let mut busy = false;
+                for id in statuses.keys() {
+                    let Some((word, steps)) = snapshot(&store, &lib, &faces(&driver), id)? else { continue };
+                    for (step, line) in steps {
+                        if said.get(&(id.clone(), step.clone())) != Some(&line) {
+                            println!("{id:<16} {step:<16} {line}");
+                            said.insert((id.clone(), step), line);
+                            spoke = true;
+                        }
+                    }
+                    if said.get(&(id.clone(), String::new())) != Some(&word) {
+                        println!("{id:<16} {:<16} {word}", "(workflow)");
+                        said.insert((id.clone(), String::new()), word.clone());
+                        spoke = true;
+                    }
+                    busy |= word == "running" || word == "ready";
+                }
+                if !*watch || !busy {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(*every));
             }
-            std::thread::sleep(std::time::Duration::from_secs(*every));
-        },
+            if !spoke {
+                println!("nothing to advance: {} Workflows, all finished", store.list()?.len());
+            }
+        }
         Cmd::History { workflow } => {
             for e in store.history(workflow)? {
                 if cli.json {
@@ -770,4 +786,49 @@ fn ask(question: &str) -> bool {
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// A Workflow's status in a word, and each Step's line (name, "status  detail").
+type Snapshot = (String, Vec<(String, String)>);
+
+/// Where a Workflow and each of its Steps stand, in words, judged
+/// against the Workers that exist: the Workflow's status, then each
+/// Step in its WorkflowDefinition's order as "status  detail" (what it
+/// waits for, how far it is, its headline, why it failed).
+fn snapshot(store: &SqliteStore, lib: &Library, faces: &[stepmeld_core::workflow::PerformerFace], id: &str) -> Result<Option<Snapshot>, Error> {
+    let Some((wf, _)) = store.get(id)? else { return Ok(None) };
+    let Some(def) = lib.workflow(&wf.definition) else { return Ok(None) };
+    let status = wf.status(def);
+    let mut steps = Vec::new();
+    let mut any_open = false;
+    for entry in &def.steps {
+        let name = &entry.name;
+        let gate = wf.gate(def, name, faces);
+        any_open |= gate == Gate::Open;
+        let st = match gate {
+            Gate::Closed(s @ StepStatus::Waiting(_)) => s,
+            _ => wf.step_status(def, name),
+        };
+        let step = &wf.steps[name];
+        let detail = match &st {
+            StepStatus::Succeeded => step.latest().and_then(|r| r.outcome.as_ref()).and_then(|o| o.summary.as_ref()).map(|s| s.headline.clone()).unwrap_or_default(),
+            StepStatus::Canceled => step.latest().and_then(|r| r.outcome.as_ref()).and_then(|o| o.reason.clone()).unwrap_or_default(),
+            StepStatus::Running => {
+                let progress = reason(&wf, name, &st);
+                if progress.is_empty() {
+                    step.latest().map(|r| format!("on {}", r.performer)).unwrap_or_default()
+                } else {
+                    progress
+                }
+            }
+            other => reason(&wf, name, other),
+        };
+        steps.push((name.clone(), format!("{:<10} {detail}", st.word()).trim_end().to_string()));
+    }
+    // a Workflow whose ready Steps no Worker offers is waiting
+    let word = match status {
+        WorkflowStatus::Ready if !any_open => "waiting".to_string(),
+        other => format!("{other:?}").to_lowercase(),
+    };
+    Ok(Some((word, steps)))
 }

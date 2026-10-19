@@ -128,7 +128,7 @@ fn an_order_is_run_by_its_worker_and_reported_back() {
 
     // the Worker takes it and reports progress; then the outcome
     let moved = w.tick(&now(3)).unwrap();
-    assert_eq!(moved, [(run.id.clone(), "running".to_string())]);
+    assert_eq!(moved.iter().map(|m| (m.order.clone(), m.word.clone())).collect::<Vec<_>>(), [(run.id.clone(), "running".to_string())]);
     let handle = mechanism.handle_of(&run.id).unwrap();
     mechanism.progress(
         &handle,
@@ -144,8 +144,11 @@ fn an_order_is_run_by_its_worker_and_reported_back() {
     o.tick_all(&now(4), &now(9)).unwrap();
     let wf = store.get("hello-1").unwrap().unwrap().0;
     assert_eq!(wf.steps["add"].latest().unwrap().progress.as_ref().unwrap().done, Some(1));
-    mechanism.finish(&handle, Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
-    w.tick(&now(5)).unwrap();
+    let mut done = Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))]));
+    done.summary = Some(Summary { headline: "2 + 3 = 5".into(), details: None });
+    mechanism.finish(&handle, done);
+    let moved = w.tick(&now(5)).unwrap();
+    assert_eq!((moved[0].word.as_str(), moved[0].detail.as_str()), ("succeeded", "2 + 3 = 5"), "the Worker says how it ended");
     o.tick_all(&now(5), &now(9)).unwrap();
     let wf = store.get("hello-1").unwrap().unwrap().0;
     assert_eq!(status(&store, "hello-1"), StepStatus::Succeeded);
