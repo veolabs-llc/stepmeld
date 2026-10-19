@@ -9,6 +9,15 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A Worker's round says how each order ended
+
+*Breaking for the library.* `orders::Worker::tick` returns
+`Vec<Moved>` (`order`, `word`, and `detail`: the headline it ended with
+or why it failed) instead of `Vec<(String, String)>`. Read `m.order`
+and `m.word` where the pair was used. The command's `tick` and `work`
+now print only what changed, with each result; their output is not a
+contract.
+
 ## The command names a Step with `--step`
 
 *Breaking for the command.*
