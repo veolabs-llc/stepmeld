@@ -122,8 +122,14 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     assert!(ok && out.contains("waiting for the workflow to be started"), "{out}");
     let (ok, out) = stepmeld(d, &["start", "wf-1"]);
     assert!(ok && out.contains("go given to wf-1"), "{out}");
+    // the tick says what happened, Step by Step, with each headline
     let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
-    assert!(ok && out.contains("succeeded"), "{out}");
+    assert!(
+        ok && out.contains("step_add         succeeded  2 + 3 = 5") && out.contains("step_multiply    succeeded  5 x 4 = 20") && out.contains("(workflow)       succeeded"),
+        "{out}"
+    );
+    let (ok, out) = stepmeld(d, &["tick"]);
+    assert!(ok && out.contains("nothing to advance: 1 Workflows, all finished"), "{out}");
     let (ok, out) = stepmeld(d, &["show", "wf-1"]);
     assert!(ok && out.contains("2 + 3 = 5") && out.contains("sum            5") && out.contains("1  (default)") && out.contains("run 1 on local"), "{out}");
     assert!(out.contains("value          5") && out.contains("product        20") && out.contains("5 x 4 = 20"), "the sum flowed into multiply: {out}");
@@ -165,7 +171,7 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     let (ok, out) = stepmeld(d, &["confirm", "wf-2", "--step", "step_add"]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
-    assert!(ok, "{out}");
+    assert!(ok && out.contains("42 x 10 = 420") && !out.contains("wf-1"), "a finished Workflow stays quiet: {out}");
     let (ok, out) = stepmeld(d, &["show", "wf-2"]);
     assert!(
         ok && out.contains("run 1 on batch by policy start-automatically: succeeded: 40 + 2 = 42") && out.contains("run 1 on local by policy start-automatically: succeeded: 42 x 10 = 420"),

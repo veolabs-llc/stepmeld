@@ -192,6 +192,16 @@ impl Performer for OrderPerformer {
     }
 }
 
+/// An order that moved in a Worker's round: taken, or ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    pub order: String,
+    /// `running`, or how it ended.
+    pub word: String,
+    /// The headline it ended with, or why it failed; empty while it runs.
+    pub detail: String,
+}
+
 /// A Worker: takes the orders addressed to it from the shared store and
 /// runs them through its mechanism, reporting on each.
 pub struct Worker {
@@ -230,24 +240,24 @@ impl Worker {
 
     /// Publish this Worker, then carry every open order one step on:
     /// start it (the mechanism's start is idempotent), pass on a cancel,
-    /// observe, report. The orders that changed, as (id, word).
-    pub fn tick(&self, now: &str) -> Result<Vec<(String, String)>, Error> {
+    /// observe, report. The orders taken or ended in this round.
+    pub fn tick(&self, now: &str) -> Result<Vec<Moved>, Error> {
         self.book.publish_worker(&self.face(now))?;
         let mut moved = Vec::new();
         for order in self.book.open_orders(&self.name)? {
             let before = order.report.clone();
             let report = self.carry(&order, now);
             let Some(report) = report else { continue };
-            let word = match &report.outcome {
-                Some(o) => format!("{:?}", o.state).to_lowercase(),
-                None => "running".into(),
+            let (word, detail) = match &report.outcome {
+                Some(o) => (format!("{:?}", o.state).to_lowercase(), o.summary.as_ref().map(|s| s.headline.clone()).or_else(|| o.reason.clone()).unwrap_or_default()),
+                None => ("running".into(), String::new()),
             };
             let changed = before.as_ref().map(|b| (&b.progress, &b.outcome, &b.log)) != Some((&report.progress, &report.outcome, &report.log));
             if changed {
                 self.book.report(&order.id, &report)?;
             }
             if before.is_none() || report.outcome.is_some() {
-                moved.push((order.id.clone(), word));
+                moved.push(Moved { order: order.id.clone(), word, detail });
             }
         }
         Ok(moved)
