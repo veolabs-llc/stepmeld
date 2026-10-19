@@ -268,7 +268,7 @@ fn host() -> String {
 /// The Orchestrator: a driver over the shared store with one Performer
 /// per published Worker, and WorkflowDefinitions nested.
 fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
-    let store = Arc::new(SqliteStore::open(&cli.store)?);
+    let store = Arc::new(shared_store(cli)?);
     let mut driver = Driver::new(store.clone(), &format!("stepmeld@{}:{}", host(), std::process::id())).with_nesting();
     let lib = store.library()?;
     for p in OrderPerformer::for_workers(store.clone(), &lib, &host(), wall_clock())? {
@@ -277,8 +277,31 @@ fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
     Ok((store, driver))
 }
 
+/// The shared store, said aloud when this command made it: a command run
+/// from the wrong folder starts an empty store there, which is easy to
+/// miss otherwise.
+fn shared_store(cli: &Cli) -> Result<SqliteStore, Error> {
+    let new = !cli.store.exists();
+    let store = SqliteStore::open(&cli.store)?;
+    if new {
+        announce("the shared store", &cli.store);
+    }
+    Ok(store)
+}
+
+/// One line on standard error: a new store file, and where it is.
+fn announce(what: &str, path: &Path) {
+    let full = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    eprintln!("(made {what}: {})", full.display());
+}
+
 fn worker_store(cli: &Cli) -> Result<WorkerStore, Error> {
-    WorkerStore::open(&cli.worker_store, &host())
+    let new = !cli.worker_store.exists();
+    let ws = WorkerStore::open(&cli.worker_store, &host())?;
+    if new {
+        announce("this machine's Worker store", &cli.worker_store);
+    }
+    Ok(ws)
 }
 
 /// The StepDefinitions in the Library that name one of `programs`.
@@ -306,7 +329,7 @@ fn show_worker(cli: &Cli, store: &SqliteStore, ws: &WorkerStore) -> Result<(), E
 
 fn run(cli: Cli) -> Result<(), Error> {
     if let Cmd::Library { what } = &cli.command {
-        return library(&cli, &SqliteStore::open(&cli.store)?, what);
+        return library(&cli, &shared_store(&cli)?, what);
     }
     let (store, driver) = driver(&cli)?;
     let by = actor(&cli)?;
