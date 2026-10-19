@@ -85,22 +85,24 @@ example's source, under version control. Everything the walkthrough
 makes (the stores, each Run's files) goes in one folder at the top of
 the repository, `walkthrough/`, which git ignores. To start over from a
 blank slate, delete that folder. Every command below is run from
-inside it, and refers to everything else by a relative path:
+inside it.
 
-- the programs, built into the repository's own `target/release`, as
-  `../target/release/stepmeld` and `../target/release/hello-program`;
-- the definitions, as `../examples/hello/…`.
+The `stepmeld` command is the framework, so it is installed on your
+`PATH`. Nothing of the walkthrough is: its program is built into the
+repository's own `target/release` and registered by a relative path,
+`../target/release/hello-program`, and its definitions are read from
+`../examples/hello/…`. The command prints when it makes a new store,
+and where, so one run in the wrong folder shows itself.
 
-Nothing is installed, and nothing is added to your `PATH`. Run in the
-wrong folder, the command says so: `../target/release/stepmeld` is not
-there, and if it were, the command would print that it made a new store
-and where.
-
-From the top of the repository, build both programs and make the
+From the top of the repository, install the command (into
+`~/.cargo/bin`), build the example's program, and make the
 walkthrough's folder:
 
 ```bash
-cargo build --release -p stepmeld -p stepmeld-example-hello
+cargo install --path stepmeld-cli
+```
+```bash
+cargo build --release -p stepmeld-example-hello
 ```
 ```bash
 mkdir walkthrough && cd walkthrough
@@ -110,14 +112,13 @@ Put the definitions in the Library, and tell this machine's Worker
 which command runs `hello-program`:
 
 ```bash
-../target/release/stepmeld library add ../examples/hello/stepdef_add.json ../examples/hello/stepdef_multiply.json ../examples/hello/workflowdef_hello.json
-../target/release/stepmeld worker program set hello-program -- ../target/release/hello-program
+stepmeld library add ../examples/hello/stepdef_add.json ../examples/hello/stepdef_multiply.json ../examples/hello/workflowdef_hello.json
+stepmeld worker program set hello-program -- ../target/release/hello-program
 ```
 
 The first command prints that it made the shared store,
 `walkthrough/stepmeld.sqlite`; the second, the Worker's store,
-`walkthrough/stepmeld-worker.sqlite`. `../target/release/stepmeld worker`
-now shows the Worker's program and what it offers:
+`walkthrough/stepmeld-worker.sqlite`. `stepmeld worker` now shows the Worker's program and what it offers:
 `stepdef_add v1, stepdef_multiply v1`.
 
 Start the Worker in a second terminal, in the same folder, and leave
@@ -125,31 +126,30 @@ it running:
 
 ```bash
 cd walkthrough
-../target/release/stepmeld work --watch
+stepmeld work --watch
 ```
 
 Back in the first terminal, make a Workflow, give it the Inputs nobody
 else feeds, and orchestrate it:
 
 ```bash
-../target/release/stepmeld create workflowdef_hello --id hello-1
-../target/release/stepmeld set hello-1 --step step_add --input a --value 2
-../target/release/stepmeld set hello-1 --step step_add --input b --value 3
-../target/release/stepmeld set hello-1 --step step_multiply --input factor --value 4
-../target/release/stepmeld start hello-1        # a new Workflow runs nothing until started
-../target/release/stepmeld tick --watch         # orchestrate until nothing is running
+stepmeld create workflowdef_hello --id hello-1
+stepmeld set hello-1 --step step_add --input a --value 2
+stepmeld set hello-1 --step step_add --input b --value 3
+stepmeld set hello-1 --step step_multiply --input factor --value 4
+stepmeld start hello-1        # a new Workflow runs nothing until started
+stepmeld tick --watch         # orchestrate until nothing is running
 ```
 
 `--step` names a Step, not a StepDefinition. `step_multiply`'s `value`
 is not set by hand (`set` refuses: it is fed by a Binding). `tick
 --watch` places `step_add` on the Worker, which runs `hello-program`;
 when `step_add` succeeds its sum is carried to `step_multiply`, which
-then runs in turn. While it runs, `../target/release/stepmeld show
-hello-1` shows the progress the last tick read (`adding 2 of 3
+then runs in turn. While it runs, `stepmeld show hello-1` shows the progress the last tick read (`adding 2 of 3
 beats`); when it is done (the Worker is named after your machine):
 
 ```text
-$ ../target/release/stepmeld show hello-1
+$ stepmeld show hello-1
 hello-1  (workflowdef_hello v1, succeeded)
   step_add         (stepdef_add v1)         succeeded
       in   a              2
@@ -165,8 +165,7 @@ hello-1  (workflowdef_hello v1, succeeded)
       run 1 on my-laptop by policy start-automatically: succeeded: 5 × 4 = 20
 ```
 
-Then, still in `walkthrough/`, with `stepmeld` short for
-`../target/release/stepmeld`:
+Then, still in `walkthrough/`:
 
 - `stepmeld log hello-1 --step step_multiply` prints that Step's
   program output, and `stepmeld history hello-1` every event in order;
