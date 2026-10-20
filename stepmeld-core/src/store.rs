@@ -44,6 +44,18 @@ pub trait StateStore: Send + Sync {
     /// "already exists" in it. The version now held.
     fn put(&self, wf: &Workflow, expected: Option<&str>) -> Result<String, Error>;
     fn list(&self) -> Result<Vec<String>, Error>;
+    /// Every Workflow's id and the version it is at: what an
+    /// Orchestrator compares to see which have moved. By default, each
+    /// one read; a store that can list versions at once says so.
+    fn listing(&self) -> Result<BTreeMap<String, String>, Error> {
+        let mut out = BTreeMap::new();
+        for id in self.list()? {
+            if let Some((_, v)) = self.get(&id)? {
+                out.insert(id, v);
+            }
+        }
+        Ok(out)
+    }
     /// Forget a Workflow: its document, its History and its lease. A
     /// Workflow that is not there is nothing to do. The driver decides
     /// whether one may go ([`crate::driver::Driver::remove`]).
@@ -321,6 +333,7 @@ pub mod conformance {
         assert_ne!(v1, v2);
         assert!(matches!(store.put(&workflow(id), Some(&v1)), Err(Error::Refused(w)) if w.contains("changed underneath")), "a stale version is refused");
         assert!(store.list().unwrap().contains(&id.to_string()));
+        assert_eq!(store.listing().unwrap().get(id), Some(&v2), "the listing carries each version");
         let by = Actor::person("t");
         store.append(&[Entry::new("2026-10-06T00:00:01Z", &by, id, "a"), Entry::new("2026-10-06T00:00:02Z", &by, id, "b")]).unwrap();
         store.append(&[Entry::new("2026-10-06T00:00:03Z", &by, id, "c")]).unwrap();

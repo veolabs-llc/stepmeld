@@ -222,7 +222,9 @@ in `docs/BREAKING.md`.
    store, `objects::ObjectStore`, is in the core. The four-hour floor on
    a container's credentials, which the users' script kept, is not
    carried over.
-5. The Orchestrator ticks only what moved.
+5. *(built 2026-10-20)* The Orchestrator ticks only what moved
+   (`Driver::tick_moved`; `StateStore::listing` gives every version at
+   once where the store can).
 6. Downstream, after phase 4: the users bump, configure stepmeld, and
    delete what moved. Orders already running under the old dispatch
    finish first; the two never run side by side.

@@ -50,6 +50,17 @@ pub trait Objects: Send + Sync {
     fn delete(&self, key: &str) -> Result<(), Error>;
     /// The keys under `prefix`, sorted.
     fn list(&self, prefix: &str) -> Result<Vec<String>, Error>;
+    /// The keys under `prefix` with their versions. By default, each
+    /// one read; a service whose listing carries versions says so.
+    fn listing(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
+        let mut out = Vec::new();
+        for k in self.list(prefix)? {
+            if let Some((_, v)) = self.get(&k)? {
+                out.push((k, v));
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Each key's body and version, and the last version handed out.
@@ -300,6 +311,11 @@ impl<O: Objects> StateStore for ObjectStore<O> {
     fn list(&self) -> Result<Vec<String>, Error> {
         let prefix = self.key("workflows/");
         Ok(self.objects.list(&prefix)?.into_iter().filter_map(|k| k.strip_prefix(&prefix)?.strip_suffix(".json").map(str::to_string)).collect())
+    }
+
+    fn listing(&self) -> Result<BTreeMap<String, String>, Error> {
+        let prefix = self.key("workflows/");
+        Ok(self.objects.listing(&prefix)?.into_iter().filter_map(|(k, v)| Some((k.strip_prefix(&prefix)?.strip_suffix(".json")?.to_string(), v))).collect())
     }
 
     fn remove(&self, id: &str) -> Result<(), Error> {

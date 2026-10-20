@@ -219,6 +219,52 @@ impl Driver {
         }
     }
 
+    /// Every Workflow that may have moved since `seen` was last brought
+    /// up to date, once, children before parents: one whose version
+    /// changed (a Command, a Worker's report applied elsewhere), one
+    /// with a Run live or a Step ready, and every one when the Workers
+    /// on offer changed (a Worker came, went away, or came back). A
+    /// Workflow that is waiting for a person, or finished, costs one
+    /// listing. Every Workflow's status, as last seen (docs/PLACEMENT.md
+    /// §10, phase 5).
+    pub fn tick_moved(&self, now: &str, lease_until: &str, seen: &mut Seen) -> Result<BTreeMap<String, WorkflowStatus>, Error> {
+        let lib = self.store.library()?;
+        let offers: Vec<(String, Vec<Ref>)> = self.faces().into_iter().map(|f| (f.name, f.verbs)).collect();
+        if offers != seen.offers {
+            seen.settled.clear();
+            seen.offers = offers;
+        }
+        seen.ticked.clear();
+        let listing = self.store.listing()?;
+        seen.statuses.retain(|id, _| listing.contains_key(id));
+        seen.versions.retain(|id, _| listing.contains_key(id));
+        seen.settled.retain(|id| listing.contains_key(id));
+        let mut ids: Vec<&String> = listing.keys().collect();
+        ids.sort_by_key(|id| std::cmp::Reverse(id.matches('~').count()));
+        for id in ids {
+            let unchanged = seen.versions.get(id) == listing.get(id);
+            if unchanged && seen.settled.contains(id) {
+                continue;
+            }
+            seen.ticked.push(id.clone());
+            let Some(wf) = self.tick(id, now, lease_until)? else {
+                seen.statuses.insert(id.clone(), WorkflowStatus::Running);
+                continue; // another Orchestrator holds it
+            };
+            let status = wf.status(&self.definition(&lib, &wf)?);
+            if let Some((_, v)) = self.store.get(id)? {
+                seen.versions.insert(id.clone(), v);
+            }
+            if matches!(status, WorkflowStatus::Running | WorkflowStatus::Ready) {
+                seen.settled.remove(id);
+            } else {
+                seen.settled.insert(id.clone());
+            }
+            seen.statuses.insert(id.clone(), status);
+        }
+        Ok(seen.statuses.clone())
+    }
+
     /// Every Workflow, once, children before parents so a parent sees
     /// what its child did this tick; a child created along the way is
     /// ticked too, so a parent and its new child advance in one call.
@@ -244,6 +290,19 @@ impl Driver {
             }
         }
     }
+}
+
+/// What an Orchestrator saw on its last [`Driver::tick_moved`]: each
+/// Workflow's version and status, which of them have nothing to observe
+/// until they change, and the Workers on offer.
+#[derive(Debug, Clone, Default)]
+pub struct Seen {
+    versions: BTreeMap<String, String>,
+    statuses: BTreeMap<String, WorkflowStatus>,
+    settled: std::collections::BTreeSet<String>,
+    offers: Vec<(String, Vec<Ref>)>,
+    /// The Workflows the last call ticked.
+    pub ticked: Vec<String>,
 }
 
 /// The nested-workflow Performer: `start` creates a child Workflow from

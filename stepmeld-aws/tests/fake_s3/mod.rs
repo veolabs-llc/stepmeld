@@ -110,7 +110,8 @@ fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>) {
                     shown.len()
                 );
                 for k in &shown {
-                    xml.push_str(&format!("<Contents><Key>{}</Key><Size>0</Size></Contents>", escape(k)));
+                    let etag = s.objects.get(&(bucket.clone(), (*k).clone())).map(|o| o.1.clone()).unwrap_or_default();
+                    xml.push_str(&format!("<Contents><Key>{}</Key><ETag>{}</ETag><Size>0</Size></Contents>", escape(k), escape(&etag)));
                 }
                 if truncated {
                     xml.push_str(&format!("<NextContinuationToken>{}</NextContinuationToken>", escape(shown.last().unwrap())));

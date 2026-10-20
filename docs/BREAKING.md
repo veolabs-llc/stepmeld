@@ -9,6 +9,13 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## An Orchestrator ticks only what moved
+
+*Additive.* `Driver::tick_moved` ticks a Workflow only when its version
+changed, it has a Run live or a Step ready, or the Workers on offer
+changed; `StateStore::listing` and `Objects::listing` give versions at
+once (defaults read each one). `stepmeld tick --watch` uses it.
+
 ## Programs may run as AWS Batch jobs
 
 *Additive.* `stepmeld-aws` adds the cloud Performer kind `batch`
