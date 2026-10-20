@@ -61,6 +61,80 @@ pub struct Program {
     /// configuration lists, by name (docs/PLACEMENT.md §8).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Run as a container of this image instead of `command`.
+    #[serde(default)]
+    pub image: Option<Image>,
+}
+
+/// A program that runs as a container: `docker run` of `reference`,
+/// with the Run's folder mounted at [`RUN_IN_CONTAINER`] and appended
+/// to `args`. The program inside speaks the run directory protocol as
+/// any other does. The container is named after the Run, so it can be
+/// stopped by name.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct Image {
+    /// The image, as `docker run` takes it.
+    #[serde(rename = "image")]
+    pub reference: String,
+    /// The program and its leading arguments inside the image; none runs
+    /// the image's own entrypoint with the Run's folder alone.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// GPUs to give it (`--gpus`); none by default.
+    #[serde(default)]
+    pub gpus: u32,
+    /// Shared memory, in GiB (`--shm-size`).
+    #[serde(default)]
+    pub shm_gib: Option<u32>,
+    /// Pull the image before every Run (`--pull always`).
+    #[serde(default)]
+    pub pull_always: bool,
+    /// The kind of sign-in to do first, by name: a registry login, and
+    /// credentials for the job (a provider's; docs/PLACEMENT.md §4).
+    #[serde(default)]
+    pub sign_in: Option<String>,
+}
+
+/// Where a container finds its Run's folder.
+pub const RUN_IN_CONTAINER: &str = "/stepmeld/run";
+
+/// What signing in gives a container: variables (credentials) and any
+/// further `docker run` arguments (a mount, say).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SignedIn {
+    pub env: BTreeMap<String, String>,
+    pub args: Vec<String>,
+}
+
+/// Signs a container in before it runs, fresh for each Run (credentials
+/// expire): an `Err` refuses the start in its words.
+pub type SignIn = std::sync::Arc<dyn Fn(&Image) -> Result<SignedIn, String> + Send + Sync>;
+
+/// The command that runs an image: `docker run` and its arguments, and
+/// the variables the `docker` client is given (each passed to the
+/// container by name with `-e`, so no value is on a command line).
+pub fn docker_run(image: &Image, container: &str, dir: &Path, env: &BTreeMap<String, String>, signed: &SignedIn) -> (Vec<String>, BTreeMap<String, String>) {
+    let mut argv: Vec<String> = ["docker", "run", "--rm", "--init", "--name", container].map(str::to_string).to_vec();
+    argv.extend(["-v".to_string(), format!("{}:{RUN_IN_CONTAINER}", dir.display())]);
+    let mut vars = env.clone();
+    vars.extend(signed.env.clone());
+    for k in vars.keys() {
+        argv.extend(["-e".to_string(), k.clone()]);
+    }
+    if image.gpus > 0 {
+        argv.extend(["--gpus".to_string(), image.gpus.to_string()]);
+    }
+    if let Some(gib) = image.shm_gib {
+        argv.extend(["--shm-size".to_string(), format!("{gib}g")]);
+    }
+    if image.pull_always {
+        argv.extend(["--pull".to_string(), "always".to_string()]);
+    }
+    argv.extend(signed.args.clone());
+    argv.push(image.reference.clone());
+    argv.extend(image.args.clone());
+    argv.push(RUN_IN_CONTAINER.to_string());
+    (argv, vars)
 }
 
 impl Program {
@@ -69,6 +143,7 @@ impl Program {
             name: name.into(),
             command,
             env: BTreeMap::new(),
+            image: None,
         }
     }
 }
@@ -92,6 +167,7 @@ pub struct LocalPerformer {
     root: PathBuf,
     programs: Vec<Program>,
     children: Mutex<BTreeMap<String, std::process::Child>>,
+    sign_in: Option<SignIn>,
 }
 
 impl LocalPerformer {
@@ -104,6 +180,28 @@ impl LocalPerformer {
             root: root.to_path_buf(),
             programs,
             children: Mutex::new(BTreeMap::new()),
+            sign_in: None,
+        }
+    }
+
+    /// Sign each container in before it runs: what an image program's
+    /// `sign_in` names is this function's to do.
+    pub fn with_sign_in(mut self, sign_in: SignIn) -> LocalPerformer {
+        self.sign_in = Some(sign_in);
+        self
+    }
+
+    /// The name a Run's container goes by.
+    pub fn container(handle: &str) -> String {
+        format!("stepmeld-{}", handle.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '.', "_"))
+    }
+
+    /// Remove a Run's container, if its program is an image: it may
+    /// outlive the `docker` client that started it.
+    fn remove_container(&self, handle: &str, dir: &Path) {
+        let image = Self::read::<StartRequest>(&dir.join("request.json")).and_then(|r| self.program_for(&r).ok()).and_then(|p| p.image);
+        if image.is_some() {
+            let _ = Command::new("docker").args(["rm", "-f", &Self::container(handle)]).stdout(Stdio::null()).stderr(Stdio::null()).status();
         }
     }
 
@@ -133,6 +231,7 @@ impl LocalPerformer {
 
     /// Stop the program of a Run, whoever started it.
     fn stop(&self, handle: &str, dir: &Path) {
+        self.remove_container(handle, dir);
         if let Some(mut child) = self.children.lock().unwrap().remove(handle) {
             let _ = child.kill();
             let _ = child.wait();
@@ -167,7 +266,24 @@ impl LocalPerformer {
     /// Start the program on a run directory: its log appended (a
     /// resume continues the same log), its pid written, the child kept.
     fn spawn(&self, handle: &str, dir: &Path, program: &Program, resume: bool) -> Result<(), String> {
-        let (exe, args) = program.command.split_first().ok_or_else(|| format!("{} has no command for program {}", self.name, program.name))?;
+        let (command, env) = match &program.image {
+            None => (program.command.clone(), program.env.clone()),
+            Some(image) => {
+                let signed = match (&image.sign_in, &self.sign_in) {
+                    (None, _) => SignedIn::default(),
+                    (Some(_), Some(sign_in)) => sign_in(image)?,
+                    (Some(kind), None) => return Err(format!("{} cannot sign in {kind:?} for program {}", self.name, program.name)),
+                };
+                // a container left from before (a Worker restarted) goes first
+                let _ = Command::new("docker").args(["rm", "-f", &Self::container(handle)]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+                let dir = std::fs::canonicalize(dir).map_err(|e| e.to_string())?;
+                docker_run(image, &Self::container(handle), &dir, &program.env, &signed)
+            }
+        };
+        // a command is handed the Run's folder; `docker run` already
+        // names the folder inside the container
+        let folder = program.image.is_none().then_some(dir);
+        let (exe, args) = command.split_first().ok_or_else(|| format!("{} has no command for program {}", self.name, program.name))?;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("log.txt")).map_err(|e| format!("cannot open the log: {e}"))?;
         if resume {
             use std::io::Write;
@@ -176,8 +292,8 @@ impl LocalPerformer {
         let err = log.try_clone().map_err(|e| e.to_string())?;
         let child = Command::new(exe)
             .args(args)
-            .arg(dir)
-            .envs(&program.env)
+            .args(folder)
+            .envs(&env)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(err))
@@ -293,6 +409,8 @@ impl Performer for LocalPerformer {
                 Observation::Ended { outcome: Self::canceled(&dir, &reason) }
             }
             Some(status) => {
+                // a container may outlive its `docker` client
+                self.remove_container(handle, &dir);
                 // gone without an outcome: a program that can resume is
                 // started again; otherwise a 0 exit with nothing to
                 // deliver is a success, anything else failed
@@ -339,6 +457,57 @@ impl Performer for LocalPerformer {
 
     fn log(&self, handle: &str) -> Option<String> {
         std::fs::read_to_string(self.dir(handle).join("log.txt")).ok()
+    }
+}
+
+/// What this machine can run, asked of the programs that know:
+/// whether Docker answers, whether a GPU container can run (Docker's
+/// `nvidia` runtime and a GPU `nvidia-smi` lists), and the GPUs with
+/// their memory in use (docs/PLACEMENT.md §6).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Probe {
+    pub docker: bool,
+    pub cuda: bool,
+    pub gpus: Vec<stepmeld_core::orders::Gpu>,
+}
+
+impl Probe {
+    /// The capability words it found: `docker`, `cuda`.
+    pub fn capabilities(&self) -> Vec<String> {
+        [("docker", self.docker), ("cuda", self.cuda)].into_iter().filter(|(_, has)| *has).map(|(w, _)| w.to_string()).collect()
+    }
+}
+
+fn output(program: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(program).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The GPUs `nvidia-smi` lists, with their memory; none without it.
+pub fn gpus() -> Vec<stepmeld_core::orders::Gpu> {
+    let Some(text) = output("nvidia-smi", &["--query-gpu=name,memory.total,memory.used", "--format=csv,noheader,nounits"]) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let mut f = line.split(',').map(str::trim);
+            Some(stepmeld_core::orders::Gpu {
+                name: f.next()?.to_string(),
+                memory_mib: f.next()?.parse().ok()?,
+                used_mib: f.next()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// Ask Docker and `nvidia-smi` what this machine can run.
+pub fn probe() -> Probe {
+    let runtimes = output("docker", &["info", "--format", "{{json .Runtimes}}"]);
+    let gpus = gpus();
+    Probe {
+        docker: runtimes.is_some(),
+        cuda: runtimes.is_some_and(|r| r.contains("nvidia")) && !gpus.is_empty(),
+        gpus,
     }
 }
 
@@ -577,5 +746,99 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
         let again = performer(dir.path(), "true");
         assert!(matches!(again.observe(&h), Observation::Ended { .. }));
         assert_eq!(again.start(&request("wf/s/1", &[])).unwrap(), h, "the same run gets the same handle");
+    }
+
+    #[test]
+    fn an_image_runs_by_docker_run_with_its_folder_mounted_and_secrets_by_name() {
+        let image = Image {
+            reference: "registry.example/typeset:3".into(),
+            args: vec!["typeset".into(), "--fast".into()],
+            gpus: 1,
+            shm_gib: Some(8),
+            pull_always: true,
+            sign_in: Some("registry".into()),
+        };
+        let env = BTreeMap::from([("FONT_TOKEN".to_string(), "s3cret".to_string())]);
+        let signed = SignedIn {
+            env: BTreeMap::from([("AWS_SESSION_TOKEN".to_string(), "t".to_string())]),
+            args: vec!["-v".into(), "/cache:/cache:ro".into()],
+        };
+        let (argv, vars) = docker_run(&image, "stepmeld-wf_s_1", Path::new("/runs/wf_s_1"), &env, &signed);
+        assert_eq!(
+            argv.join(" "),
+            "docker run --rm --init --name stepmeld-wf_s_1 -v /runs/wf_s_1:/stepmeld/run -e AWS_SESSION_TOKEN -e FONT_TOKEN --gpus 1 --shm-size 8g --pull always -v /cache:/cache:ro registry.example/typeset:3 typeset --fast /stepmeld/run"
+        );
+        assert!(!argv.iter().any(|a| a.contains("s3cret")), "no secret on the command line");
+        assert_eq!(vars.len(), 2);
+        assert_eq!(LocalPerformer::container("wf/s:1"), "stepmeld-wf_s_1");
+    }
+
+    /// With Docker here: an image that speaks the run directory runs as
+    /// any program does, reads a secret by name, and a canceled one's
+    /// container is removed. Skipped where Docker does not answer.
+    #[test]
+    fn an_image_runs_in_docker_when_docker_is_here() {
+        if !probe().docker {
+            eprintln!("skipped: Docker does not answer here");
+            return;
+        }
+        // under the repository: a Docker VM may share only the user's
+        // folders, and a mount from elsewhere comes up empty
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target");
+        std::fs::create_dir_all(&target).unwrap();
+        let dir = tempfile::tempdir_in(&target).unwrap();
+        let build = dir.path().join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(
+            build.join("verb.sh"),
+            "#!/bin/sh\nrun=\"$1\"\nif grep -q slow \"$run/request.json\"; then sleep 60; fi\necho \"token is $TOKEN\"\necho '{\"state\":\"succeeded\",\"outputs\":{\"out\":\"from a container\"}}' > \"$run/outcome.json\"\n",
+        )
+        .unwrap();
+        std::fs::write(build.join("Dockerfile"), "FROM alpine:3.20\nCOPY verb.sh /verb.sh\nRUN chmod +x /verb.sh\nENTRYPOINT [\"/verb.sh\"]\n").unwrap();
+        let built = Command::new("docker").args(["build", "-q", "-t", "stepmeld-test-verb:1"]).arg(&build).output().unwrap();
+        if !built.status.success() {
+            eprintln!("skipped: the test image did not build: {}", String::from_utf8_lossy(&built.stderr));
+            return;
+        }
+        let program = Program {
+            env: BTreeMap::from([("TOKEN".to_string(), "t-42".to_string())]),
+            image: Some(Image {
+                reference: "stepmeld-test-verb:1".into(),
+                ..Default::default()
+            }),
+            ..Program::new("echo-program", Vec::new())
+        };
+        let p = LocalPerformer::new("bench", &dir.path().join("runs"), vec![program]).with_grace(Duration::ZERO);
+        let h = p.start(&request("wf/s/1", &["out"])).unwrap();
+        match settle_long(&p, &h) {
+            Observation::Ended { outcome } => assert_eq!(outcome.outputs.get("out"), Some(&serde_json::json!("from a container")), "{outcome:?} {:?}", p.log(&h)),
+            other => panic!("{other:?}"),
+        }
+        assert!(p.log(&h).unwrap().contains("token is t-42"), "the secret reached the container by name");
+
+        let mut slow = request("wf/slow/1", &["out"]);
+        slow.inputs.insert("speed".into(), serde_json::json!("slow"));
+        let h = p.start(&slow).unwrap();
+        let name = LocalPerformer::container(&h);
+        for _ in 0..100 {
+            if output("docker", &["inspect", "-f", "{{.State.Running}}", &name]).is_some_and(|o| o.trim() == "true") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        p.cancel(&h, "enough");
+        p.cancel(&h, "enough");
+        assert!(matches!(p.observe(&h), Observation::Ended { .. }));
+        assert!(output("docker", &["inspect", &name]).is_none(), "the container is gone");
+    }
+
+    fn settle_long(p: &LocalPerformer, handle: &str) -> Observation {
+        for _ in 0..600 {
+            match p.observe(handle) {
+                Observation::Running { .. } => std::thread::sleep(std::time::Duration::from_millis(50)),
+                other => return other,
+            }
+        }
+        panic!("the run did not end");
     }
 }

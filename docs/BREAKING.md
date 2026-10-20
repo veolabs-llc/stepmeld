@@ -9,6 +9,27 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A program may be an image; a Worker probes Docker and its GPUs
+
+*Additive for the contracts (`stepmeld/worker.v1` gains `gpus`);
+breaking for code that builds the changed structs. Note:
+`docs/PLACEMENT.md` §6.*
+
+**Now:** a deployment may give a program an image,
+`[programs.<name>.docker]` (`image`, `args`, `gpus`, `shm_gib`,
+`pull_always`, `sign_in`); a Worker with no command for the program
+runs it as `docker run` with the Run's folder mounted at
+`/stepmeld/run`, secrets passed by name, the container named after the
+Run and removed when the Run is stopped or its client is gone. A
+machine's Worker offers `docker` and `cuda` when it finds them, and
+publishes its GPUs' memory with each beat.
+
+**Who notices:** `stepmeld_local::Program` gains `image` (use
+`Program::new`); `WorkerFace` gains `gpus`; `stepmeld_config::WorkerPlan`
+gains `kinds`. New: `stepmeld_local::{Image, SignedIn, SignIn,
+docker_run, probe, gpus}`, `LocalPerformer::with_sign_in`,
+`Kinds::with_sign_in`, `orders::Gpu`, `Worker::with_gpus`.
+
 ## A deployment file and a machine file; the Worker store retires
 
 *Breaking for the command and the library. Note: `docs/PLACEMENT.md`

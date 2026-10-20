@@ -348,8 +348,9 @@ fn show_worker(cli: &Cli, store: &dyn SharedStore, m: &Machine) -> Result<(), Er
     println!("runs in  {}", m.runs().display());
     println!("cloud    {}", if w.cloud { "yes" } else { "no" });
     println!("slots    {}", if m.slots() == u32::MAX { "no limit".to_string() } else { m.slots().to_string() });
-    if !w.capabilities.is_empty() {
-        println!("has      {}  (capabilities)", w.capabilities.join(", "));
+    let capabilities = stepmeld_config::capabilities(m);
+    if !capabilities.is_empty() {
+        println!("has      {}", capabilities.join(", "));
     }
     let routes = kinds().routes(&deployment(cli)?, m)?;
     if routes.is_empty() {
@@ -371,10 +372,11 @@ fn show_worker(cli: &Cli, store: &dyn SharedStore, m: &Machine) -> Result<(), Er
         host: host(),
         cloud: w.cloud,
         programs,
-        capabilities: w.capabilities.clone(),
+        capabilities,
         slots: m.slots(),
         holds: Vec::new(),
         beat_s: stepmeld_core::orders::BEAT_S,
+        gpus: Vec::new(),
         seen: String::new(),
     };
     let offers: Vec<String> = store.library()?.steps().filter(|s| face.offers(s)).map(|s| s.reference().to_string()).collect();

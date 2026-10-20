@@ -204,8 +204,8 @@ in `docs/BREAKING.md`.
    registered for stores, Performers, secrets and sign-in; SQLite,
    commands, and environment and file secrets built in. With it, the
    walkthrough variation with two Workers on one machine.
-3. The Docker Performer and GPU probing; the walkthrough's program as
-   an image on the stand-in fleet.
+3. *(built 2026-10-20)* The Docker Performer and GPU probing; the
+   walkthrough's program as an image on the stand-in fleet.
 4. `stepmeld-aws`: the S3 store, the Batch Performer, Secrets Manager,
    container sign-in; a walkthrough variation in the cloud, run by
    hand.
