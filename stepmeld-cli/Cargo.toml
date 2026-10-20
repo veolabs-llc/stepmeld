@@ -17,10 +17,17 @@ path = "src/main.rs"
 stepmeld-core.workspace = true
 stepmeld-sqlite.workspace = true
 stepmeld-config.workspace = true
+# AWS's kinds (docs/PLACEMENT.md §4): in the build unless left out with
+# `--no-default-features`.
+stepmeld-aws = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 # Argument parsing (MIT OR Apache-2.0).
 clap = { version = "4.5", features = ["derive"] }
+
+[features]
+default = ["aws"]
+aws = ["dep:stepmeld-aws"]
 
 [dev-dependencies]
 tempfile = "3"
