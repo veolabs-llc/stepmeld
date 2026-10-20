@@ -13,6 +13,9 @@ do the work; a UI reads documents and never gets called.
 - `docs/ORCHESTRATOR-WORKER.md`: the two roles. An Orchestrator
   advances Workflows; a Worker runs the work they order, through orders
   in the shared store.
+- `docs/PLACEMENT.md`: where work runs. Workers on this machine, on
+  fleet machines and in the cloud; orders, leases and requirements;
+  providers as plugin crates; the phases that bring it in.
 - `contracts/`: the contracts, as JSON schemas with golden fixtures,
   and the scenario fixtures every implementation is held to.
 - `stepmeld-core`: the Rust implementation: documents, the pure core,

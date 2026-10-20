@@ -2,7 +2,10 @@
 
 *2026-10-17. How stepmeld separates deciding what runs from running
 it. Decisions are Max's unless labelled "my choice"; a label marks
-what is open to change without a new ruling.*
+what is open to change without a new ruling. Superseded in part by
+`docs/PLACEMENT.md` (2026-10-20), which settles §4's flavors and
+mechanisms and the first question of §6; this note still describes the
+first form as built.*
 
 ## 1. Two roles
 
@@ -25,7 +28,7 @@ both; a machine that only does work is usually a Worker alone.
 
 An Orchestrator reaches a Worker by placing an **order** in the shared
 store: the Run's request, addressed to the Worker by name. The Worker
-takes its open orders, runs each through its own mechanism, and writes
+takes its open orders, runs each through its own Performer, and writes
 a **report** on the order: progress while it runs, the outcome when it
 ends, and the log so far. A cancel is a request on the order, which the
 Worker carries out.
@@ -51,9 +54,9 @@ design note had left open (`docs/DESIGN.md` §11):
 Machine-specific paths never reach the shared store, which several
 machines may share.
 
-## 4. Performer flavors are global; configuration is data
+## 4. Performers are global; configuration is data
 
-The flavors of Performer are fixed for a deployment: the same code on
+The kinds of Performer are fixed for a deployment: the same code on
 every Orchestrator and every Worker, with behaviour driven by
 configuration read from the stores. Programs are the per-machine part.
 
@@ -67,20 +70,20 @@ from the Library and the Worker's published programs. (Registering a
 command per StepDefinition was weighed and set aside: with the program
 named in the StepDefinition it would repeat it.)
 
-- **On an Orchestrator**, a flavor decides *where* a step goes. stepmeld
-  ships one: orders to a named Worker. A deployment adds its own flavors
-  by implementing the same trait (one that names a cloud provider, say)
-  and they are the same everywhere in that deployment.
-- **On a Worker**, a mechanism decides *how* the work runs. stepmeld
-  ships one: a local program per program name, through the run
-  directory.
+- **On an Orchestrator**, an order is the one way to reach a Worker
+  (this note first called it a flavor and left room for others;
+  `docs/PLACEMENT.md` §3 retires the word).
+- **On a Worker**, a Performer decides *how* the work runs (first
+  called a mechanism, also retired). stepmeld ships one: a local
+  program per program name, through the run directory. The Docker and
+  Batch Performers follow (`docs/PLACEMENT.md` §10).
 
 **Locality comes from the Worker** (my choice of rule): a cloud Worker
 is `cloud`; a Worker on the Orchestrator's own host is `this-machine`;
 any other is `local-network`. So "confirm before cloud" always gets a
 stable answer.
 
-**A placement names the Worker**, not only the flavor. Performer names
+**A placement names the Worker.** Performer names
 are Worker names, so a Run's record says which machine runs it, and an
 Orchestrator that takes over the Workflow later reads the same answer.
 
@@ -89,8 +92,8 @@ Orchestrator that takes over the Workflow later reads the same answer.
 | Piece | Where |
 |---|---|
 | `OrderBook`: the shared store's orders and published Workers, with an in-memory implementation and a conformance suite | `stepmeld-core/src/orders.rs`; the SQLite store implements it in the same file as the Workflows |
-| `OrderPerformer`: the Orchestrator's flavor, one per published Worker | `stepmeld-core/src/orders.rs` |
-| `Worker`: the loop that takes orders, runs them through a mechanism (any Performer) and reports | `stepmeld-core/src/orders.rs` |
+| `OrderPerformer`: the Orchestrator's Performer for one published Worker | `stepmeld-core/src/orders.rs` |
+| `Worker`: the loop that takes orders, runs them through a Performer and reports | `stepmeld-core/src/orders.rs` |
 | The Worker's private store | `stepmeld-sqlite` (`WorkerStore`), one SQLite file |
 | Contracts | `stepmeld/order.v1`, `stepmeld/worker.v1` |
 | The command | `stepmeld worker …` sets up this machine's Worker (`worker program set <program> -- <command…>`); `stepmeld work` runs it; `stepmeld tick` orchestrates |
@@ -108,6 +111,9 @@ My choices in the first form, each open to change:
   the StepDefinition" is not built.
 
 ## 6. Not decided yet
+
+Carried into `docs/PLACEMENT.md`: the first is settled there (§5, §6),
+the others remain open (§11).
 
 - What an Orchestrator does about a Worker that has stopped being seen
   while it holds a live Run (today: the Run stays live, as before).
