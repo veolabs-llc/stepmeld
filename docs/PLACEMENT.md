@@ -198,12 +198,12 @@ in `docs/BREAKING.md`.
    leases, pinned and open orders (the pool `any`; cloud orders open
    and taken over), `requires` and capabilities, the heartbeat,
    takeover or lost, logs in the store, and a harness case with two
-   Orchestrators on one store. The walkthrough variation with two
-   Workers on one machine waits for the machine file (phase 2), which
-   changes how a Worker is set up.
-2. Plugins and configuration: the deployment and machine files, kinds
+   Orchestrators on one store.
+2. *(built 2026-10-20, but sign-in, which comes with the provider)*
+   Plugins and configuration: the deployment and machine files, kinds
    registered for stores, Performers, secrets and sign-in; SQLite,
-   commands, and environment and file secrets built in.
+   commands, and environment and file secrets built in. With it, the
+   walkthrough variation with two Workers on one machine.
 3. The Docker Performer and GPU probing; the walkthrough's program as
    an image on the stand-in fleet.
 4. `stepmeld-aws`: the S3 store, the Batch Performer, Secrets Manager,

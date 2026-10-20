@@ -39,6 +39,68 @@ pub trait Performer: Send + Sync {
     }
 }
 
+/// Several Performers behind one, each for some programs: a Worker
+/// whose programs run in different ways (a command, an image). A
+/// handle is the route's name, `#`, and the route's own handle; a
+/// handle without `#` (from before routes) goes to the first route.
+pub struct Router {
+    face: PerformerFace,
+    routes: Vec<(String, Vec<String>, std::sync::Arc<dyn Performer>)>,
+}
+
+impl Router {
+    /// `routes`: a name for each, the programs it runs, the Performer.
+    pub fn new(face: PerformerFace, routes: Vec<(String, Vec<String>, std::sync::Arc<dyn Performer>)>) -> Router {
+        Router { face, routes }
+    }
+
+    fn route(&self, handle: &str) -> Option<(&dyn Performer, String)> {
+        match handle.split_once('#') {
+            Some((name, inner)) => self.routes.iter().find(|r| r.0 == name).map(|r| (r.2.as_ref(), inner.to_string())),
+            None => self.routes.first().map(|r| (r.2.as_ref(), handle.to_string())),
+        }
+    }
+}
+
+impl Performer for Router {
+    fn describe(&self) -> PerformerFace {
+        self.face.clone()
+    }
+
+    fn start(&self, request: &StartRequest) -> Result<String, String> {
+        let program = request.program.as_deref().unwrap_or_default();
+        let (name, _, p) = self
+            .routes
+            .iter()
+            .find(|r| r.1.iter().any(|q| q == program))
+            .ok_or_else(|| format!("{} has no way to run program {program:?}", self.face.name))?;
+        Ok(format!("{name}#{}", p.start(request)?))
+    }
+
+    fn observe(&self, handle: &str) -> Observation {
+        match self.route(handle) {
+            Some((p, inner)) => p.observe(&inner),
+            None => Observation::Absent,
+        }
+    }
+
+    fn cancel(&self, handle: &str, reason: &str) {
+        if let Some((p, inner)) = self.route(handle) {
+            p.cancel(&inner, reason);
+        }
+    }
+
+    fn log(&self, handle: &str) -> Option<String> {
+        let (p, inner) = self.route(handle)?;
+        p.log(&inner)
+    }
+
+    /// Portable only when every route is.
+    fn portable(&self) -> bool {
+        self.routes.iter().all(|r| r.2.portable())
+    }
+}
+
 /// A Performer held in memory: the tests'. It accepts every Run of the
 /// verbs it offers and ends them when told to.
 pub struct MemoryPerformer {
@@ -267,5 +329,40 @@ mod tests {
             outputs: Vec::new(),
         };
         conformance::run(&p, &request, &|h| p.finish(h, Outcome::succeeded(BTreeMap::new())));
+    }
+
+    /// A Router sends each program to its route and finds the route
+    /// again from the handle.
+    #[test]
+    fn a_router_sends_each_program_its_way() {
+        let face = |name: &str| PerformerFace {
+            name: name.into(),
+            locality: Locality::ThisMachine,
+            verbs: vec![Ref::new("verb", 1)],
+            pool: false,
+        };
+        let commands = std::sync::Arc::new(MemoryPerformer::new(face("commands")));
+        let images = std::sync::Arc::new(MemoryPerformer::new(face("images")));
+        let r = Router::new(face("bench"), vec![("command".into(), vec!["a".into()], commands.clone()), ("image".into(), vec!["b".into()], images.clone())]);
+        let request = |program: &str| StartRequest {
+            workflow: "wf".into(),
+            step: program.into(),
+            run: format!("wf/{program}/1"),
+            definition: Ref::new("verb", 1),
+            program: Some(program.into()),
+            needs: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            parameters: BTreeMap::new(),
+            outputs: Vec::new(),
+        };
+        let hb = r.start(&request("b")).unwrap();
+        assert!(hb.starts_with("image#") && images.started().len() == 1 && commands.started().is_empty());
+        images.finish(&hb["image#".len()..], Outcome::succeeded(BTreeMap::new()));
+        assert!(matches!(r.observe(&hb), Observation::Ended { .. }));
+        let ha = r.start(&request("a")).unwrap();
+        assert!(matches!(r.observe(&ha), Observation::Running { .. }));
+        assert!(matches!(r.observe(&ha["command#".len()..]), Observation::Running { .. }), "a bare handle goes to the first route");
+        assert!(r.start(&request("c")).unwrap_err().contains("no way to run program \"c\""));
+        assert!(!r.portable());
     }
 }

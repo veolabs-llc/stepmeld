@@ -1,0 +1,21 @@
+[package]
+name = "stepmeld-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "A stepmeld deployment and machine as files: the shared store, each program's Performer, secrets, and the kinds plugins register"
+
+[dependencies]
+stepmeld-core.workspace = true
+stepmeld-sqlite.workspace = true
+stepmeld-local.workspace = true
+serde.workspace = true
+# The deployment and machine files (MIT OR Apache-2.0).
+toml = "0.9"
+
+[dev-dependencies]
+tempfile = "3"

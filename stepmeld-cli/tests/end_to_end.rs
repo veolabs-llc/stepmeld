@@ -10,12 +10,12 @@ use std::process::{Child, Command};
 
 fn command(dir: &Path, worker_store: &str) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_stepmeld"));
-    c.current_dir(dir).args(["--store", "state.sqlite", "--worker-store", worker_store, "--as", "person:max"]);
+    c.current_dir(dir).args(["--store", "state.sqlite", "--machine", worker_store, "--as", "person:max"]);
     c
 }
 
 fn stepmeld(dir: &Path, args: &[&str]) -> (bool, String) {
-    stepmeld_as(dir, "worker.sqlite", args)
+    stepmeld_as(dir, "machine.toml", args)
 }
 
 fn stepmeld_as(dir: &Path, worker_store: &str, args: &[&str]) -> (bool, String) {
@@ -89,9 +89,9 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
         "{out}"
     );
 
-    // this machine's Worker: named, and its program registered in its own store
+    // this machine's Worker: named, and its program registered in its machine file
     let (ok, out) = stepmeld(d, &["work"]);
-    assert!(!ok && out.contains("no programs yet"), "{out}");
+    assert!(!ok && out.contains("no programs it can run"), "{out}");
     let (ok, out) = stepmeld(d, &["worker", "set", "--name", "local"]);
     assert!(ok && out.contains("worker   local"), "{out}");
     let (ok, out) = stepmeld(d, &["worker", "program", "set", "hello-program", "--", "sh", &verbs]);
@@ -117,7 +117,7 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     let (ok, out) = stepmeld(d, &["tick", "--watch", "--every", "1"]);
     assert!(ok && out.contains("waiting") && out.contains("no Worker offers it"), "{out}");
     // once one has, a root Workflow still runs nothing until its go
-    let _local = work(d, "worker.sqlite");
+    let _local = work(d, "machine.toml");
     let (ok, out) = stepmeld(d, &["show", "wf-1"]);
     assert!(ok && out.contains("waiting for the workflow to be started"), "{out}");
     let (ok, out) = stepmeld(d, &["start", "wf-1"]);
@@ -144,11 +144,11 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
 
     // a second Worker whose work happens in the cloud: two offer the verb,
     // and a confirm-before-cloud policy holds the step for a person
-    let (ok, out) = stepmeld_as(d, "cloud-worker.sqlite", &["worker", "set", "--name", "batch", "--cloud", "true"]);
+    let (ok, out) = stepmeld_as(d, "cloud-machine.toml", &["worker", "set", "--name", "batch", "--cloud", "true"]);
     assert!(ok && out.contains("cloud    yes"), "{out}");
-    let (ok, out) = stepmeld_as(d, "cloud-worker.sqlite", &["worker", "program", "set", "hello-program", "--", "sh", &verbs]);
+    let (ok, out) = stepmeld_as(d, "cloud-machine.toml", &["worker", "program", "set", "hello-program", "--", "sh", &verbs]);
     assert!(ok, "{out}");
-    let _cloud = work(d, "cloud-worker.sqlite");
+    let _cloud = work(d, "cloud-machine.toml");
     let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-2"]);
     assert!(ok, "{out}");
     for (step, input, value) in [("step_add", "a", "40"), ("step_add", "b", "2"), ("step_multiply", "factor", "10")] {
@@ -199,7 +199,7 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
 
 fn stepmeld_answering(dir: &Path, args: &[&str], answer: &str) -> (bool, String) {
     use std::io::Write;
-    let mut child = command(dir, "worker.sqlite")
+    let mut child = command(dir, "machine.toml")
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

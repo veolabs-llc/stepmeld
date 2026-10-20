@@ -28,6 +28,14 @@ pub trait StateStore: Send + Sync {
     fn definition_refs(&self) -> Result<Vec<Ref>, Error>;
     /// Everything defined, as a Library.
     fn library(&self) -> Result<Library, Error>;
+    /// Every StepDefinition and WorkflowDefinition stored, read but not
+    /// checked where the store can: what a person needs to see, and
+    /// clean up, in a store whose definitions no longer hold together.
+    /// By default, the Library's (checked).
+    fn definitions(&self) -> Result<(Vec<StepDefinition>, Vec<WorkflowDefinition>), Error> {
+        let lib = self.library()?;
+        Ok((lib.steps().cloned().collect(), lib.workflows().cloned().collect()))
+    }
     // ---- Workflows ----
     /// A Workflow and the version it was read at.
     fn get(&self, id: &str) -> Result<Option<(Workflow, String)>, Error>;
@@ -50,6 +58,13 @@ pub trait StateStore: Send + Sync {
     fn lease(&self, workflow: &str, holder: &str, now: &str, until: &str) -> Result<bool, Error>;
     fn release(&self, workflow: &str, holder: &str) -> Result<(), Error>;
 }
+
+/// The shared store of a deployment: Workflows and their History, and
+/// the orders and Workers that meet there (docs/PLACEMENT.md §2). Every
+/// store kind a deployment can name is one.
+pub trait SharedStore: StateStore + crate::orders::OrderBook {}
+
+impl<T: StateStore + crate::orders::OrderBook> SharedStore for T {}
 
 /// A store held in memory: the tests'.
 #[derive(Default)]

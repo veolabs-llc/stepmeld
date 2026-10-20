@@ -57,6 +57,20 @@ pub struct Program {
     /// The executable and its leading arguments; the run directory is
     /// appended.
     pub command: Vec<String>,
+    /// Variables set for it beyond this process's own: the secrets its
+    /// configuration lists, by name (docs/PLACEMENT.md §8).
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl Program {
+    pub fn new(name: &str, command: Vec<String>) -> Program {
+        Program {
+            name: name.into(),
+            command,
+            env: BTreeMap::new(),
+        }
+    }
 }
 
 /// How many times a resumable program is started again before its Run
@@ -163,6 +177,7 @@ impl LocalPerformer {
         let child = Command::new(exe)
             .args(args)
             .arg(dir)
+            .envs(&program.env)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(err))
@@ -364,14 +379,7 @@ mod tests {
     fn performer(root: &Path, script: &str) -> LocalPerformer {
         let path = root.join("verb.sh");
         std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        LocalPerformer::new(
-            "local",
-            &root.join("runs"),
-            vec![Program {
-                name: "echo-program".into(),
-                command: vec!["sh".into(), path.display().to_string()],
-            }],
-        )
+        LocalPerformer::new("local", &root.join("runs"), vec![Program::new("echo-program", vec!["sh".into(), path.display().to_string()])])
     }
 
     fn settle(p: &LocalPerformer, handle: &str) -> Observation {

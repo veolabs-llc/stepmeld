@@ -1,13 +1,10 @@
-//! stepmeld's stores in SQLite files (docs/ORCHESTRATOR-WORKER.md):
-//!
-//! - [`SqliteStore`], the shared store: a [`StateStore`] (definitions,
-//!   workflows with a version per write, the history with a sequence per
-//!   workflow, leases) and an [`OrderBook`] (orders and the Workers that
-//!   published themselves) in one file. Every conditional write is one
-//!   transaction.
-//! - [`WorkerStore`], one Worker's private store: its name, where its
-//!   Runs keep their files, whether it is a cloud Worker, and its
-//!   programs. Nothing in it reaches the shared store.
+//! A shared store in one SQLite file (docs/ORCHESTRATOR-WORKER.md):
+//! [`SqliteStore`] is a [`StateStore`] (definitions, workflows with a
+//! version per write, the history with a sequence per workflow, leases)
+//! and an [`OrderBook`] (orders, their claims and logs, and the Workers
+//! that published themselves). Every conditional write is one
+//! transaction. A Worker's own settings are its machine file
+//! (`stepmeld-config`), since 2026-10-20.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -71,26 +68,6 @@ impl SqliteStore {
     pub fn in_memory() -> Result<SqliteStore, Error> {
         Self::open(Path::new(":memory:"))
     }
-
-    /// Every StepDefinition and WorkflowDefinition stored, read but not
-    /// checked: what a person needs to see, and clean up, in a store
-    /// whose definitions no longer hold together (one written before a
-    /// rule changed, say), where [`StateStore::library`] refuses.
-    pub fn definitions(&self) -> Result<(Vec<StepDefinition>, Vec<WorkflowDefinition>), Error> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT kind, doc FROM definitions ORDER BY kind, name, version").map_err(db)?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db)?;
-        let mut steps = Vec::new();
-        let mut workflows = Vec::new();
-        for row in rows {
-            let (kind, text) = row.map_err(db)?;
-            match kind.as_str() {
-                "step" => steps.push(doc::<StepDefinition>(&text, "a StepDefinition")?),
-                _ => workflows.push(doc::<WorkflowDefinition>(&text, "a WorkflowDefinition")?),
-            }
-        }
-        Ok((steps, workflows))
-    }
 }
 
 /// A transaction that will write, begun IMMEDIATE: it takes the write
@@ -106,6 +83,26 @@ fn write(conn: &mut Connection) -> Result<rusqlite::Transaction<'_>, Error> {
 }
 
 impl StateStore for SqliteStore {
+    /// Every StepDefinition and WorkflowDefinition stored, read but not
+    /// checked: what a person needs to see, and clean up, in a store
+    /// whose definitions no longer hold together (one written before a
+    /// rule changed, say), where [`StateStore::library`] refuses.
+    fn definitions(&self) -> Result<(Vec<StepDefinition>, Vec<WorkflowDefinition>), Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT kind, doc FROM definitions ORDER BY kind, name, version").map_err(db)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db)?;
+        let mut steps = Vec::new();
+        let mut workflows = Vec::new();
+        for row in rows {
+            let (kind, text) = row.map_err(db)?;
+            match kind.as_str() {
+                "step" => steps.push(doc::<StepDefinition>(&text, "a StepDefinition")?),
+                _ => workflows.push(doc::<WorkflowDefinition>(&text, "a WorkflowDefinition")?),
+            }
+        }
+        Ok((steps, workflows))
+    }
+
     fn describe(&self) -> String {
         format!("sqlite {}", self.path)
     }
@@ -375,113 +372,6 @@ impl OrderBook for SqliteStore {
     }
 }
 
-/// One Worker's private store: what only this Worker needs, and what
-/// differs from machine to machine.
-pub struct WorkerStore {
-    conn: Mutex<Connection>,
-    path: String,
-}
-
-/// A Worker's own settings.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WorkerSettings {
-    /// Its name in the shared store; Performer names are Worker names.
-    pub name: String,
-    /// Where its Runs keep their files.
-    pub root: String,
-    /// Its work happens in the cloud.
-    pub cloud: bool,
-}
-
-impl WorkerStore {
-    /// Open or create the file; a new store takes `default_name` as the
-    /// Worker's name and `runs` as where Runs keep their files.
-    pub fn open(path: &Path, default_name: &str) -> Result<WorkerStore, Error> {
-        let conn = Connection::open(path).map_err(db)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS program_commands (name TEXT PRIMARY KEY, command TEXT NOT NULL);",
-        )
-        .map_err(db)?;
-        for (key, value) in [("name", default_name), ("root", "runs"), ("cloud", "false")] {
-            conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)", params![key, value]).map_err(db)?;
-        }
-        Ok(WorkerStore {
-            conn: Mutex::new(conn),
-            path: path.display().to_string(),
-        })
-    }
-
-    pub fn describe(&self) -> String {
-        format!("sqlite {}", self.path)
-    }
-
-    fn get(&self, key: &str) -> Result<String, Error> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0)).map_err(db)
-    }
-
-    fn set(&self, key: &str, value: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)", params![key, value]).map_err(db)?;
-        Ok(())
-    }
-
-    pub fn settings(&self) -> Result<WorkerSettings, Error> {
-        Ok(WorkerSettings {
-            name: self.get("name")?,
-            root: self.get("root")?,
-            cloud: self.get("cloud")? == "true",
-        })
-    }
-
-    pub fn set_name(&self, name: &str) -> Result<(), Error> {
-        if name.trim().is_empty() {
-            return Err(Error::Refused("a Worker's name cannot be empty".into()));
-        }
-        self.set("name", name)
-    }
-
-    pub fn set_root(&self, root: &str) -> Result<(), Error> {
-        self.set("root", root)
-    }
-
-    pub fn set_cloud(&self, cloud: bool) -> Result<(), Error> {
-        self.set("cloud", if cloud { "true" } else { "false" })
-    }
-
-    /// Each program this Worker has, by the name StepDefinitions use,
-    /// and the command that runs it here (the Run's directory is
-    /// appended).
-    pub fn programs(&self) -> Result<Vec<(String, Vec<String>)>, Error> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT name, command FROM program_commands ORDER BY name").map_err(db)?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db)?;
-        rows.map(|r| r.map_err(db).and_then(|(n, c)| Ok((n, doc::<Vec<String>>(&c, "a program's command")?)))).collect()
-    }
-
-    /// Set the command for a program, replacing any before it.
-    pub fn set_program(&self, name: &str, command: &[String]) -> Result<(), Error> {
-        if name.trim().is_empty() || name.chars().any(char::is_whitespace) {
-            return Err(Error::Refused(format!("{name:?} is not a program name (no spaces)")));
-        }
-        if command.is_empty() {
-            return Err(Error::Refused(format!("program {name} has no command")));
-        }
-        let conn = self.conn.lock().unwrap();
-        conn.execute("INSERT OR REPLACE INTO program_commands (name, command) VALUES (?1, ?2)", params![name, serde_json::to_string(command).unwrap()])
-            .map_err(db)?;
-        Ok(())
-    }
-
-    /// Forget a program; whether there was one.
-    pub fn remove_program(&self, name: &str) -> Result<bool, Error> {
-        let conn = self.conn.lock().unwrap();
-        Ok(conn.execute("DELETE FROM program_commands WHERE name = ?1", params![name]).map_err(db)? > 0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,43 +407,6 @@ mod tests {
         assert!(store.library().is_ok());
     }
 
-    #[test]
-    fn a_worker_store_keeps_its_settings_and_programs() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("worker.sqlite");
-        let w = WorkerStore::open(&path, "desk").unwrap();
-        assert_eq!(
-            w.settings().unwrap(),
-            WorkerSettings {
-                name: "desk".into(),
-                root: "runs".into(),
-                cloud: false
-            }
-        );
-        w.set_program("hello-program", &["/opt/bin/hello-program".into()]).unwrap();
-        w.set_cloud(true).unwrap();
-        w.set_name("queue").unwrap();
-        assert!(w.set_program("x", &[]).is_err());
-        assert!(w.set_program("two words", &["x".into()]).is_err());
-        drop(w);
-        let again = WorkerStore::open(&path, "other-default").unwrap();
-        assert_eq!(
-            again.settings().unwrap(),
-            WorkerSettings {
-                name: "queue".into(),
-                root: "runs".into(),
-                cloud: true
-            },
-            "a default never replaces a setting"
-        );
-        assert_eq!(again.programs().unwrap(), vec![("hello-program".to_string(), vec!["/opt/bin/hello-program".to_string()])]);
-        assert!(again.remove_program("hello-program").unwrap());
-        assert!(!again.remove_program("hello-program").unwrap());
-    }
-
-    /// Two processes write one file: a lease taken while another
-    /// connection holds the write lock and commits a change meanwhile
-    /// waits and lands, rather than being refused with a stale snapshot.
     #[test]
     fn a_write_waits_for_another_writer_and_is_not_refused_on_a_stale_snapshot() {
         let dir = tempfile::tempdir().unwrap();
