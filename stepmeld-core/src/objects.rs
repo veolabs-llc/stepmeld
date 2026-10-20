@@ -148,6 +148,13 @@ impl<O: Objects> ObjectStore<O> {
         ObjectStore { objects, prefix }
     }
 
+    /// The objects it is kept in: for an embedder that writes one of the
+    /// documents the table above names whole (a mirror of definitions,
+    /// say), under the same conditions.
+    pub fn objects(&self) -> &O {
+        &self.objects
+    }
+
     fn key(&self, k: &str) -> String {
         format!("{}{k}", self.prefix)
     }
