@@ -9,6 +9,40 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## Orders are claimed under a lease; a Worker's entry is its heartbeat
+
+*Breaking for the library; additive for the contracts and the command.
+Note: `docs/PLACEMENT.md` §5–§6. Contracts: `stepmeld/order.v1` gains
+`claim`; `stepmeld/worker.v1` gains `capabilities`, `slots`, `holds`,
+`beat_s`.*
+
+**Before:** a Worker started every open order addressed to it each
+round, nothing said it held one, and a Run on a Worker that went away
+stayed running for ever. **Now:** a Worker claims an order by a
+conditional write and renews the claim (five minutes, every minute);
+it takes as many orders as it has slots (one by default) and publishes
+itself at least every beat (a minute), with what it holds. An
+Orchestrator places nothing on a Worker unheard for three beats; it
+ends lost a Run whose Worker stopped renewing a claim on local work,
+and ends canceled at once an order nobody took. A Worker back too late
+finds its order ended and stops the work it left running. A Worker back
+within its lease carries on.
+
+**Who notices:** in the library, `OrderBook` gains `claim` and `end`,
+and `report` takes the reporting Worker's name and refuses any other;
+`WorkerFace::performer_face` takes the time; `Order` and `WorkerFace`
+gain fields (`Order { claim: None, .. }`); `Performer` gains
+`portable()` (default `false`); `orders::Worker` gains `with_slots`,
+`with_capabilities`, `with_lease`, `with_beat`. A shared store file
+from before gains its `claim` column when opened. The command: `tick
+--watch` reads the Workers again each tick, and says when a Run's
+order is not yet taken or its Worker is away.
+
+**What to do:** pass the Worker's name to `report`; build `Order` and
+`WorkerFace` with the new fields (or `..`); a Performer whose handles
+mean something on another machine (a cloud job id) returns `true` from
+`portable()`.
+
 ## A Worker's round says how each order ended
 
 *Breaking for the library.* `orders::Worker::tick` returns

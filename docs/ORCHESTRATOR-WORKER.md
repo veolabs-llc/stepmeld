@@ -106,9 +106,12 @@ My choices in the first form, each open to change:
 - A report carries the whole log so far, replaced on each report. Fine
   for small logs; a long one wants appending.
 - A cancel asked before the Worker took the order ends it as canceled
-  without starting it.
+  without starting it (since 2026-10-20 the Orchestrator ends it, so a
+  Worker that is away does not hold it up).
 - An order is addressed to one named Worker. "Any Worker that offers
   the StepDefinition" is not built.
+- Since 2026-10-20 a Worker claims each order under a lease and its
+  published entry is its heartbeat (`docs/PLACEMENT.md` §5–§6).
 
 ## 6. Not decided yet
 

@@ -5,5 +5,14 @@
   "programs": [
     "count-program"
   ],
+  "capabilities": [
+    "docker",
+    "cuda"
+  ],
+  "slots": 1,
+  "holds": [
+    "wf-1/count/1"
+  ],
+  "beat_s": 60,
   "seen": "2026-10-17T14:00:00Z"
 }

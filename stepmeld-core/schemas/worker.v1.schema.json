@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stepmeld/worker.v1",
-  "title": "A Worker as every Orchestrator sees it, published by the Worker to the shared store. Its programs and paths stay in its own store.",
+  "title": "A Worker as every Orchestrator sees it, published by the Worker to the shared store; publishing is its heartbeat. Its commands and paths stay on its own machine.",
   "type": "object",
   "required": [
     "contract",
@@ -36,6 +36,32 @@
         "minLength": 1
       },
       "description": "The programs it has a command for, by name. It offers every StepDefinition that names one of them."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The words it offers to what a StepDefinition requires; opaque, compared for equality."
+    },
+    "slots": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many orders it runs at once (default 1)."
+    },
+    "holds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The orders it holds a claim on."
+    },
+    "beat_s": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The longest it goes between publishing, in seconds (default 60); unheard for three beats, it is away and nothing new is placed on it."
     },
     "seen": {
       "$ref": "#/$defs/time",

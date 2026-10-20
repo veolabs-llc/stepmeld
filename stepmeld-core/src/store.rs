@@ -202,14 +202,42 @@ impl crate::orders::OrderBook for MemoryStore {
         Ok(self.inner.lock().unwrap().orders.iter().filter(|o| o.worker == worker && !o.ended()).cloned().collect())
     }
 
-    fn report(&self, id: &str, report: &crate::orders::Report) -> Result<(), Error> {
+    fn claim(&self, id: &str, expect: Option<&crate::orders::Claim>, claim: &crate::orders::Claim) -> Result<bool, Error> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.orders.iter_mut().find(|o| o.id == id) {
+            Some(order) if !order.ended() && order.claim.as_ref() == expect => {
+                order.claim = Some(claim.clone());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn report(&self, id: &str, worker: &str, report: &crate::orders::Report) -> Result<(), Error> {
         let mut inner = self.inner.lock().unwrap();
         let order = inner.orders.iter_mut().find(|o| o.id == id).ok_or_else(|| Error::Refused(format!("no order {id:?}")))?;
         if order.ended() {
             return Err(Error::Refused(format!("order {id} has ended")));
         }
+        if order.claim.as_ref().map(|c| c.worker.as_str()) != Some(worker) {
+            return Err(Error::Refused(format!("order {id} is not claimed by {worker}")));
+        }
         order.report = Some(report.clone());
         Ok(())
+    }
+
+    fn end(&self, id: &str, expect: Option<&crate::orders::Claim>, report: &crate::orders::Report) -> Result<bool, Error> {
+        if report.outcome.is_none() {
+            return Err(Error::Refused(format!("ending order {id} needs an outcome")));
+        }
+        let mut inner = self.inner.lock().unwrap();
+        match inner.orders.iter_mut().find(|o| o.id == id) {
+            Some(order) if !order.ended() && order.claim.as_ref() == expect => {
+                order.report = Some(report.clone());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 
     fn ask_cancel(&self, id: &str, ask: &crate::orders::CancelAsk) -> Result<(), Error> {

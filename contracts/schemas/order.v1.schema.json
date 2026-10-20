@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stepmeld/order.v1",
-  "title": "One Run's work, addressed to one Worker in the shared store. The Orchestrator writes the request and any cancel; the Worker writes the report.",
+  "title": "One Run's work, addressed to one Worker in the shared store. The Orchestrator writes the request and any cancel; the Worker claims it under a lease and writes the report.",
   "type": "object",
   "required": [
     "contract",
@@ -48,13 +48,45 @@
         }
       }
     },
+    "claim": {
+      "type": "object",
+      "required": [
+        "worker",
+        "at",
+        "until"
+      ],
+      "additionalProperties": false,
+      "description": "The Worker's hold on the order, taken by a conditional write and kept by renewing it before `until`; once `until` has passed, a portable handle may be taken over by another Worker and a local one ends the order lost.",
+      "properties": {
+        "worker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "$ref": "#/$defs/time",
+          "description": "When this Worker took the order."
+        },
+        "until": {
+          "$ref": "#/$defs/time",
+          "description": "Until when the claim holds unless renewed."
+        },
+        "handle": {
+          "type": "string",
+          "description": "The Performer's handle, once the work has started."
+        },
+        "portable": {
+          "type": "boolean",
+          "description": "Whether the handle means anything on another machine (a cloud job's id does)."
+        }
+      }
+    },
     "report": {
       "type": "object",
       "required": [
         "at"
       ],
       "additionalProperties": false,
-      "description": "The Worker's latest word: progress while it runs, the outcome once it ends (final), the log so far.",
+      "description": "The claiming Worker's latest word: progress while it runs, the outcome once it ends (final), the log so far. An order nobody took may be ended canceled, and one whose local claim lapsed ended lost, by an Orchestrator.",
       "properties": {
         "at": {
           "$ref": "#/$defs/time"

@@ -12,7 +12,7 @@ use stepmeld_core::definition::{Locality, Ref, StepDefinition, WorkflowDefinitio
 use stepmeld_core::driver::Driver;
 use stepmeld_core::engine::Command;
 use stepmeld_core::library::Library;
-use stepmeld_core::orders::{wall_clock, OrderPerformer, Worker};
+use stepmeld_core::orders::{wall_clock, OrderBook, OrderPerformer, Worker};
 use stepmeld_core::store::StateStore;
 use stepmeld_core::workflow::{Actor, Gate, StepStatus, Waiting, Workflow, WorkflowStatus};
 use stepmeld_core::{iso, Error, Value};
@@ -506,6 +506,9 @@ fn run(cli: Cli) -> Result<(), Error> {
             }
             let mut spoke = false;
             loop {
+                // Workers come and go while this watches: who is here is
+                // read again each tick
+                let driver = self::driver(&cli)?.1;
                 let statuses = driver.tick_all(&iso(now_secs()), &until())?;
                 let lib = store.library()?;
                 let mut busy = false;
@@ -788,6 +791,18 @@ fn ask(question: &str) -> bool {
     std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+/// Why a Run on a Worker shows no progress, when the order says: not
+/// yet taken, or its Worker is away.
+fn untaken(store: &SqliteStore, run: &str, worker: &str) -> String {
+    let Ok(Some(order)) = store.order(run) else { return String::new() };
+    let away = store.workers().ok().and_then(|ws| ws.into_iter().find(|w| w.name == worker)).is_some_and(|w| w.away(&iso(now_secs())));
+    match (&order.claim, away) {
+        (_, true) => " (away)".into(),
+        (None, false) => ", not yet taken".into(),
+        (Some(_), false) => String::new(),
+    }
+}
+
 /// A Workflow's status in a word, and each Step's line (name, "status  detail").
 type Snapshot = (String, Vec<(String, String)>);
 
@@ -816,7 +831,7 @@ fn snapshot(store: &SqliteStore, lib: &Library, faces: &[stepmeld_core::workflow
             StepStatus::Running => {
                 let progress = reason(&wf, name, &st);
                 if progress.is_empty() {
-                    step.latest().map(|r| format!("on {}", r.performer)).unwrap_or_default()
+                    step.latest().map(|r| format!("on {}{}", r.performer, untaken(store, &r.id, &r.performer))).unwrap_or_default()
                 } else {
                     progress
                 }
