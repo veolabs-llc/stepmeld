@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use stepmeld_core::definition::{Ref, StepDefinition, WorkflowDefinition};
 use stepmeld_core::history::Entry;
 use stepmeld_core::library::Library;
-use stepmeld_core::orders::{CancelAsk, Order, OrderBook, Report, WorkerFace};
+use stepmeld_core::orders::{CancelAsk, Claim, Order, OrderBook, Report, WorkerFace};
 use stepmeld_core::store::StateStore;
 use stepmeld_core::workflow::Workflow;
 use stepmeld_core::Error;
@@ -49,9 +49,14 @@ impl SqliteStore {
              CREATE TABLE IF NOT EXISTS history (workflow TEXT NOT NULL, seq INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (workflow, seq));
              CREATE TABLE IF NOT EXISTS leases (workflow TEXT PRIMARY KEY, holder TEXT NOT NULL, until TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS orders (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, worker TEXT NOT NULL, doc TEXT NOT NULL, cancel TEXT, report TEXT, ended INTEGER NOT NULL DEFAULT 0);",
+             CREATE TABLE IF NOT EXISTS orders (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, worker TEXT NOT NULL, doc TEXT NOT NULL, cancel TEXT, claim TEXT, report TEXT, ended INTEGER NOT NULL DEFAULT 0);",
         )
         .map_err(db)?;
+        // a store made before claims (2026-10-20) gains the column
+        let has_claim: bool = conn.prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'claim'").and_then(|mut s| s.exists([])).map_err(db)?;
+        if !has_claim {
+            conn.execute_batch("ALTER TABLE orders ADD COLUMN claim TEXT;").map_err(db)?;
+        }
         Ok(SqliteStore {
             conn: Mutex::new(conn),
             path: path.display().to_string(),
@@ -229,13 +234,20 @@ impl StateStore for SqliteStore {
     }
 }
 
-/// An order as stored: the Orchestrator's part, then the cancel and the
-/// report, each written by its own side.
-fn order_from(text: &str, cancel: Option<String>, report: Option<String>) -> Result<Order, Error> {
+/// An order as stored: the Orchestrator's part, then the cancel, the
+/// claim and the report, each written by its own side.
+fn order_from(text: &str, cancel: Option<String>, claim: Option<String>, report: Option<String>) -> Result<Order, Error> {
     let mut order: Order = doc(text, "an order")?;
     order.cancel = cancel.map(|c| doc::<CancelAsk>(&c, "an order's cancel")).transpose()?;
+    order.claim = claim.map(|c| doc::<Claim>(&c, "an order's claim")).transpose()?;
     order.report = report.map(|r| doc::<Report>(&r, "an order's report")).transpose()?;
     Ok(order)
+}
+
+type OrderRow = (String, Option<String>, Option<String>, Option<String>);
+
+fn order_row(r: &rusqlite::Row) -> rusqlite::Result<OrderRow> {
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
 }
 
 impl OrderBook for SqliteStore {
@@ -254,7 +266,12 @@ impl OrderBook for SqliteStore {
     }
 
     fn place(&self, order: &Order) -> Result<(), Error> {
-        let bare = Order { cancel: None, report: None, ..order.clone() };
+        let bare = Order {
+            cancel: None,
+            claim: None,
+            report: None,
+            ..order.clone()
+        };
         let conn = self.conn.lock().unwrap();
         conn.execute("INSERT OR IGNORE INTO orders (id, worker, doc) VALUES (?1, ?2, ?3)", params![order.id, order.worker, serde_json::to_string(&bare).unwrap()])
             .map_err(db)?;
@@ -263,28 +280,55 @@ impl OrderBook for SqliteStore {
 
     fn order(&self, id: &str) -> Result<Option<Order>, Error> {
         let conn = self.conn.lock().unwrap();
-        let row: Option<(String, Option<String>, Option<String>)> = conn
-            .query_row("SELECT doc, cancel, report FROM orders WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .optional()
-            .map_err(db)?;
-        row.map(|(d, c, r)| order_from(&d, c, r)).transpose()
+        let row: Option<OrderRow> = conn.query_row("SELECT doc, cancel, claim, report FROM orders WHERE id = ?1", params![id], order_row).optional().map_err(db)?;
+        row.map(|(d, c, cl, r)| order_from(&d, c, cl, r)).transpose()
     }
 
     fn open_orders(&self, worker: &str) -> Result<Vec<Order>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT doc, cancel, report FROM orders WHERE worker = ?1 AND ended = 0 ORDER BY seq").map_err(db)?;
-        let rows = stmt.query_map(params![worker], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?))).map_err(db)?;
-        rows.map(|r| r.map_err(db).and_then(|(d, c, rep)| order_from(&d, c, rep))).collect()
+        let mut stmt = conn.prepare("SELECT doc, cancel, claim, report FROM orders WHERE worker = ?1 AND ended = 0 ORDER BY seq").map_err(db)?;
+        let rows = stmt.query_map(params![worker], order_row).map_err(db)?;
+        rows.map(|r| r.map_err(db).and_then(|(d, c, cl, rep)| order_from(&d, c, cl, rep))).collect()
     }
 
-    fn report(&self, id: &str, report: &Report) -> Result<(), Error> {
+    fn claim(&self, id: &str, expect: Option<&Claim>, claim: &Claim) -> Result<bool, Error> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "UPDATE orders SET claim = ?3 WHERE id = ?1 AND ended = 0 AND claim IS ?2",
+                params![id, expect.map(|c| serde_json::to_string(c).unwrap()), serde_json::to_string(claim).unwrap()],
+            )
+            .map_err(db)?;
+        Ok(n == 1)
+    }
+
+    fn end(&self, id: &str, expect: Option<&Claim>, report: &Report) -> Result<bool, Error> {
+        if report.outcome.is_none() {
+            return Err(Error::Refused(format!("ending order {id} needs an outcome")));
+        }
+        let conn = self.conn.lock().unwrap();
+        let n = conn
+            .execute(
+                "UPDATE orders SET report = ?3, ended = 1 WHERE id = ?1 AND ended = 0 AND claim IS ?2",
+                params![id, expect.map(|c| serde_json::to_string(c).unwrap()), serde_json::to_string(report).unwrap()],
+            )
+            .map_err(db)?;
+        Ok(n == 1)
+    }
+
+    fn report(&self, id: &str, worker: &str, report: &Report) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
         let tx = write(&mut conn)?;
-        let ended: Option<i64> = tx.query_row("SELECT ended FROM orders WHERE id = ?1", params![id], |r| r.get(0)).optional().map_err(db)?;
-        match ended {
+        let row: Option<(i64, Option<String>)> = tx.query_row("SELECT ended, claim FROM orders WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(db)?;
+        match row {
             None => return Err(Error::Refused(format!("no order {id:?}"))),
-            Some(1) => return Err(Error::Refused(format!("order {id} has ended"))),
-            Some(_) => {}
+            Some((1, _)) => return Err(Error::Refused(format!("order {id} has ended"))),
+            Some((_, claim)) => {
+                let holder = claim.map(|c| doc::<Claim>(&c, "an order's claim")).transpose()?.map(|c| c.worker);
+                if holder.as_deref() != Some(worker) {
+                    return Err(Error::Refused(format!("order {id} is not claimed by {worker}")));
+                }
+            }
         }
         tx.execute("UPDATE orders SET report = ?2, ended = ?3 WHERE id = ?1", params![id, serde_json::to_string(report).unwrap(), report.outcome.is_some() as i64])
             .map_err(db)?;
@@ -514,5 +558,31 @@ mod tests {
         // the suite removes its Workflow at the end and puts it again: no history
         assert!(store.get("conformance-wf").unwrap().is_some());
         assert!(store.history("conformance-wf").unwrap().is_empty(), "removed and put again, with no history");
+    }
+
+    /// A store made before claims had no claim column: opening it adds
+    /// one, and its orders read as nobody's.
+    #[test]
+    fn a_store_from_before_claims_gains_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE orders (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, worker TEXT NOT NULL, doc TEXT NOT NULL, cancel TEXT, report TEXT, ended INTEGER NOT NULL DEFAULT 0);")
+                .unwrap();
+            let doc = r#"{"contract":"stepmeld/order.v1","id":"o-1","worker":"w1","placed":"2026-10-17T00:00:00Z","request":{"workflow":"wf","step":"s","run":"o-1","definition":{"name":"d","version":1},"inputs":{},"parameters":{},"outputs":[]}}"#;
+            conn.execute("INSERT INTO orders (id, worker, doc) VALUES ('o-1', 'w1', ?1)", params![doc]).unwrap();
+        }
+        let store = SqliteStore::open(&path).unwrap();
+        let order = store.order("o-1").unwrap().unwrap();
+        assert!(order.claim.is_none());
+        let claim = Claim {
+            worker: "w1".into(),
+            at: "2026-10-20T00:00:00Z".into(),
+            until: "2026-10-20T00:05:00Z".into(),
+            handle: None,
+            portable: false,
+        };
+        assert!(store.claim("o-1", None, &claim).unwrap());
     }
 }

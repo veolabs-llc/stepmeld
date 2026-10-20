@@ -17,6 +17,8 @@ after each.
 | `stepmeld/run-progress.v1` | the run directory: how far a program is |
 | `stepmeld/run-outcome.v1` | the run directory: how a Run ended (the same shape as a Workflow's outcome) |
 | `stepmeld/run-cancel.v1` | the run directory: a cancel asked for, and its deadline |
+| `stepmeld/order.v1` | the shared store: one Run's work addressed to a Worker, its claim and its report |
+| `stepmeld/worker.v1` | the shared store: a Worker as Orchestrators see it; publishing it is the heartbeat |
 
 The run directory protocol, how a Performer and a program that does a
 Step's work speak on one machine, is `run-directory.v1.md`; the four

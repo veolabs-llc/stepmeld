@@ -27,6 +27,13 @@
       }
     ]
   },
+  "claim": {
+    "worker": "desk",
+    "at": "2026-10-17T14:00:01Z",
+    "until": "2026-10-17T14:05:01Z",
+    "handle": "runs/wf-1/count/1",
+    "portable": false
+  },
   "report": {
     "at": "2026-10-17T14:00:05Z",
     "progress": {

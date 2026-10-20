@@ -29,12 +29,21 @@ pub trait Performer: Send + Sync {
     fn estimate(&self, _request: &StartRequest) -> Option<Estimate> {
         None
     }
+    /// Whether its handles mean anything on another machine: a cloud
+    /// job's id does, a process on one host does not. A Worker that
+    /// stops renewing its claim on an order whose handle is portable
+    /// is replaced by another that goes on observing; one whose handle
+    /// is local leaves its Run lost (docs/PLACEMENT.md §5).
+    fn portable(&self) -> bool {
+        false
+    }
 }
 
 /// A Performer held in memory: the tests'. It accepts every Run of the
 /// verbs it offers and ends them when told to.
 pub struct MemoryPerformer {
     face: PerformerFace,
+    portable: bool,
     inner: Mutex<MemoryInner>,
 }
 
@@ -62,8 +71,17 @@ impl MemoryPerformer {
     pub fn new(face: PerformerFace) -> MemoryPerformer {
         MemoryPerformer {
             face,
+            portable: false,
             inner: Mutex::new(MemoryInner::default()),
         }
+    }
+
+    /// One whose handles are portable: shared by several Workers, it
+    /// stands for a service every machine reaches, such as a cloud
+    /// queue.
+    pub fn with_portable_handles(mut self) -> MemoryPerformer {
+        self.portable = true;
+        self
     }
 
     /// The Runs it was asked to start, in order.
@@ -120,6 +138,10 @@ impl MemoryPerformer {
 impl Performer for MemoryPerformer {
     fn describe(&self) -> PerformerFace {
         self.face.clone()
+    }
+
+    fn portable(&self) -> bool {
+        self.portable
     }
 
     fn start(&self, request: &StartRequest) -> Result<String, String> {

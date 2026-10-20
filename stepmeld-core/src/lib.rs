@@ -37,6 +37,37 @@ pub fn iso(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
+/// The seconds since the epoch a time spelled by [`iso`] stands for;
+/// `None` for any other spelling. For the edge pieces that hold a lease
+/// for so many seconds from now.
+pub fn secs(iso: &str) -> Option<u64> {
+    let b = iso.as_bytes();
+    if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' || b[19] != b'Z' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| iso.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hh, mm, ss) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 59 {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
+}
+
+/// `seconds` after `now`, spelled as [`iso`] spells it.
+pub fn later(now: &str, seconds: u64) -> Result<String, Error> {
+    secs(now)
+        .map(|s| iso(s + seconds))
+        .ok_or_else(|| Error::Protocol(format!("{now:?} is not a time as stepmeld spells one (YYYY-MM-DDTHH:MM:SSZ)")))
+}
+
 #[cfg(test)]
 mod iso_tests {
     #[test]
@@ -44,6 +75,15 @@ mod iso_tests {
         assert_eq!(super::iso(0), "1970-01-01T00:00:00Z");
         assert_eq!(super::iso(1_790_000_000), "2026-09-21T14:13:20Z");
         assert_eq!(super::iso(951_782_400), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn a_spelled_time_reads_back() {
+        for s in [0, 1_790_000_000, 951_782_400, 1_792_000_000] {
+            assert_eq!(super::secs(&super::iso(s)), Some(s));
+        }
+        assert_eq!(super::secs("2026-10-17T00:01:00+00:00"), None, "only the one spelling");
+        assert_eq!(super::later("2026-10-17T00:59:30Z", 45).unwrap(), "2026-10-17T01:00:15Z");
     }
 }
 

@@ -285,3 +285,171 @@ fn locality_comes_from_the_worker() {
     o.tick_all(&now(3), &now(9)).unwrap();
     assert_eq!(status(&store, "hello-6"), StepStatus::Waiting(Waiting::Confirmation { locality: Locality::Cloud }));
 }
+
+/// A clock the test moves.
+fn settable(at: u32) -> (Clock, Arc<std::sync::Mutex<String>>) {
+    let t = Arc::new(std::sync::Mutex::new(now(at)));
+    let r = t.clone();
+    (Arc::new(move || r.lock().unwrap().clone()), t)
+}
+
+fn orchestrator_with(store: &Arc<MemoryStore>, host: &str, clock: Clock) -> Driver {
+    let mut d = Driver::new(store.clone(), &format!("orchestrator@{host}")).with_nesting();
+    for p in OrderPerformer::for_workers(store.clone(), &store.library().unwrap(), host, clock).unwrap() {
+        d = d.with_performer(Arc::new(p));
+    }
+    d
+}
+
+fn latest(store: &MemoryStore, id: &str) -> Run {
+    store.get(id).unwrap().unwrap().0.steps["add"].latest().unwrap().clone()
+}
+
+/// The Worker claims the order and goes away for good. Once its claim
+/// lapses, the next Orchestrator to look ends the Run lost: the work
+/// was on that machine, and nobody else can find it.
+#[test]
+fn a_worker_that_stops_renewing_leaves_its_run_lost() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, _) = worker(&store, "bench", "bench-host", false);
+    let w = w.with_lease(120, 60);
+    w.tick(&now(0)).unwrap();
+    let (clock, t) = settable(1);
+    let o = orchestrator_with(&store, "desk", clock.clone());
+    begin(&o, "gone-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(1)).unwrap();
+    let run = latest(&store, "gone-1");
+    let claim = store.order(&run.id).unwrap().unwrap().claim.unwrap();
+    assert_eq!((claim.worker.as_str(), claim.until.as_str()), ("bench", "2026-10-17T00:03:00Z"), "claimed for the lease");
+    drop(w);
+
+    *t.lock().unwrap() = now(3);
+    o.tick_all(&now(3), &now(9)).unwrap();
+    assert_eq!(status(&store, "gone-1"), StepStatus::Running, "not before the claim lapses");
+    *t.lock().unwrap() = now(4);
+    o.tick_all(&now(4), &now(9)).unwrap();
+    let outcome = latest(&store, "gone-1").outcome.unwrap();
+    assert_eq!((outcome.state, outcome.class.as_deref()), (RunState::Lost, Some("lost")));
+    assert!(outcome.reason.unwrap().contains("bench stopped renewing"), "the reason names the Worker");
+    assert!(store.open_orders("bench").unwrap().is_empty(), "the order is ended too");
+}
+
+/// A Worker restarted within its lease finds its own claim, renews it
+/// and carries the Run on: nothing is lost by a restart.
+#[test]
+fn a_worker_back_within_its_lease_carries_on() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = worker(&store, "bench", "h", false);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "h");
+    begin(&o, "back-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(1)).unwrap();
+    let run = latest(&store, "back-1");
+    let before = store.order(&run.id).unwrap().unwrap().claim.unwrap();
+    drop(w);
+
+    let again = Worker::new("bench", "h", false, vec!["add-program".into()], store.clone(), mechanism.clone());
+    again.tick(&now(3)).unwrap();
+    let after = store.order(&run.id).unwrap().unwrap().claim.unwrap();
+    assert_eq!((after.at.as_str(), after.handle.clone()), (before.at.as_str(), before.handle.clone()), "the same claim");
+    assert!(after.until > before.until, "renewed");
+    assert_eq!(mechanism.started().len(), 1, "the work was not started twice");
+    mechanism.finish(&mechanism.handle_of(&run.id).unwrap(), Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    again.tick(&now(4)).unwrap();
+    o.tick_all(&now(5), &now(9)).unwrap();
+    assert_eq!(status(&store, "back-1"), StepStatus::Succeeded);
+}
+
+/// A Worker back after its Run was ended lost no longer holds the
+/// order, and stops the work it had left running.
+#[test]
+fn a_worker_back_too_late_stops_its_work() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = worker(&store, "bench", "h", false);
+    let w = w.with_lease(120, 60);
+    w.tick(&now(0)).unwrap();
+    let (clock, t) = settable(1);
+    let o = orchestrator_with(&store, "h", clock);
+    begin(&o, "late-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(1)).unwrap();
+    let run = latest(&store, "late-1");
+    *t.lock().unwrap() = now(5);
+    o.tick_all(&now(5), &now(9)).unwrap();
+    assert_eq!(latest(&store, "late-1").outcome.unwrap().state, RunState::Lost);
+
+    let moved = w.tick(&now(6)).unwrap();
+    assert!(moved.is_empty());
+    let handle = mechanism.handle_of(&run.id).unwrap();
+    assert!(mechanism.run(&handle).unwrap().canceled.is_some(), "its local work is canceled");
+    assert!(store.workers().unwrap()[0].holds.is_empty(), "and it says it holds nothing");
+}
+
+/// Unheard for three beats, a Worker is away: nothing new is placed on
+/// it, and the Step waits for one that is here.
+#[test]
+fn an_away_worker_is_not_placed_on() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, _) = worker(&store, "bench", "h", false);
+    w.tick(&now(0)).unwrap();
+    let (clock, _) = settable(4);
+    let o = orchestrator_with(&store, "h", clock);
+    assert!(o.performers.iter().find(|p| p.describe().name == "bench").unwrap().describe().verbs.is_empty(), "an away Worker offers nothing");
+    begin(&o, "away-1");
+    o.tick_all(&now(4), &now(9)).unwrap();
+    assert!(store.get("away-1").unwrap().unwrap().0.steps["add"].runs.is_empty());
+    let wf = store.get("away-1").unwrap().unwrap().0;
+    let lib = store.library().unwrap();
+    let faces: Vec<PerformerFace> = o.performers.iter().map(|p| p.describe()).collect();
+    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert!(!store.workers().unwrap()[0].away(&now(3)), "three beats unheard is not yet away");
+}
+
+/// With one slot, a Worker takes one order at a time: the second waits
+/// unclaimed until the first ends.
+#[test]
+fn a_worker_takes_as_many_orders_as_it_has_slots() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = worker(&store, "bench", "h", false);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "h");
+    begin(&o, "slot-1");
+    begin(&o, "slot-2");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    let moved = w.tick(&now(1)).unwrap();
+    assert_eq!(moved.len(), 1, "one order taken");
+    let (first, second) = (latest(&store, "slot-1"), latest(&store, "slot-2"));
+    assert!(store.order(&first.id).unwrap().unwrap().claim.is_some());
+    assert!(store.order(&second.id).unwrap().unwrap().claim.is_none(), "the second waits for the slot");
+    assert_eq!(store.workers().unwrap()[0].holds, std::slice::from_ref(&first.id));
+    mechanism.finish(&mechanism.handle_of(&first.id).unwrap(), Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    w.tick(&now(2)).unwrap();
+    assert!(store.order(&second.id).unwrap().unwrap().claim.is_none(), "a slot frees once the round has reported");
+    w.tick(&now(3)).unwrap();
+    assert!(store.order(&second.id).unwrap().unwrap().claim.is_some());
+    assert_eq!(mechanism.started().len(), 2);
+}
+
+/// A cancel on an order nobody took ends it at once, without waiting
+/// for a Worker that may never come back.
+#[test]
+fn a_cancel_on_an_order_nobody_took_ends_it_at_once() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, _) = worker(&store, "bench", "h", false);
+    w.tick(&now(0)).unwrap();
+    drop(w);
+    let o = orchestrator(&store, "h");
+    begin(&o, "never-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    o.command("never-1", &Command::Cancel { step: Some("add".into()), reason: None }, &person(), &now(2)).unwrap();
+    o.tick_all(&now(2), &now(9)).unwrap();
+    assert_eq!(status(&store, "never-1"), StepStatus::Canceled);
+}

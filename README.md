@@ -159,12 +159,12 @@ your machine; which progress lines appear depends on timing; a
 Workflow already finished stays quiet):
 
 ```text
-hello-1          step_add         running    on my-laptop
+hello-1          step_add         running    on my-laptop, not yet taken
 hello-1          step_multiply    not-ready
 hello-1          (workflow)       running
 hello-1          step_add         running    adding 2 of 3 beats
 hello-1          step_add         succeeded  2 + 3 = 5
-hello-1          step_multiply    running    on my-laptop
+hello-1          step_multiply    running    on my-laptop, not yet taken
 hello-1          step_multiply    running    multiplying 1 of 3 beats
 hello-1          step_multiply    running    multiplying 3 of 3 beats
 hello-1          step_multiply    succeeded  5 × 4 = 20
