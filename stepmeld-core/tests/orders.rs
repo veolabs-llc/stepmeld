@@ -668,5 +668,7 @@ fn an_orchestrator_ticks_only_what_moved() {
     let statuses = o.tick_moved(&now(6), &now(9), &mut seen).unwrap();
     assert_eq!(statuses["busy"], WorkflowStatus::Succeeded);
     o.tick_moved(&now(7), &now(9), &mut seen).unwrap();
+    assert_eq!(seen.ticked, ["busy"], "what the last tick wrote is looked at once more");
+    o.tick_moved(&now(8), &now(9), &mut seen).unwrap();
     assert!(seen.ticked.is_empty(), "nothing left to move");
 }
