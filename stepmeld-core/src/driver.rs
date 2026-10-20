@@ -221,7 +221,8 @@ impl Driver {
 
     /// Every Workflow that may have moved since `seen` was last brought
     /// up to date, once, children before parents: one whose version
-    /// changed (a Command, a Worker's report applied elsewhere), one
+    /// changed since the last listing (a Command, a Worker's report
+    /// applied elsewhere, or this Orchestrator's own last tick), one
     /// with a Run live or a Step ready, and every one when the Workers
     /// on offer changed (a Worker came, went away, or came back). A
     /// Workflow that is waiting for a person, or finished, costs one
@@ -252,8 +253,11 @@ impl Driver {
                 continue; // another Orchestrator holds it
             };
             let status = wf.status(&self.definition(&lib, &wf)?);
-            if let Some((_, v)) = self.store.get(id)? {
-                seen.versions.insert(id.clone(), v);
+            // the listing's word for it, not a read's: a store may list
+            // a different stamp (a modified time) than it reads (an
+            // ETag). What this tick wrote is ticked once more next time.
+            if let Some(v) = listing.get(id) {
+                seen.versions.insert(id.clone(), v.clone());
             }
             if matches!(status, WorkflowStatus::Running | WorkflowStatus::Ready) {
                 seen.settled.remove(id);
