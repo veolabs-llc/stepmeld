@@ -52,10 +52,13 @@ pub trait Objects: Send + Sync {
     fn list(&self, prefix: &str) -> Result<Vec<String>, Error>;
 }
 
+/// Each key's body and version, and the last version handed out.
+type Held = (BTreeMap<String, (Vec<u8>, String)>, u64);
+
 /// Objects held in memory: the tests'.
 #[derive(Default)]
 pub struct MemoryObjects {
-    inner: Mutex<(BTreeMap<String, (Vec<u8>, String)>, u64)>,
+    inner: Mutex<Held>,
 }
 
 impl MemoryObjects {
