@@ -572,11 +572,14 @@ fn run(cli: Cli) -> Result<(), Error> {
                 }
             }
             let mut spoke = false;
+            // what moved since the last tick: a Workflow waiting for a
+            // person, or finished, is not ticked again until it changes
+            let mut seen = stepmeld_core::driver::Seen::default();
             loop {
                 // Workers come and go while this watches: who is here is
                 // read again each tick
                 let driver = self::driver(&cli)?.1;
-                let statuses = driver.tick_all(&iso(now_secs()), &until())?;
+                let statuses = driver.tick_moved(&iso(now_secs()), &until(), &mut seen)?;
                 let lib = store.library()?;
                 let mut busy = false;
                 for id in statuses.keys() {

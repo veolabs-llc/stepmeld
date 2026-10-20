@@ -92,4 +92,30 @@ impl Objects for S3Objects {
             Ok(keys)
         })
     }
+
+    /// A listing carries each object's ETag, so versions come with it.
+    fn listing(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
+        block_on(async {
+            let mut out = Vec::new();
+            let mut token: Option<String> = None;
+            loop {
+                let page = self
+                    .client
+                    .list_objects_v2()
+                    .bucket(&self.bucket)
+                    .prefix(prefix)
+                    .set_continuation_token(token.clone())
+                    .send()
+                    .await
+                    .map_err(|e| refused("list", prefix, e))?;
+                out.extend(page.contents().iter().filter_map(|o| Some((o.key()?.to_string(), o.e_tag()?.to_string()))));
+                token = page.next_continuation_token().map(str::to_string);
+                if token.is_none() || !page.is_truncated().unwrap_or(false) {
+                    break;
+                }
+            }
+            out.sort();
+            Ok(out)
+        })
+    }
 }

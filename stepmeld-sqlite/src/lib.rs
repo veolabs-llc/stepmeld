@@ -184,6 +184,13 @@ impl StateStore for SqliteStore {
         ids.collect::<Result<Vec<_>, _>>().map_err(db)
     }
 
+    fn listing(&self) -> Result<std::collections::BTreeMap<String, String>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id, version FROM workflows").map_err(db)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.to_string()))).map_err(db)?;
+        rows.collect::<Result<_, _>>().map_err(db)
+    }
+
     fn remove(&self, id: &str) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
         let tx = write(&mut conn)?;

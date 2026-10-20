@@ -616,3 +616,57 @@ fn the_log_grows_in_the_store() {
     let p = reader.performers.iter().find(|p| p.describe().name == "bench").unwrap();
     assert_eq!(p.log(&run.id).as_deref(), Some("adding 2 + 3\nsum is 5\n"), "any Orchestrator reads it");
 }
+
+/// An Orchestrator ticking only what moved: a Workflow waiting for a
+/// person is left alone until a Command changes it, one with a Run live
+/// is ticked every time, and a Worker coming wakes every one.
+#[test]
+fn an_orchestrator_ticks_only_what_moved() {
+    use stepmeld_core::driver::Seen;
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = worker(&store, "bench", "h", false);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "h");
+    begin(&o, "busy");
+    o.create(&Ref::new("add-two", 1), "idle", None, &person(), &now(0)).unwrap();
+    o.command("idle", &Command::StartWorkflow, &person(), &now(0)).unwrap();
+    let mut seen = Seen::default();
+    o.tick_moved(&now(1), &now(9), &mut seen).unwrap();
+    assert_eq!(seen.ticked, ["busy", "idle"], "the first time, every one");
+    w.tick(&now(1)).unwrap();
+    let statuses = o.tick_moved(&now(2), &now(9), &mut seen).unwrap();
+    assert_eq!(seen.ticked, ["busy"], "the idle one waits for its inputs; only the busy one is ticked");
+    assert_eq!(statuses["idle"], WorkflowStatus::Waiting);
+
+    o.command(
+        "idle",
+        &Command::Set {
+            step: "add".into(),
+            input: Some("a".into()),
+            parameter: None,
+            value: Some(Value::from(1)),
+        },
+        &person(),
+        &now(3),
+    )
+    .unwrap();
+    o.tick_moved(&now(3), &now(9), &mut seen).unwrap();
+    assert_eq!(seen.ticked, ["busy", "idle"], "a Command moved it");
+    o.tick_moved(&now(4), &now(9), &mut seen).unwrap();
+    assert_eq!(seen.ticked, ["busy"]);
+
+    let (other, _) = worker(&store, "bench-2", "h", false);
+    other.tick(&now(4)).unwrap();
+    let o = orchestrator(&store, "h");
+    o.tick_moved(&now(5), &now(9), &mut seen).unwrap();
+    assert_eq!(seen.ticked, ["busy", "idle"], "a Worker came: every one may move");
+
+    let run = store.get("busy").unwrap().unwrap().0.steps["add"].latest().unwrap().clone();
+    mechanism.finish(&mechanism.handle_of(&run.id).unwrap(), Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    w.tick(&now(6)).unwrap();
+    let statuses = o.tick_moved(&now(6), &now(9), &mut seen).unwrap();
+    assert_eq!(statuses["busy"], WorkflowStatus::Succeeded);
+    o.tick_moved(&now(7), &now(9), &mut seen).unwrap();
+    assert!(seen.ticked.is_empty(), "nothing left to move");
+}
