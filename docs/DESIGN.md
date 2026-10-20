@@ -37,9 +37,10 @@ The engine must:
 - carry per-step policies for whether a person must act;
 - log and measure in one shape, enough for a UI to show status and for
   a reader to estimate time left;
-- be agnostic about the tools a step uses and where it runs, while
-  knowing whether a step runs on this machine, the local network or in
-  the cloud;
+- be agnostic about the tools a step uses, while placing its work on
+  this machine, a fleet machine on the local network or in the cloud,
+  and managing where it runs (since 2026-10-20, `docs/PLACEMENT.md`;
+  before, where work ran was left to the engine's users);
 - keep the UI entirely outside: the engine ships documents, never
   screens.
 
@@ -102,7 +103,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **History** | The append-only record of Commands, Placements, progress and Outcomes, each with its Actor and time. Not "events": that word is kept for an external signal, should one be needed. |
 | **StateStore** | The engine's persistence: read, conditional write, append, list, and a lease per Workflow. SQLite first; a server later. |
 | **Orchestrator** | A role: advances Workflows (Gates, minting, placement, applying what comes back). Any machine with the shared store can play it (`docs/ORCHESTRATOR-WORKER.md`). |
-| **Worker** | A role: runs the work Orchestrators order, through its own programs, and reports. Keeps its programs in a store of its own and publishes its name and verbs to the shared one. Performer names are Worker names. |
+| **Worker** | A role: runs the work Orchestrators order, through its own programs, and reports. Keeps its configuration to itself and advertises its name, capabilities and programs in the shared store (`docs/PLACEMENT.md` §6). Performer names are Worker names. |
 | **Order** | One Run's work addressed to one Worker in the shared store: the request, a cancel if asked, and the Worker's latest report. A Worker never writes a Workflow. |
 
 Retired words: Definition and Template (for the recipe), Attempt and
@@ -145,6 +146,8 @@ a Run is started, observed and canceled only by a driver that has its
 Performer. Performer names are one namespace across the drivers of a
 store. A Run whose driver has gone stays live until that driver, or
 someone, says otherwise: the engine does not judge a driver's absence.
+A Worker's absence it does judge, through the Worker's lease on each
+order it holds (`docs/PLACEMENT.md` §5).
 
 ### 4.2 Performer
 
@@ -182,10 +185,10 @@ estimate(step)           -> optional: cost or duration, changing nothing
 A Step a person completes has no Performer; it is finished by a
 `complete` Command carrying its Outputs.
 
-Kinds expected: a local process, a container on this machine, orders
-to other machines on the local network, a cloud batch service, and the
-nested-workflow Performer, which lives inside the engine because it
-issues Commands (§6).
+Kinds: on an Orchestrator, orders to a Worker, and the nested-workflow
+Performer, which lives inside the engine because it issues Commands
+(§6); on a Worker, a command, a Docker image, and a cloud batch service
+in a provider's crate (`docs/PLACEMENT.md`).
 
 The Performer contract gets a wire form, not only a Rust trait, so a
 Performer in another language or process can serve a Rust engine.
@@ -339,7 +342,7 @@ onto the engine:
 | A stored run of a computation (id, manifest, location) | The durable trace of one Run: the run id is the Run's, the manifest is its record, the location is where its Outputs live. A failed Run is an uncommitted location; a retake is a new run id. Work split into many jobs is one Run whose Performer runs a job plan. An executor's retry stays beneath one Run. |
 | Status, job, workflow and machine documents kept beside the runs | Most of it becomes the StateStore |
 | A workflow document with hard-coded kinds and routes | WorkflowDefinition + Workflow documents; each way of running a job becomes a Performer |
-| A contract for container jobs and its executors | Stays the system's own; one adapter presents an executor as a Performer; the engine never sees a job |
+| A contract for container jobs and its executors | Superseded (2026-10-20, `docs/PLACEMENT.md`): a program in an image, run by a Worker's Docker or batch Performer. Before, it stayed the system's own and one adapter presented an executor as a Performer |
 | A chain of follow-on jobs with its own state | A child recipe (§6) |
 | Per-step launch functions and a function that folds their results | The loop (§4.1) and the Library |
 
@@ -439,7 +442,8 @@ and its tests, and none contradicts the rules above.
 - The Performer wire form between machines: orders in the shared
   store (`docs/ORCHESTRATOR-WORKER.md`); on one machine, the run
   directory (§10a.11). A transport other than a shared store (a server)
-  is still open.
+  is still open. Placement on fleet machines and in the cloud:
+  `docs/PLACEMENT.md` §11.
 - The exact fixed forms a Guard may take, and whether a numeric
   engine-readable Output kind joins Decision for thresholds.
 
@@ -462,3 +466,5 @@ and its tests, and none contradicts the rules above.
    machines and a cloud batch service; a child recipe for publishing.
 7. The Performer wire form beyond this machine (a server), and the
    scenario fixtures as language-neutral files.
+8. Placement on fleet machines and in the cloud, in the phases of
+   `docs/PLACEMENT.md` §10.
