@@ -87,6 +87,7 @@ fn bind(from: &str, to: &str) -> Binding {
 
 fn performer(name: &str, locality: Locality, verbs: &[&str]) -> Arc<MemoryPerformer> {
     Arc::new(MemoryPerformer::new(PerformerFace {
+        pool: false,
         name: name.into(),
         locality,
         verbs: verbs.iter().map(|v| Ref::new(v, 1)).collect(),

@@ -45,5 +45,12 @@
     "start": "automatic"
   },
   "program": "typeset-program",
+  "requires": [
+    "fonts-full"
+  ],
+  "needs": {
+    "memory_gib": 8,
+    "dpi_max": 1200
+  },
   "version": 1
 }

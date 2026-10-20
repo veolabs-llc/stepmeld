@@ -196,7 +196,8 @@ in `docs/BREAKING.md`.
 0. This note; the rule on providers in `CLAUDE.md`.
 1. Orders take over from dispatch: claims and leases *(built
    2026-10-20, with the heartbeat and lost on a lapsed local claim)*,
-   pinned and open orders, `requires` and capabilities, the heartbeat, takeover or
+   pinned and open orders *(built: the pool `any`; cloud orders open
+   and taken over)*, `requires` and capabilities, the heartbeat, takeover or
    lost, logs in the store. A walkthrough variation with two Workers
    on one machine, standing in for a fleet, and a harness case with
    two Orchestrators on one store.

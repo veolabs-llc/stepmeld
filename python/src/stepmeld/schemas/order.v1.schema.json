@@ -1,12 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stepmeld/order.v1",
-  "title": "One Run's work, addressed to one Worker in the shared store. The Orchestrator writes the request and any cancel; the Worker claims it under a lease and writes the report.",
+  "title": "One Run's work in the shared store, pinned to one Worker or open to any that may take it. The Orchestrator writes the request and any cancel; the Worker claims it under a lease and writes the report.",
   "type": "object",
   "required": [
     "contract",
     "id",
-    "worker",
     "placed",
     "request"
   ],
@@ -23,7 +22,24 @@
     "worker": {
       "type": "string",
       "minLength": 1,
-      "description": "The Worker it is addressed to, by name."
+      "description": "The Worker it is pinned to. Absent on an open order."
+    },
+    "open": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Who may take an open order: any Worker that has the request's program, offers every word in `requires`, and is a cloud Worker or not as `cloud` says.",
+      "properties": {
+        "cloud": {
+          "type": "boolean"
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     },
     "placed": {
       "$ref": "#/$defs/time"
@@ -208,6 +224,10 @@
           "type": "string",
           "description": "The program the StepDefinition names; a Worker runs the command it registered under that name."
         },
+        "needs": {
+          "type": "object",
+          "description": "What the StepDefinition says the work needs, to size it by."
+        },
         "inputs": {
           "type": "object",
           "description": "Every Input that holds a Value, by name. Values are opaque JSON."
@@ -280,5 +300,27 @@
       "minLength": 1,
       "description": "An opaque label, compared for equality."
     }
-  }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "worker"
+      ],
+      "not": {
+        "required": [
+          "open"
+        ]
+      }
+    },
+    {
+      "required": [
+        "open"
+      ],
+      "not": {
+        "required": [
+          "worker"
+        ]
+      }
+    }
+  ]
 }

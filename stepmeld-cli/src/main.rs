@@ -112,7 +112,7 @@ enum Cmd {
         /// The Step, by its name in the WorkflowDefinition (not the StepDefinition's name).
         #[arg(long)]
         step: String,
-        /// The Worker, by name.
+        /// The Worker, by name; `any` for the first Worker free to take it.
         #[arg(long)]
         worker: String,
     },
@@ -344,6 +344,9 @@ fn run(cli: Cli) -> Result<(), Error> {
                 None | Some(WorkerCmd::Show) => show_worker(&cli, &store, &ws)?,
                 Some(WorkerCmd::Set { name, root, cloud }) => {
                     if let Some(n) = name {
+                        if n == stepmeld_core::orders::ANY {
+                            return Err(Error::Refused(format!("{n:?} names the pool of every Worker; choose another name")));
+                        }
                         ws.set_name(n)?;
                     }
                     if let Some(r) = root {

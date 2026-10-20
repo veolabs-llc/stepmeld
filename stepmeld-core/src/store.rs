@@ -199,7 +199,15 @@ impl crate::orders::OrderBook for MemoryStore {
     }
 
     fn open_orders(&self, worker: &str) -> Result<Vec<crate::orders::Order>, Error> {
-        Ok(self.inner.lock().unwrap().orders.iter().filter(|o| o.worker == worker && !o.ended()).cloned().collect())
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .orders
+            .iter()
+            .filter(|o| (o.worker.as_deref() == Some(worker) || o.worker.is_none()) && !o.ended())
+            .cloned()
+            .collect())
     }
 
     fn claim(&self, id: &str, expect: Option<&crate::orders::Claim>, claim: &crate::orders::Claim) -> Result<bool, Error> {

@@ -34,6 +34,10 @@
       "type": "string",
       "description": "The program the StepDefinition names; a Worker runs the command it registered under that name."
     },
+    "needs": {
+      "type": "object",
+      "description": "What the StepDefinition says the work needs, to size it by."
+    },
     "inputs": {
       "type": "object",
       "description": "Every Input that holds a Value, by name. Values are opaque JSON."

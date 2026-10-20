@@ -14,13 +14,14 @@
 //!   claims, run each through a Performer, report, and publish itself
 //!   as its heartbeat.
 
-use crate::definition::Locality;
+use crate::definition::{Locality, Ref, StepDefinition};
 use crate::engine::{Observation, StartRequest};
 use crate::library::Library;
 use crate::performer::Performer;
 use crate::workflow::{Outcome, PerformerFace, Progress};
 use crate::Error;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 pub const ORDER: &str = "stepmeld/order.v1";
@@ -34,6 +35,9 @@ pub const RENEW_S: u64 = 60;
 /// [`AWAY_AFTER`] beats unheard (docs/PLACEMENT.md §6).
 pub const BEAT_S: u64 = 60;
 pub const AWAY_AFTER: u64 = 3;
+/// The pool of every Worker that is not a cloud Worker: "next
+/// available". No Worker may take this name.
+pub const ANY: &str = "any";
 
 fn one() -> u32 {
     1
@@ -84,26 +88,38 @@ impl WorkerFace {
         }
     }
 
-    /// The Performer an Orchestrator on `here` (a host name) places
-    /// Runs on for this Worker, at `now`: it offers every StepDefinition
-    /// in the Library whose program the Worker has, or nothing while the
-    /// Worker is away. Locality comes from the Worker: a cloud Worker
-    /// is `cloud`, one on the Orchestrator's own host `this-machine`,
-    /// any other `local-network`.
-    pub fn performer_face(&self, here: &str, lib: &Library, now: &str) -> PerformerFace {
-        let locality = if self.cloud {
+    /// Whether it may take `step`'s work: it has the program, and it
+    /// offers every word the StepDefinition requires.
+    pub fn offers(&self, step: &StepDefinition) -> bool {
+        step.program.as_ref().is_some_and(|p| self.programs.contains(p)) && step.requires.iter().all(|r| self.capabilities.contains(r))
+    }
+
+    /// Where it is, seen from an Orchestrator on `here` (a host name):
+    /// a cloud Worker is `cloud`, one on `here` `this-machine`, any
+    /// other `local-network`.
+    pub fn locality(&self, here: &str) -> Locality {
+        if self.cloud {
             Locality::Cloud
         } else if self.host == here {
             Locality::ThisMachine
         } else {
             Locality::LocalNetwork
-        };
-        let verbs = if self.away(now) {
-            Vec::new()
-        } else {
-            lib.steps().filter(|s| s.program.as_ref().is_some_and(|p| self.programs.contains(p))).map(|s| s.reference()).collect()
-        };
-        PerformerFace { name: self.name.clone(), locality, verbs }
+        }
+    }
+
+    /// The Performer an Orchestrator on `here` places Runs on for this
+    /// Worker, at `now`: it offers every StepDefinition in the Library
+    /// the Worker [offers](Self::offers), or nothing while the Worker
+    /// is away.
+    pub fn performer_face(&self, here: &str, lib: &Library, now: &str) -> PerformerFace {
+        let locality = self.locality(here);
+        let verbs = if self.away(now) { Vec::new() } else { lib.steps().filter(|s| self.offers(s)).map(|s| s.reference()).collect() };
+        PerformerFace {
+            name: self.name.clone(),
+            locality,
+            verbs,
+            pool: false,
+        }
     }
 }
 
@@ -162,15 +178,31 @@ impl Report {
     }
 }
 
-/// One Run's work, addressed to one Worker. The Orchestrator writes
-/// the request and any cancel; the Worker claims it and writes the
-/// report.
+/// Who may take an open order: any Worker that has its program,
+/// offers every word it requires, and is a cloud Worker or not, as it
+/// says.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Open {
+    #[serde(default)]
+    pub cloud: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+}
+
+/// One Run's work, addressed to one Worker (pinned) or to any Worker
+/// that may take it (open). The Orchestrator writes the request and any
+/// cancel; the Worker claims it and writes the report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     pub contract: String,
     /// The Run's id: one order per Run.
     pub id: String,
-    pub worker: String,
+    /// The Worker it is pinned to; none for an open order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    /// Who may take it, when it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<Open>,
     pub placed: String,
     pub request: StartRequest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -185,6 +217,16 @@ impl Order {
     pub fn ended(&self) -> bool {
         self.report.as_ref().is_some_and(|r| r.outcome.is_some())
     }
+
+    /// Whether a Worker of this name, cloud or not, with these programs
+    /// and capabilities, may take it.
+    pub fn for_worker(&self, name: &str, cloud: bool, programs: &[String], capabilities: &[String]) -> bool {
+        match (&self.worker, &self.open) {
+            (Some(w), _) => w == name,
+            (None, Some(open)) => open.cloud == cloud && self.request.program.as_ref().is_some_and(|p| programs.contains(p)) && open.requires.iter().all(|r| capabilities.contains(r)),
+            (None, None) => false,
+        }
+    }
 }
 
 /// The shared store's side of orders and Workers.
@@ -195,7 +237,9 @@ pub trait OrderBook: Send + Sync {
     /// Place an order once; placing the same id again changes nothing.
     fn place(&self, order: &Order) -> Result<(), Error>;
     fn order(&self, id: &str) -> Result<Option<Order>, Error>;
-    /// A Worker's orders that have not ended, oldest first.
+    /// The orders that have not ended and are pinned to `worker`, and
+    /// every open order that has not ended, oldest first. Which open
+    /// ones the Worker may take is its to judge ([`Order::for_worker`]).
     fn open_orders(&self, worker: &str) -> Result<Vec<Order>, Error>;
     /// Replace the claim on an order that has not ended, only if its
     /// claim is still `expect` (none, for an order nobody holds):
@@ -228,20 +272,68 @@ pub struct OrderPerformer {
     book: Arc<dyn OrderBook>,
     face: PerformerFace,
     clock: Clock,
+    /// Open orders, and for cloud Workers too: who may take one. None
+    /// pins each order to the Worker the face names.
+    open: Option<bool>,
+    /// What each StepDefinition requires, for an open order to say.
+    requires: BTreeMap<Ref, Vec<String>>,
 }
 
 impl OrderPerformer {
+    /// Pinned: each order goes to the Worker `face` names.
     pub fn new(book: Arc<dyn OrderBook>, face: PerformerFace, clock: Clock) -> OrderPerformer {
-        OrderPerformer { book, face, clock }
+        OrderPerformer {
+            book,
+            face,
+            clock,
+            open: None,
+            requires: BTreeMap::new(),
+        }
     }
 
-    /// One Performer per published Worker, as seen from `here`, offering
-    /// what the Library says the Worker's programs do; a Worker that is
-    /// away offers nothing, so nothing new is placed on it, while what
-    /// it already holds is still observed.
+    /// Open: each order goes to any Worker, cloud or not as `cloud`
+    /// says, that has its program and offers what it requires.
+    pub fn open(book: Arc<dyn OrderBook>, face: PerformerFace, clock: Clock, cloud: bool, lib: &Library) -> OrderPerformer {
+        OrderPerformer {
+            open: Some(cloud),
+            requires: lib.steps().map(|s| (s.reference(), s.requires.clone())).collect(),
+            ..OrderPerformer::new(book, face, clock)
+        }
+    }
+
+    /// One Performer per published Worker, as seen from `here`, then
+    /// the pool [`ANY`]. A Worker offers what the Library says its
+    /// programs and capabilities let it take; one that is away offers
+    /// nothing, so nothing new is placed on it, while what it holds is
+    /// still observed. A cloud Worker's orders are open to every cloud
+    /// Worker, so another can take over its work. The pool offers what
+    /// any Worker that is here and not a cloud Worker offers; the first
+    /// free to take an order takes it.
     pub fn for_workers(book: Arc<dyn OrderBook>, lib: &Library, here: &str, clock: Clock) -> Result<Vec<OrderPerformer>, Error> {
         let now = clock();
-        Ok(book.workers()?.iter().map(|w| OrderPerformer::new(book.clone(), w.performer_face(here, lib, &now), clock.clone())).collect())
+        let workers: Vec<WorkerFace> = book.workers()?.into_iter().filter(|w| w.name != ANY).collect();
+        let mut out: Vec<OrderPerformer> = workers
+            .iter()
+            .map(|w| {
+                let face = w.performer_face(here, lib, &now);
+                if w.cloud {
+                    OrderPerformer::open(book.clone(), face, clock.clone(), true, lib)
+                } else {
+                    OrderPerformer::new(book.clone(), face, clock.clone())
+                }
+            })
+            .collect();
+        let local: Vec<&WorkerFace> = workers.iter().filter(|w| !w.cloud && !w.away(&now)).collect();
+        let verbs: Vec<Ref> = lib.steps().filter(|s| local.iter().any(|w| w.offers(s))).map(|s| s.reference()).collect();
+        let locality = if local.iter().all(|w| w.host == here) { Locality::ThisMachine } else { Locality::LocalNetwork };
+        let pool = PerformerFace {
+            name: ANY.into(),
+            locality,
+            verbs,
+            pool: true,
+        };
+        out.push(OrderPerformer::open(book.clone(), pool, clock, false, lib));
+        Ok(out)
     }
 }
 
@@ -251,10 +343,21 @@ impl Performer for OrderPerformer {
     }
 
     fn start(&self, request: &StartRequest) -> Result<String, String> {
+        let (worker, open) = match self.open {
+            None => (Some(self.face.name.clone()), None),
+            Some(cloud) => (
+                None,
+                Some(Open {
+                    cloud,
+                    requires: self.requires.get(&request.definition).cloned().unwrap_or_default(),
+                }),
+            ),
+        };
         let order = Order {
             contract: ORDER.into(),
             id: request.run.clone(),
-            worker: self.face.name.clone(),
+            worker,
+            open,
             placed: (self.clock)(),
             request: request.clone(),
             cancel: None,
@@ -417,7 +520,13 @@ impl Worker {
     pub fn tick(&self, now: &str) -> Result<Vec<Moved>, Error> {
         let until = crate::later(now, self.lease_s)?;
         let renew_by = crate::later(now, self.lease_s - self.renew_s)?;
-        let orders = self.book.open_orders(&self.name)?;
+        // what it may take, and whatever it already holds
+        let orders: Vec<Order> = self
+            .book
+            .open_orders(&self.name)?
+            .into_iter()
+            .filter(|o| o.claim.as_ref().is_some_and(|c| c.worker == self.name) || o.for_worker(&self.name, self.cloud, &self.programs, &self.capabilities))
+            .collect();
         let mut held = orders.iter().filter(|o| o.claim.as_ref().is_some_and(|c| c.worker == self.name)).count();
         let mut holds = Vec::new();
         let mut moved = Vec::new();
@@ -581,7 +690,8 @@ pub mod conformance {
         Order {
             contract: ORDER.into(),
             id: id.into(),
-            worker: worker.into(),
+            worker: Some(worker.into()),
+            open: None,
             placed: "2026-10-17T00:00:00Z".into(),
             request: StartRequest {
                 workflow: "wf".into(),
@@ -589,6 +699,7 @@ pub mod conformance {
                 run: id.into(),
                 definition: Ref::new("stepdef_add", 1),
                 program: Some("hello-program".into()),
+                needs: BTreeMap::new(),
                 inputs: BTreeMap::new(),
                 parameters: BTreeMap::new(),
                 outputs: Vec::new(),
@@ -710,5 +821,23 @@ pub mod conformance {
         assert!(o1.cancel.is_none() && o1.report.unwrap().outcome.unwrap().state == RunState::Succeeded, "an ended order is left as it is");
         assert!(book.report("nope", "w1", &running).is_err(), "a report on no order is refused");
         assert!(!book.claim("nope", None, &first).unwrap(), "nor is a claim made on one");
+
+        // an open order is listed for every Worker, which judges it
+        let open = Order {
+            worker: None,
+            open: Some(Open { cloud: false, requires: vec!["gpu".into()] }),
+            ..order("o-4", "unused")
+        };
+        book.place(&open).unwrap();
+        for w in ["w1", "w9"] {
+            let ids: Vec<String> = book.open_orders(w).unwrap().into_iter().map(|o| o.id).collect();
+            assert_eq!(ids, ["o-4"], "listed for {w}");
+        }
+        let o4 = book.order("o-4").unwrap().unwrap();
+        assert_eq!(o4, open, "an open order reads back as placed");
+        assert!(o4.for_worker("w1", false, &["hello-program".into()], &["gpu".into()]));
+        assert!(!o4.for_worker("w1", false, &["hello-program".into()], &[]), "without the capability");
+        assert!(!o4.for_worker("w1", true, &["hello-program".into()], &["gpu".into()]), "a cloud Worker, for a local order");
+        assert!(book.claim("o-4", None, &claim("w9", "2026-10-17T00:05:00Z")).unwrap(), "claimed like any other");
     }
 }

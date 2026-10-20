@@ -3,61 +3,258 @@
   "$id": "stepmeld/step-definition.v1",
   "title": "A StepDefinition: what a Step takes, what it gives, which program does it, how it is run by default. Holds no Values.",
   "type": "object",
-  "required": ["contract", "name", "version"],
+  "required": [
+    "contract",
+    "name",
+    "version"
+  ],
   "additionalProperties": false,
-  "if": { "properties": { "done_by": { "const": "person" } }, "required": ["done_by"] },
-  "then": { "not": { "required": ["program"] } },
-  "else": { "required": ["program"] },
+  "if": {
+    "properties": {
+      "done_by": {
+        "const": "person"
+      }
+    },
+    "required": [
+      "done_by"
+    ]
+  },
+  "then": {
+    "not": {
+      "required": [
+        "program"
+      ]
+    }
+  },
+  "else": {
+    "required": [
+      "program"
+    ]
+  },
   "properties": {
-    "contract": { "const": "stepmeld/step-definition.v1" },
-    "name": { "$ref": "#/$defs/name" },
-    "version": { "type": "integer", "minimum": 1 },
-    "label": { "type": "string" },
-    "description": { "type": "string" },
-    "program": { "type": "string", "pattern": "^\\S+$", "description": "The program that does the work, by name; each Worker maps the name to a command on its own machine. Required when a Performer does the work, absent when a person does." },
-    "done_by": { "enum": ["performer", "person"], "default": "performer" },
+    "contract": {
+      "const": "stepmeld/step-definition.v1"
+    },
+    "name": {
+      "$ref": "#/$defs/name"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "label": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "program": {
+      "type": "string",
+      "pattern": "^\\S+$",
+      "description": "The program that does the work, by name; each Worker maps the name to a command on its own machine. Required when a Performer does the work, absent when a person does."
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Words a Worker must offer to take this work; opaque, compared for equality."
+    },
+    "needs": {
+      "type": "object",
+      "description": "What the work needs (memory, GPUs): never read by the engine, handed to the Performer, which sizes the work by it or refuses in words what it cannot meet."
+    },
+    "done_by": {
+      "enum": [
+        "performer",
+        "person"
+      ],
+      "default": "performer"
+    },
     "inputs": {
       "type": "array",
       "items": {
-        "type": "object", "required": ["name", "tag"], "additionalProperties": false,
-        "properties": { "name": { "$ref": "#/$defs/port" }, "tag": { "$ref": "#/$defs/tag" }, "required": { "type": "boolean", "default": true }, "label": { "type": "string" } }
+        "type": "object",
+        "required": [
+          "name",
+          "tag"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/port"
+          },
+          "tag": {
+            "$ref": "#/$defs/tag"
+          },
+          "required": {
+            "type": "boolean",
+            "default": true
+          },
+          "label": {
+            "type": "string"
+          }
+        }
       }
     },
     "parameters": {
       "type": "array",
       "items": {
-        "type": "object", "required": ["name", "tag"], "additionalProperties": false,
-        "properties": { "name": { "$ref": "#/$defs/port" }, "tag": { "$ref": "#/$defs/tag" }, "required": { "type": "boolean", "default": false }, "default": { "description": "The verb's own default, opaque to the engine." }, "label": { "type": "string" } }
+        "type": "object",
+        "required": [
+          "name",
+          "tag"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/port"
+          },
+          "tag": {
+            "$ref": "#/$defs/tag"
+          },
+          "required": {
+            "type": "boolean",
+            "default": false
+          },
+          "default": {
+            "description": "The verb's own default, opaque to the engine."
+          },
+          "label": {
+            "type": "string"
+          }
+        }
       }
     },
     "outputs": {
       "type": "array",
       "items": {
-        "type": "object", "required": ["name", "tag"], "additionalProperties": false,
-        "properties": { "name": { "$ref": "#/$defs/port" }, "tag": { "$ref": "#/$defs/tag" }, "options": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "Present on a Decision (tag `decision`): the words its Value may be." }, "label": { "type": "string" } }
+        "type": "object",
+        "required": [
+          "name",
+          "tag"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/port"
+          },
+          "tag": {
+            "$ref": "#/$defs/tag"
+          },
+          "options": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Present on a Decision (tag `decision`): the words its Value may be."
+          },
+          "label": {
+            "type": "string"
+          }
+        }
       }
     },
-    "policy": { "$ref": "#/$defs/policy" }
+    "policy": {
+      "$ref": "#/$defs/policy"
+    }
   },
   "$defs": {
-    "name": { "type": "string", "pattern": "^[^.\\s]+$", "description": "No dots: names are joined with ports by a dot." },
-    "port": { "type": "string", "minLength": 1 },
-    "tag": { "type": "string", "minLength": 1, "description": "An opaque label, compared for equality." },
-    "locality": { "enum": ["this-machine", "local-network", "cloud"] },
+    "name": {
+      "type": "string",
+      "pattern": "^[^.\\s]+$",
+      "description": "No dots: names are joined with ports by a dot."
+    },
+    "port": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "An opaque label, compared for equality."
+    },
+    "locality": {
+      "enum": [
+        "this-machine",
+        "local-network",
+        "cloud"
+      ]
+    },
     "policy": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "start": { "enum": ["automatic", "manual"], "default": "automatic" },
+        "start": {
+          "enum": [
+            "automatic",
+            "manual"
+          ],
+          "default": "automatic"
+        },
         "on_failure": {
           "oneOf": [
-            { "type": "object", "required": ["do"], "additionalProperties": false, "properties": { "do": { "const": "stop" } } },
-            { "type": "object", "required": ["do", "max", "classes"], "additionalProperties": false, "properties": { "do": { "const": "retake" }, "max": { "type": "integer", "minimum": 0 }, "classes": { "type": "array", "items": { "type": "string" } } } }
+            {
+              "type": "object",
+              "required": [
+                "do"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "const": "stop"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "do",
+                "max",
+                "classes"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "const": "retake"
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "classes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
           ]
         },
-        "on_stale": { "enum": ["wait", "rerun"], "default": "wait" },
+        "on_stale": {
+          "enum": [
+            "wait",
+            "rerun"
+          ],
+          "default": "wait"
+        },
         "placement": {
-          "type": "object", "additionalProperties": false,
-          "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } } }
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "performer": {
+              "type": "string"
+            },
+            "confirm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/locality"
+              }
+            }
+          }
         }
       }
     }

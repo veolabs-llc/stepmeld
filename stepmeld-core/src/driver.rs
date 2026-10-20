@@ -265,6 +265,7 @@ impl Performer for Nested {
     fn describe(&self) -> PerformerFace {
         let verbs = self.store.library().map(|l| l.workflows().map(|w| w.reference()).collect()).unwrap_or_default();
         PerformerFace {
+            pool: false,
             name: "nested".into(),
             locality: crate::definition::Locality::ThisMachine,
             verbs,
