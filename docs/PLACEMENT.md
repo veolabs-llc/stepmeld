@@ -229,6 +229,24 @@ in `docs/BREAKING.md`.
    delete what moved. Orders already running under the old dispatch
    finish first; the two never run side by side.
 
+   *Done 2026-10-20 (expand):* the open library's StepDefinitions name
+   their programs and requirements (`groundtruth`; one program per GPU
+   job image, requiring `cuda`); the first downstream user moved onto
+   current stepmeld, its live Library given programs by a stand-in
+   table until it is published again, then onto orders and Workers: its
+   shared store is `ObjectStore` over its data layer (the old keys
+   kept), each machine runs a Worker and, where it launches cloud jobs,
+   a cloud Worker, and its page places on Workers and on `any`.
+   Deploying that moves every machine together with no Run live.
+
+   *Left (contract), each needing images, infrastructure or runs on GPUs
+   and in the cloud to prove:* the GPU jobs' images run their programs
+   under stepmeld (a `docker` kind on machines; `batch` with
+   `stepmeld-run` in the image and job definitions that start it), so
+   the launchers, the old dispatch and its claimant, and the users'
+   execution contract and executors retire; the stand-in program table
+   goes once the Library is published again.
+
 ## 11. Not decided yet
 
 - Whether a Step with several Workers that could run it waits for a
