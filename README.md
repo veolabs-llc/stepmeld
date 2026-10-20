@@ -280,6 +280,50 @@ five minutes; back within that time it carries on, and after it the
 Run is lost and its Step's Policy decides what follows. A Worker unheard
 for three minutes is away, and nothing new is placed on it.
 
+### The fleet, with the program as an image
+
+The same two Workers, running `hello-program` as a container instead
+of a command: what a fleet does when every machine should run the same
+code, however it is set up. The image is built once, from the top of
+the repository (it compiles the program inside, so the first build
+takes a few minutes):
+
+```bash
+docker build -f examples/hello/Dockerfile -t stepmeld-hello:1 .
+```
+
+Stop both Workers. In `walkthrough/`, give the program an image in each
+deployment file, and take the command away from each machine, so the
+image is how they run it:
+
+```bash
+for b in bench-a bench-b; do printf '\n[programs.hello-program.docker]\nimage = "stepmeld-hello:1"\n' >> $b/stepmeld.toml; (cd $b && stepmeld worker program remove hello-program); done
+(cd bench-a && stepmeld worker)
+```
+
+`stepmeld worker` now says `program  hello-program  (docker)`, and
+`has  docker` (what it found on the machine). Start the two Workers again
+(`stepmeld work --watch` in each folder), then run a third Workflow as
+before, placed on `any`:
+
+```bash
+stepmeld create workflowdef_hello --id hello-3
+stepmeld set hello-3 --step step_add --input a --value 2
+stepmeld set hello-3 --step step_add --input b --value 3
+stepmeld set hello-3 --step step_multiply --input factor --value 4
+stepmeld start hello-3
+stepmeld place hello-3 --step step_add --worker any
+stepmeld place hello-3 --step step_multiply --worker any
+stepmeld tick --watch
+```
+
+Each Run is a `docker run` of the image with the Run's folder mounted
+at `/stepmeld/run`; `docker ps` shows it while it runs, named after the
+Run. A Docker that runs in a virtual machine (Docker Desktop, Colima)
+mounts only the folders it shares, usually the user's own; the
+walkthrough lives in the repository, so it is shared. On Linux the
+container writes the Run's files as root.
+
 
 ## Licence
 

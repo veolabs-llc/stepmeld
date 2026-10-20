@@ -8,9 +8,10 @@
 //!   Runs keep their files, the command for each program it runs as a
 //!   command, the capabilities it adds, its slots, whether it is a cloud
 //!   Worker.
-//! - [`Kinds`] is what a deployment may name: kinds of store, of secret
-//!   and of Performer. stepmeld registers its own (`sqlite`; `env`,
-//!   `file`; `command`); a provider's crate registers more.
+//! - [`Kinds`] is what a deployment may name: kinds of store, of secret,
+//!   of Performer and of sign-in. stepmeld registers its own (`sqlite`;
+//!   `env`, `file`; `command`, `docker`); a provider's crate registers
+//!   more.
 //!
 //! ```toml
 //! # stepmeld.toml
@@ -22,6 +23,11 @@
 //!
 //! [programs.typeset-program]
 //! secrets = ["FONT_TOKEN"]        # handed to the program by name
+//!
+//! [programs.typeset-program.docker]   # where no machine has a command for it
+//! image = "registry.example/typeset:3"
+//! args = ["typeset"]              # the Run's folder is appended
+//! gpus = 1
 //!
 //! [secrets.FONT_TOKEN]
 //! kind = "env"                    # read from this variable where the Worker runs
@@ -47,7 +53,7 @@ use stepmeld_core::performer::{Performer, Router};
 use stepmeld_core::store::SharedStore;
 use stepmeld_core::workflow::PerformerFace;
 use stepmeld_core::Error;
-use stepmeld_local::{LocalPerformer, Program};
+use stepmeld_local::{Image, LocalPerformer, Program, SignedIn};
 use toml::{Table, Value};
 
 /// The variable naming the deployment file, and the machine file.
@@ -323,7 +329,12 @@ pub struct WorkerPlan<'a> {
     pub runs: PathBuf,
     pub deployment: &'a Deployment,
     pub machine: &'a Machine,
+    pub kinds: &'a Kinds,
 }
+
+/// Signs a container in before it runs (a registry login, credentials
+/// for the job), by the deployment's settings.
+pub type SignInKind = fn(&Deployment, &Image) -> Result<SignedIn, String>;
 
 /// Builds a kind of Performer for a Worker, from the programs routed to it.
 pub type MakePerformer = fn(&WorkerPlan, &[ProgramPlan]) -> Result<Arc<dyn Performer>, Error>;
@@ -342,6 +353,7 @@ pub struct Kinds {
     stores: BTreeMap<String, StoreKind>,
     secrets: BTreeMap<String, SecretKind>,
     performers: BTreeMap<String, PerformerKind>,
+    sign_ins: BTreeMap<String, SignInKind>,
 }
 
 impl Default for Kinds {
@@ -353,20 +365,30 @@ impl Default for Kinds {
 /// The one Performer kind every machine has: a program's command, from
 /// the machine file, through the run directory.
 pub const COMMAND: &str = "command";
+/// A program as a container: `[programs.<name>.docker]`, an
+/// [`Image`]'s settings.
+pub const DOCKER: &str = "docker";
 
 impl Kinds {
     /// stepmeld's own: the `sqlite` store; `env` and `file` secrets; the
-    /// `command` Performer.
+    /// `command` and `docker` Performers.
     pub fn builtin() -> Kinds {
         Kinds {
             stores: BTreeMap::new(),
             secrets: BTreeMap::new(),
             performers: BTreeMap::new(),
+            sign_ins: BTreeMap::new(),
         }
         .with_store("sqlite", sqlite_store)
         .with_secret("env", env_secret)
         .with_secret("file", file_secret)
         .with_performer(COMMAND, PerformerKind { cloud: false, make: command_performer })
+        .with_performer(DOCKER, PerformerKind { cloud: false, make: docker_performer })
+    }
+
+    pub fn with_sign_in(mut self, kind: &str, sign_in: SignInKind) -> Kinds {
+        self.sign_ins.insert(kind.into(), sign_in);
+        self
     }
 
     pub fn with_store(mut self, kind: &str, open: StoreKind) -> Kinds {
@@ -445,6 +467,7 @@ impl Kinds {
             runs: m.runs(),
             deployment: d,
             machine: m,
+            kinds: self,
         };
         let routes = self.routes(d, m)?;
         if routes.is_empty() {
@@ -471,10 +494,22 @@ impl Kinds {
             };
             Arc::new(Router::new(face, built))
         };
-        Ok(Worker::new(&plan.name, host, m.file.worker.cloud, programs, book, performer)
-            .with_slots(m.slots())
-            .with_capabilities(m.file.worker.capabilities.clone()))
+        let worker = Worker::new(&plan.name, host, m.file.worker.cloud, programs, book, performer).with_slots(m.slots()).with_capabilities(capabilities(m));
+        Ok(if m.file.worker.cloud { worker } else { worker.with_gpus(Arc::new(stepmeld_local::gpus)) })
     }
+}
+
+/// What a machine's Worker offers: what the machine is found to have
+/// (`docker`, `cuda`; a cloud Worker is asked nothing of its machine),
+/// then what its file adds.
+pub fn capabilities(m: &Machine) -> Vec<String> {
+    let mut found = if m.file.worker.cloud { Vec::new() } else { stepmeld_local::probe().capabilities() };
+    for c in &m.file.worker.capabilities {
+        if !found.contains(c) {
+            found.push(c.clone());
+        }
+    }
+    found
 }
 
 fn sqlite_store(d: &Deployment, settings: &Table) -> Result<Arc<dyn SharedStore>, Error> {
@@ -512,6 +547,33 @@ fn command_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn
         })
         .collect();
     Ok(Arc::new(LocalPerformer::new(&w.name, &w.runs, programs)))
+}
+
+/// A program as a container: its [`Image`] from `[programs.<name>.docker]`,
+/// signed in by the kind its `sign_in` names.
+fn docker_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn Performer>, Error> {
+    let mut built = Vec::new();
+    for p in programs {
+        let image: Image = Value::Table(p.settings.clone())
+            .try_into()
+            .map_err(|e: toml::de::Error| invalid(&w.deployment.path, format!("[programs.{}.docker]: {}", p.name, e.message())))?;
+        if let Some(kind) = &image.sign_in {
+            if !w.kinds.sign_ins.contains_key(kind) {
+                return Err(invalid(&w.deployment.path, format!("[programs.{}.docker] signs in by {kind:?}, which this build has no kind for", p.name)));
+            }
+        }
+        built.push(Program {
+            env: p.env.clone(),
+            image: Some(image),
+            ..Program::new(&p.name, Vec::new())
+        });
+    }
+    let (sign_ins, deployment) = (w.kinds.sign_ins.clone(), w.deployment.clone());
+    let sign_in: stepmeld_local::SignIn = Arc::new(move |image: &Image| match image.sign_in.as_deref().and_then(|k| sign_ins.get(k)) {
+        Some(sign_in) => sign_in(&deployment, image),
+        None => Ok(SignedIn::default()),
+    });
+    Ok(Arc::new(LocalPerformer::new(&w.name, &w.runs, built).with_sign_in(sign_in)))
 }
 
 #[cfg(test)]
@@ -601,5 +663,21 @@ mod tests {
             "a cloud Worker: its launcher command, else the cloud kind, never a machine kind"
         );
         assert_eq!(m.slots(), u32::MAX);
+    }
+
+    /// A program with an image and no command on this machine runs as a
+    /// container; one that signs in by a kind the build lacks is refused.
+    #[test]
+    fn a_program_with_an_image_runs_as_a_container() {
+        let store = Arc::new(stepmeld_core::store::MemoryStore::new());
+        let m = Machine::read(Path::new("/nonexistent/m.toml")).unwrap();
+        let d = Deployment::parse("[programs.p.docker]\nimage = \"registry.example/p:1\"\nargs = [\"p\"]\ngpus = 1\n", None).unwrap();
+        let w = Kinds::builtin().worker(&d, &m, store.clone(), "h").unwrap();
+        assert_eq!(w.programs, ["p"]);
+        let bad = Deployment::parse("[programs.p.docker]\nimage = \"p:1\"\nsign_in = \"nowhere\"\n", None).unwrap();
+        let err = Kinds::builtin().worker(&bad, &m, store.clone(), "h").err().unwrap().to_string();
+        assert!(err.contains("\"nowhere\""), "{err}");
+        let typo = Deployment::parse("[programs.p.docker]\nimgae = \"p:1\"\n", None).unwrap();
+        assert!(Kinds::builtin().worker(&typo, &m, store, "h").is_err(), "an image is named");
     }
 }

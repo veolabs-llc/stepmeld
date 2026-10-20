@@ -1,0 +1,5 @@
+# What an image build never needs (examples/hello/Dockerfile)
+target/
+walkthrough/
+.git/
+.claude/

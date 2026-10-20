@@ -47,6 +47,14 @@ fn beat() -> u64 {
     BEAT_S
 }
 
+/// A GPU a Worker has, and its memory in use when it last published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gpu {
+    pub name: String,
+    pub memory_mib: u64,
+    pub used_mib: u64,
+}
+
 /// A Worker as every Orchestrator sees it: published by the Worker,
 /// replaced each time it publishes. Publishing is its heartbeat.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +82,9 @@ pub struct WorkerFace {
     /// The longest it goes between publishing, in seconds.
     #[serde(default = "beat")]
     pub beat_s: u64,
+    /// Its GPUs, measured when it published.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpus: Vec<Gpu>,
     /// When it last published itself.
     pub seen: String,
 }
@@ -446,6 +457,8 @@ pub struct Worker {
     pub lease_s: u64,
     pub renew_s: u64,
     pub beat_s: u64,
+    /// Measures its GPUs for each beat.
+    gpus: Option<Arc<dyn Fn() -> Vec<Gpu> + Send + Sync>>,
     book: Arc<dyn OrderBook>,
     performer: Arc<dyn Performer>,
     /// When it last published, and what it held then.
@@ -470,6 +483,7 @@ impl Worker {
             lease_s: LEASE_S,
             renew_s: RENEW_S,
             beat_s: BEAT_S,
+            gpus: None,
             book,
             performer,
             published: Mutex::new(None),
@@ -495,6 +509,12 @@ impl Worker {
         self
     }
 
+    /// Measure its GPUs for each beat it publishes.
+    pub fn with_gpus(mut self, measure: Arc<dyn Fn() -> Vec<Gpu> + Send + Sync>) -> Worker {
+        self.gpus = Some(measure);
+        self
+    }
+
     pub fn with_beat(mut self, beat_s: u64) -> Worker {
         self.beat_s = beat_s.max(1);
         self
@@ -512,6 +532,7 @@ impl Worker {
             slots: self.slots,
             holds,
             beat_s: self.beat_s,
+            gpus: self.gpus.as_ref().map(|m| m()).unwrap_or_default(),
             seen: now.into(),
         }
     }
@@ -756,6 +777,11 @@ pub mod conformance {
             slots: 2,
             holds: Vec::new(),
             beat_s: 60,
+            gpus: vec![Gpu {
+                name: "L40S".into(),
+                memory_mib: 46068,
+                used_mib: 1024,
+            }],
             seen: "2026-10-17T00:00:00Z".into(),
         };
         book.publish_worker(&face).unwrap();

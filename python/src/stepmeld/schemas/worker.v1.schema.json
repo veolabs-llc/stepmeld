@@ -63,6 +63,32 @@
       "minimum": 1,
       "description": "The longest it goes between publishing, in seconds (default 60); unheard for three beats, it is away and nothing new is placed on it."
     },
+    "gpus": {
+      "type": "array",
+      "description": "Its GPUs, measured when it published: memory in MiB, and how much was in use.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "memory_mib",
+          "used_mib"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "memory_mib": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "used_mib": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
     "seen": {
       "$ref": "#/$defs/time",
       "description": "When it last published itself."
