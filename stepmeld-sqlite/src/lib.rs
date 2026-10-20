@@ -273,8 +273,12 @@ impl OrderBook for SqliteStore {
             ..order.clone()
         };
         let conn = self.conn.lock().unwrap();
-        conn.execute("INSERT OR IGNORE INTO orders (id, worker, doc) VALUES (?1, ?2, ?3)", params![order.id, order.worker, serde_json::to_string(&bare).unwrap()])
-            .map_err(db)?;
+        // an open order is kept under the empty name
+        conn.execute(
+            "INSERT OR IGNORE INTO orders (id, worker, doc) VALUES (?1, ?2, ?3)",
+            params![order.id, order.worker.as_deref().unwrap_or(""), serde_json::to_string(&bare).unwrap()],
+        )
+        .map_err(db)?;
         Ok(())
     }
 
@@ -286,7 +290,7 @@ impl OrderBook for SqliteStore {
 
     fn open_orders(&self, worker: &str) -> Result<Vec<Order>, Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT doc, cancel, claim, report FROM orders WHERE worker = ?1 AND ended = 0 ORDER BY seq").map_err(db)?;
+        let mut stmt = conn.prepare("SELECT doc, cancel, claim, report FROM orders WHERE (worker = ?1 OR worker = '') AND ended = 0 ORDER BY seq").map_err(db)?;
         let rows = stmt.query_map(params![worker], order_row).map_err(db)?;
         rows.map(|r| r.map_err(db).and_then(|(d, c, cl, rep)| order_from(&d, c, cl, rep))).collect()
     }

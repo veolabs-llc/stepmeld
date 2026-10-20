@@ -1,0 +1,36 @@
+{
+  "contract": "stepmeld/order.v1",
+  "id": "wf-1/count/2",
+  "open": {
+    "cloud": true,
+    "requires": [
+      "fonts-full"
+    ]
+  },
+  "placed": "2026-10-17T14:00:00Z",
+  "request": {
+    "workflow": "wf-1",
+    "step": "count",
+    "run": "wf-1/count/1",
+    "definition": {
+      "name": "count-words",
+      "version": 1
+    },
+    "program": "count-program",
+    "inputs": {
+      "text": {
+        "file": "notes.txt"
+      }
+    },
+    "parameters": {
+      "min-length": 3
+    },
+    "outputs": [
+      {
+        "name": "counts",
+        "tag": "word-counts"
+      }
+    ]
+  },
+  "worker": "desk"
+}

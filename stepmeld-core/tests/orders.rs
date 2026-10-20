@@ -58,6 +58,7 @@ fn library(store: &MemoryStore) {
 /// is a memory Performer that performs `add`.
 fn worker(store: &Arc<MemoryStore>, name: &str, host: &str, cloud: bool) -> (Worker, Arc<MemoryPerformer>) {
     let mechanism = Arc::new(MemoryPerformer::new(PerformerFace {
+        pool: false,
         name: format!("{name}-programs"),
         locality: Locality::ThisMachine,
         verbs: vec![Ref::new("add", 1)],
@@ -122,7 +123,7 @@ fn an_order_is_run_by_its_worker_and_reported_back() {
     let run = wf.steps["add"].latest().unwrap().clone();
     assert_eq!((run.performer.as_str(), run.locality), ("desk", Some(Locality::ThisMachine)), "the placement names the Worker");
     let order = store.order(&run.id).unwrap().expect("an order was placed");
-    assert_eq!((order.worker.as_str(), order.request.inputs["a"].clone()), ("desk", Value::from(2)));
+    assert_eq!((order.worker.as_deref(), order.request.inputs["a"].clone()), (Some("desk"), Value::from(2)));
     assert!(mechanism.started().is_empty(), "nothing runs until the Worker takes it");
     assert_eq!(status(&store, "hello-1"), StepStatus::Running, "placed and not yet taken is running");
 
@@ -452,4 +453,138 @@ fn a_cancel_on_an_order_nobody_took_ends_it_at_once() {
     o.command("never-1", &Command::Cancel { step: Some("add".into()), reason: None }, &person(), &now(2)).unwrap();
     o.tick_all(&now(2), &now(9)).unwrap();
     assert_eq!(status(&store, "never-1"), StepStatus::Canceled);
+}
+
+/// `add`, requiring `cuda` and needing two GPUs.
+fn require_cuda(store: &MemoryStore) {
+    let mut add = store.library().unwrap().step(&Ref::new("add", 1)).unwrap();
+    add.requires = vec!["cuda".into()];
+    add.needs = BTreeMap::from([("gpus".to_string(), Value::from(2))]);
+    store.put_step(&add).unwrap();
+}
+
+/// A Worker offers a StepDefinition only when it has every word the
+/// StepDefinition requires; what the work needs reaches its Performer.
+#[test]
+fn a_worker_offers_what_it_has_the_capabilities_for() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    require_cuda(&store);
+    let (plain, _) = worker(&store, "plain", "h", false);
+    plain.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "h");
+    begin(&o, "cap-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    let wf = store.get("cap-1").unwrap().unwrap().0;
+    let faces: Vec<PerformerFace> = o.performers.iter().map(|p| p.describe()).collect();
+    let lib = store.library().unwrap();
+    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)), "no Worker offers cuda");
+
+    let (gpu, mechanism) = worker(&store, "gpu", "h", false);
+    let gpu = gpu.with_capabilities(vec!["cuda".into(), "docker".into()]);
+    gpu.tick(&now(1)).unwrap();
+    let o = orchestrator(&store, "h");
+    o.tick_all(&now(2), &now(9)).unwrap();
+    assert_eq!(latest(&store, "cap-1").performer, "gpu");
+    gpu.tick(&now(2)).unwrap();
+    assert_eq!(mechanism.started()[0].needs.get("gpus"), Some(&Value::from(2)), "needs reach the Performer");
+}
+
+/// Placed on the pool `any`, the order is open: the first Worker free
+/// to take it does, and the other leaves it alone.
+#[test]
+fn any_worker_takes_an_open_order() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (a, ma) = worker(&store, "bench-a", "a", false);
+    let (b, mb) = worker(&store, "bench-b", "b", false);
+    a.tick(&now(0)).unwrap();
+    b.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "desk");
+    let pool = o.performers.iter().map(|p| p.describe()).find(|f| f.name == "any").unwrap();
+    assert!(pool.pool && pool.verbs == [Ref::new("add", 1)] && pool.locality == Locality::LocalNetwork);
+    begin(&o, "any-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    assert_eq!(status(&store, "any-1"), StepStatus::Waiting(Waiting::Placement), "two Workers, and the pool is never chosen on its own");
+    o.command(
+        "any-1",
+        &Command::Place {
+            step: "add".into(),
+            performer: "any".into(),
+            locality: Locality::LocalNetwork,
+        },
+        &person(),
+        &now(1),
+    )
+    .unwrap();
+    o.tick_all(&now(1), &now(9)).unwrap();
+    let run = latest(&store, "any-1");
+    let order = store.order(&run.id).unwrap().unwrap();
+    assert_eq!((order.worker.clone(), order.open.clone().map(|o| o.cloud)), (None, Some(false)), "an open order");
+
+    b.tick(&now(2)).unwrap();
+    a.tick(&now(2)).unwrap();
+    assert_eq!(store.order(&run.id).unwrap().unwrap().claim.unwrap().worker, "bench-b", "the first to look takes it");
+    assert!(ma.started().is_empty());
+    mb.finish(&mb.handle_of(&run.id).unwrap(), Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    b.tick(&now(3)).unwrap();
+    o.tick_all(&now(4), &now(9)).unwrap();
+    assert_eq!(status(&store, "any-1"), StepStatus::Succeeded);
+}
+
+/// A cloud Worker's orders are open to every cloud Worker. When the one
+/// that launched the work stops renewing, another takes the claim over
+/// and goes on observing the same job: nothing is lost.
+#[test]
+fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let cloud = Arc::new(
+        MemoryPerformer::new(PerformerFace {
+            name: "batch".into(),
+            locality: Locality::Cloud,
+            verbs: vec![Ref::new("add", 1)],
+            pool: false,
+        })
+        .with_portable_handles(),
+    );
+    let launcher = |name: &str, host: &str| Worker::new(name, host, true, vec!["add-program".into()], store.clone(), cloud.clone()).with_lease(120, 60);
+    let first = launcher("queue-1", "laptop");
+    first.tick(&now(0)).unwrap();
+    let (clock, t) = settable(1);
+    let o = orchestrator_with(&store, "laptop", clock.clone());
+    begin(&o, "cloud-1");
+    o.command(
+        "cloud-1",
+        &Command::Place {
+            step: "add".into(),
+            performer: "queue-1".into(),
+            locality: Locality::Cloud,
+        },
+        &person(),
+        &now(1),
+    )
+    .unwrap();
+    o.tick_all(&now(1), &now(9)).unwrap();
+    let run = latest(&store, "cloud-1");
+    assert!(store.order(&run.id).unwrap().unwrap().open.unwrap().cloud, "a cloud order is open");
+    first.tick(&now(1)).unwrap();
+    let handle = store.order(&run.id).unwrap().unwrap().claim.unwrap().handle.unwrap();
+    drop(first);
+
+    let second = launcher("queue-2", "desk");
+    second.tick(&now(2)).unwrap();
+    assert_eq!(store.order(&run.id).unwrap().unwrap().claim.unwrap().worker, "queue-1", "not before the claim lapses");
+    *t.lock().unwrap() = now(4);
+    let o = orchestrator_with(&store, "laptop", clock);
+    o.tick_all(&now(4), &now(9)).unwrap();
+    assert_eq!(status(&store, "cloud-1"), StepStatus::Running, "a portable claim that lapsed is not lost");
+    second.tick(&now(4)).unwrap();
+    let claim = store.order(&run.id).unwrap().unwrap().claim.unwrap();
+    assert_eq!((claim.worker.as_str(), claim.handle.as_deref()), ("queue-2", Some(handle.as_str())), "taken over, same job");
+    assert_eq!(cloud.started().len(), 1, "the job was not launched again");
+    cloud.finish(&handle, Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    second.tick(&now(5)).unwrap();
+    o.tick_all(&now(5), &now(9)).unwrap();
+    assert_eq!(status(&store, "cloud-1"), StepStatus::Succeeded);
 }

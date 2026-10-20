@@ -239,6 +239,7 @@ mod tests {
 
     fn request(dir: &Path, verb: &str) {
         let req = StartRequest {
+            needs: Default::default(),
             workflow: "wf".into(),
             step: "s".into(),
             run: "wf/s/1".into(),

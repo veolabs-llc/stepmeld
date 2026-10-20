@@ -78,6 +78,10 @@ pub struct StartRequest {
     /// command it registered under that name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program: Option<String>,
+    /// What the StepDefinition says the work needs, for the Performer
+    /// to size it by; opaque to the engine.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub needs: BTreeMap<String, Value>,
     pub inputs: BTreeMap<String, Value>,
     pub parameters: BTreeMap<String, Value>,
     /// What the Performer must produce on success.
@@ -550,6 +554,7 @@ pub fn mint(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, step: &s
         run: run_id.clone(),
         definition: s.definition.clone(),
         program: sdef.program.clone(),
+        needs: sdef.needs.clone(),
         inputs,
         parameters,
         outputs: sdef.outputs.clone(),
@@ -580,6 +585,7 @@ pub fn request_for(lib: &Library, wf: &Workflow, step: &str, run: &str) -> Resul
         run: run.to_string(),
         definition: s.definition.clone(),
         program: sdef.program.clone(),
+        needs: sdef.needs.clone(),
         inputs: r.inputs.clone(),
         parameters: r.parameters.clone(),
         outputs: sdef.outputs.clone(),

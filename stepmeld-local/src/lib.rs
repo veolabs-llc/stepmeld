@@ -214,6 +214,7 @@ impl LocalPerformer {
 impl Performer for LocalPerformer {
     fn describe(&self) -> PerformerFace {
         PerformerFace {
+            pool: false,
             name: self.name.clone(),
             locality: self.locality,
             // what it can run is its programs, by name; which
@@ -340,6 +341,7 @@ mod tests {
 
     fn request(run: &str, outputs: &[&str]) -> StartRequest {
         StartRequest {
+            needs: Default::default(),
             workflow: "wf".into(),
             step: "s".into(),
             run: run.into(),

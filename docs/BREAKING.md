@@ -9,6 +9,36 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## Open orders, the pool `any`, and what a StepDefinition requires
+
+*Breaking for the library; additive for the contracts. Note:
+`docs/PLACEMENT.md` §5, §7. Contracts: `stepmeld/step-definition.v1`
+gains `requires` and `needs`; `stepmeld/run-request.v1` and the order's
+request gain `needs`; `stepmeld/order.v1` is pinned (`worker`) or open
+(`open`: `cloud`, `requires`), exactly one.*
+
+**Now:** a StepDefinition may say what a Worker must offer
+(`requires`, opaque words) and what the work needs (`needs`, an opaque
+map the Performer sizes the work by). A Worker offers a StepDefinition
+only when it has the program and every required word. Every
+Orchestrator has a pool Performer, `any`: placed there, a Run's order is
+open, and the first Worker free to take it does; the pool is never
+chosen on its own. A cloud Worker's orders are always open to every
+cloud Worker, so when the one that launched a job stops renewing,
+another takes the claim over and goes on observing the same job.
+
+**Who notices:** `Order::worker` is an `Option`, beside `Order::open`;
+`OrderBook::open_orders` also lists every open order, which the Worker
+judges with `Order::for_worker`. `PerformerFace` gains `pool`;
+`StepDefinition` gains `requires` and `needs`; `StartRequest` gains
+`needs`. A Worker may not be named `any`. The command's Workers have no
+capabilities yet (they arrive with the machine file), so a
+StepDefinition that requires a word is not offered by them.
+
+**What to do:** build `Order`, `PerformerFace`, `StepDefinition` and
+`StartRequest` with the new fields (or `..`); read `order.worker` as an
+`Option`.
+
 ## Orders are claimed under a lease; a Worker's entry is its heartbeat
 
 *Breaking for the library; additive for the contracts and the command.

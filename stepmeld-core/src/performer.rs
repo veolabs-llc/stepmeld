@@ -243,6 +243,7 @@ mod tests {
     #[test]
     fn the_memory_performer_conforms() {
         let p = MemoryPerformer::new(PerformerFace {
+            pool: false,
             name: "mem".into(),
             locality: Locality::ThisMachine,
             verbs: vec![Ref::new("verb", 1)],
@@ -253,6 +254,7 @@ mod tests {
             run: "wf/s/1".into(),
             definition: Ref::new("verb", 1),
             program: Some("p".into()),
+            needs: BTreeMap::new(),
             inputs: BTreeMap::new(),
             parameters: BTreeMap::new(),
             outputs: Vec::new(),

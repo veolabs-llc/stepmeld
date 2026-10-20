@@ -461,6 +461,10 @@ pub struct PerformerFace {
     pub name: String,
     pub locality: Locality,
     pub verbs: Vec<Ref>,
+    /// A pool: any of several Workers, the first free to take it. Never
+    /// chosen on its own; an Actor or a Policy names it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pool: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -738,7 +742,9 @@ impl Workflow {
         if let Some(named) = named {
             return performers.iter().find(|p| &p.name == named).filter(offers).ok_or(Unplaced::Nobody);
         }
-        let mut offering = performers.iter().filter(offers);
+        // a pool is taken only when named: with one Worker offering
+        // the verb, that Worker is the placement, pool or no pool
+        let mut offering = performers.iter().filter(offers).filter(|p| !p.pool);
         match (offering.next(), offering.next()) {
             (Some(only), None) => Ok(only),
             (None, _) => Err(Unplaced::Nobody),

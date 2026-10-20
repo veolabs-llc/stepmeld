@@ -2,7 +2,7 @@
 
 use crate::Value;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const STEP_DEFINITION: &str = "stepmeld/step-definition.v1";
 pub const WORKFLOW_DEFINITION: &str = "stepmeld/workflow-definition.v1";
@@ -174,6 +174,16 @@ pub struct StepDefinition {
     /// a person's StepDefinition has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program: Option<String>,
+    /// Words a Worker must offer to take this work (`cuda`,
+    /// `vram-24g`). Opaque, compared for equality (docs/PLACEMENT.md
+    /// §7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// What the work needs (`memory_gib`, `gpus`): never read by the
+    /// engine, handed to the Performer, which sizes the work by it or
+    /// refuses in words what it cannot meet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub needs: BTreeMap<String, crate::Value>,
     #[serde(default)]
     pub done_by: DoneBy,
     #[serde(default)]
@@ -195,6 +205,8 @@ impl StepDefinition {
             label: None,
             description: None,
             program: None,
+            requires: Vec::new(),
+            needs: BTreeMap::new(),
             done_by: DoneBy::Performer,
             inputs: Vec::new(),
             parameters: Vec::new(),
