@@ -9,6 +9,17 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## The shared store may be any object store; S3 comes with the command
+
+*Additive.* `stepmeld_core::objects` keeps a whole shared store in an
+object store with conditional writes (`ObjectStore` over `Objects`).
+`stepmeld-aws` implements it for S3 and adds the kinds `s3` (store),
+`aws-secretsmanager` (secret) and `aws` (sign-in: an ECR login and the
+deployment's credentials for a container), read with
+`[providers.aws]` (`region`, `profile`, `endpoint`). The `stepmeld`
+command includes them by default (`aws` feature; leave it out with
+`--no-default-features`).
+
 ## A program may be an image; a Worker probes Docker and its GPUs
 
 *Additive for the contracts (`stepmeld/worker.v1` gains `gpus`);

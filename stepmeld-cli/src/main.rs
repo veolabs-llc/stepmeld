@@ -291,9 +291,13 @@ fn driver(cli: &Cli) -> Result<(Arc<dyn SharedStore>, Driver), Error> {
     Ok((store, driver))
 }
 
-/// What this build can name in a deployment file.
+/// What this build can name in a deployment file: stepmeld's own kinds,
+/// and each provider's this build includes.
 fn kinds() -> Kinds {
-    Kinds::builtin()
+    let k = Kinds::builtin();
+    #[cfg(feature = "aws")]
+    let k = stepmeld_aws::kinds(k);
+    k
 }
 
 fn deployment(cli: &Cli) -> Result<Deployment, Error> {

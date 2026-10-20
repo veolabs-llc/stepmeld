@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["stepmeld-core", "stepmeld-sqlite", "stepmeld-local", "stepmeld-config", "stepmeld-cli", "stepmeld-verb", "examples/hello"]
+members = ["stepmeld-core", "stepmeld-sqlite", "stepmeld-local", "stepmeld-config", "stepmeld-aws", "stepmeld-cli", "stepmeld-verb", "examples/hello"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +17,7 @@ stepmeld-core = { path = "stepmeld-core", version = "0.1.0" }
 stepmeld-sqlite = { path = "stepmeld-sqlite", version = "0.1.0" }
 stepmeld-local = { path = "stepmeld-local", version = "0.1.0" }
 stepmeld-config = { path = "stepmeld-config", version = "0.1.0" }
+stepmeld-aws = { path = "stepmeld-aws", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: a Value is opaque and must come back byte-for-byte
 serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -1,0 +1,29 @@
+[package]
+name = "stepmeld-aws"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "stepmeld on AWS: a shared store in S3, secrets from Secrets Manager, containers signed in to ECR, programs run as AWS Batch jobs"
+
+[dependencies]
+stepmeld-core.workspace = true
+stepmeld-config.workspace = true
+stepmeld-local.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.9"
+# The AWS SDK for Rust (Apache-2.0), as veokit used it: TLS on ring,
+# SSO and credential processes resolved by the SDK itself.
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "sso", "rt-tokio", "credentials-process"] }
+aws-credential-types = "1"
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1", default-features = false, features = ["rt-tokio"] }
+aws-sdk-ecr = { version = "1", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http-client = { version = "1", default-features = false, features = ["rustls-ring"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# ECR's authorization token (MIT OR Apache-2.0).
+base64 = "0.22"
