@@ -155,7 +155,8 @@ impl Claim {
 }
 
 /// A Worker's latest word on an order: progress while it runs, the
-/// outcome once it ends (final), and the log so far.
+/// outcome once it ends (final). The log is kept beside the order and
+/// appended as it grows ([`OrderBook::append_log`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub at: String,
@@ -163,17 +164,14 @@ pub struct Report {
     pub progress: Option<Progress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<Outcome>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub log: Option<String>,
 }
 
 impl Report {
-    fn ended(at: &str, outcome: Outcome, log: Option<String>) -> Report {
+    fn ended(at: &str, outcome: Outcome) -> Report {
         Report {
             at: at.into(),
             progress: None,
             outcome: Some(outcome),
-            log,
         }
     }
 }
@@ -256,6 +254,13 @@ pub trait OrderBook: Send + Sync {
     /// Ask for a cancel; the first ask stands, and an ended order is
     /// left as it is.
     fn ask_cancel(&self, id: &str, ask: &CancelAsk) -> Result<(), Error>;
+    /// The log kept so far for an order: empty when none was kept.
+    fn log(&self, id: &str) -> Result<String, Error>;
+    /// Append `text` to an order's log, only for the claiming Worker,
+    /// only while the order has not ended, and only if the log holds
+    /// `at` bytes now: so a chunk is never written twice. Whether it
+    /// was appended.
+    fn append_log(&self, id: &str, worker: &str, at: u64, text: &str) -> Result<bool, Error>;
 }
 
 /// The time, as stepmeld spells it, for the edge pieces that need one.
@@ -381,11 +386,7 @@ impl Performer for OrderPerformer {
         if let Some(claim) = order.claim.as_ref().filter(|c| c.lapsed(&now) && !c.portable) {
             // its Worker stopped renewing, and nobody else can find the
             // work: re-issued, never revived
-            let lost = Report::ended(
-                &now,
-                Outcome::lost(&format!("Worker {} stopped renewing its claim (it held until {})", claim.worker, claim.until)),
-                order.report.as_ref().and_then(|r| r.log.clone()),
-            );
+            let lost = Report::ended(&now, Outcome::lost(&format!("Worker {} stopped renewing its claim (it held until {})", claim.worker, claim.until)));
             return match self.book.end(handle, Some(claim), &lost) {
                 Ok(true) => Observation::Ended { outcome: lost.outcome.unwrap() },
                 Ok(false) => Observation::Running { progress: None, attention: None },
@@ -403,11 +404,11 @@ impl Performer for OrderPerformer {
         let now = (self.clock)();
         let _ = self.book.ask_cancel(handle, &CancelAsk { reason: reason.into(), at: now.clone() });
         // an order nobody took ends here, even with its Worker away
-        let _ = self.book.end(handle, None, &Report::ended(&now, Outcome::canceled(reason), None));
+        let _ = self.book.end(handle, None, &Report::ended(&now, Outcome::canceled(reason)));
     }
 
     fn log(&self, handle: &str) -> Option<String> {
-        self.book.order(handle).ok()??.report?.log
+        self.book.log(handle).ok().filter(|l| !l.is_empty())
     }
 }
 
@@ -449,6 +450,8 @@ pub struct Worker {
     performer: Arc<dyn Performer>,
     /// When it last published, and what it held then.
     published: Mutex<Option<(String, Vec<String>)>>,
+    /// How much of each order's log it knows the store to hold.
+    logged: Mutex<BTreeMap<String, u64>>,
     /// The work it has started, by order: the handle, and whether it is
     /// portable. What leaves the open orders without this Worker ending
     /// it ended elsewhere, and local work is stopped.
@@ -471,6 +474,7 @@ impl Worker {
             performer,
             published: Mutex::new(None),
             carrying: Mutex::new(Default::default()),
+            logged: Mutex::new(Default::default()),
         }
     }
 
@@ -553,7 +557,7 @@ impl Worker {
                 None => {
                     if let Some(c) = &order.cancel {
                         // canceled before it was ever taken: it never starts
-                        let r = Report::ended(now, Outcome::canceled(&c.reason), None);
+                        let r = Report::ended(now, Outcome::canceled(&c.reason));
                         if self.book.end(&order.id, None, &r)? {
                             moved.push(Moved::of(&order.id, &r));
                         }
@@ -586,7 +590,10 @@ impl Worker {
             if let Some(h) = &claim.handle {
                 self.carrying.lock().unwrap().insert(order.id.clone(), (h.clone(), claim.portable));
             }
-            let unchanged = order.report.as_ref().map(|b| (&b.progress, &b.outcome, &b.log)) == Some((&report.progress, &report.outcome, &report.log));
+            if let Some(h) = &claim.handle {
+                self.append_log(&order.id, h)?;
+            }
+            let unchanged = order.report.as_ref().map(|b| (&b.progress, &b.outcome)) == Some((&report.progress, &report.outcome));
             if !unchanged {
                 if let Err(e) = self.book.report(&order.id, &self.name, &report) {
                     // the order ended elsewhere, or another took it over
@@ -598,6 +605,7 @@ impl Worker {
                 holds.push(order.id.clone());
             } else {
                 self.carrying.lock().unwrap().remove(&order.id);
+                self.logged.lock().unwrap().remove(&order.id);
             }
             if taken || report.outcome.is_some() {
                 moved.push(Moved::of(&order.id, &report));
@@ -611,9 +619,32 @@ impl Worker {
         Ok(moved)
     }
 
+    /// Append what the Performer's log has grown by since the store
+    /// last heard. A log that shrank (rotated, say) is left as kept.
+    fn append_log(&self, id: &str, handle: &str) -> Result<(), Error> {
+        let Some(full) = self.performer.log(handle) else { return Ok(()) };
+        let known = self.logged.lock().unwrap().get(id).copied();
+        let at = match known {
+            Some(at) => at,
+            None => self.book.log(id)?.len() as u64,
+        };
+        let Some(more) = full.get(at as usize..).filter(|m| !m.is_empty()) else {
+            self.logged.lock().unwrap().insert(id.into(), at);
+            return Ok(());
+        };
+        let mut logged = self.logged.lock().unwrap();
+        if self.book.append_log(id, &self.name, at, more)? {
+            logged.insert(id.into(), at + more.len() as u64);
+        } else {
+            logged.remove(id); // read again next round
+        }
+        Ok(())
+    }
+
     /// Stop carrying an order this Worker no longer holds: local work
     /// is canceled; portable work goes on under whoever holds it now.
     fn let_go(&self, id: &str, reason: &str) {
+        self.logged.lock().unwrap().remove(id);
         if let Some((handle, portable)) = self.carrying.lock().unwrap().remove(id) {
             if !portable {
                 self.performer.cancel(&handle, reason);
@@ -647,7 +678,7 @@ impl Worker {
             _ => match self.performer.start(&order.request) {
                 Ok(h) => h,
                 Err(words) if words.starts_with("unreachable:") => return Ok(None),
-                Err(words) => return Ok(Some((claim, Report::ended(now, Outcome::failed("refused", &words), None)))),
+                Err(words) => return Ok(Some((claim, Report::ended(now, Outcome::failed("refused", &words))))),
             },
         };
         if claim.handle.as_deref() != Some(handle.as_str()) {
@@ -663,16 +694,10 @@ impl Worker {
         if let Some(c) = &order.cancel {
             self.performer.cancel(&handle, &c.reason);
         }
-        let log = self.performer.log(&handle);
         let report = match self.performer.observe(&handle) {
-            Observation::Running { progress, .. } => Report {
-                at: now.into(),
-                progress,
-                outcome: None,
-                log,
-            },
-            Observation::Ended { outcome } => Report::ended(now, outcome, log),
-            Observation::Absent => Report::ended(now, Outcome::lost("the Worker's Performer does not know this Run"), log),
+            Observation::Running { progress, .. } => Report { at: now.into(), progress, outcome: None },
+            Observation::Ended { outcome } => Report::ended(now, outcome),
+            Observation::Absent => Report::ended(now, Outcome::lost("the Worker's Performer does not know this Run")),
             Observation::Unreachable { .. } => return Ok(None),
         };
         Ok(Some((claim, report)))
@@ -777,7 +802,6 @@ pub mod conformance {
             at: "2026-10-17T00:01:00Z".into(),
             progress: None,
             outcome: None,
-            log: Some("so far".into()),
         };
         assert!(book.report("o-1", "w2", &running).is_err(), "only the claiming Worker reports");
         assert!(book.report("o-2", "w1", &running).is_err(), "nor on an order nobody holds");
@@ -798,7 +822,6 @@ pub mod conformance {
             at: "2026-10-17T00:03:00Z".into(),
             progress: None,
             outcome: Some(Outcome::canceled("asked")),
-            log: None,
         };
         let held = claim("w2", "2026-10-17T00:01:00Z");
         assert!(book.claim("o-3", None, &held).unwrap());
@@ -821,6 +844,21 @@ pub mod conformance {
         assert!(o1.cancel.is_none() && o1.report.unwrap().outcome.unwrap().state == RunState::Succeeded, "an ended order is left as it is");
         assert!(book.report("nope", "w1", &running).is_err(), "a report on no order is refused");
         assert!(!book.claim("nope", None, &first).unwrap(), "nor is a claim made on one");
+
+        // the log grows by appending, only from the claimant, never twice
+        book.place(&order("o-5", "w1")).unwrap();
+        assert_eq!(book.log("o-5").unwrap(), "", "no log kept yet");
+        assert!(!book.append_log("o-5", "w1", 0, "a\n").unwrap(), "nobody holds it");
+        let c5 = claim("w1", "2026-10-17T00:05:00Z");
+        assert!(book.claim("o-5", None, &c5).unwrap());
+        assert!(!book.append_log("o-5", "w2", 0, "a\n").unwrap(), "only the claimant appends");
+        assert!(book.append_log("o-5", "w1", 0, "a\n").unwrap());
+        assert!(!book.append_log("o-5", "w1", 0, "a\n").unwrap(), "a chunk is not written twice");
+        assert!(book.append_log("o-5", "w1", 2, "bé\n").unwrap());
+        assert_eq!(book.log("o-5").unwrap(), "a\nbé\n");
+        book.report("o-5", "w1", &Report::ended("2026-10-17T00:04:00Z", Outcome::succeeded(BTreeMap::new()))).unwrap();
+        assert!(!book.append_log("o-5", "w1", 6, "late\n").unwrap(), "nor after the order ended");
+        assert_eq!(book.log("o-5").unwrap(), "a\nbé\n", "the log stays once it ends");
 
         // an open order is listed for every Worker, which judges it
         let open = Order {

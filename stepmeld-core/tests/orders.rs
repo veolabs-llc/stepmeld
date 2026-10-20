@@ -588,3 +588,31 @@ fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
     o.tick_all(&now(5), &now(9)).unwrap();
     assert_eq!(status(&store, "cloud-1"), StepStatus::Succeeded);
 }
+
+/// A Run's log is kept beside its order and grows by appending, so
+/// any Orchestrator reads it, and a Worker restarted mid-Run carries on
+/// from what the store holds without writing a line twice.
+#[test]
+fn the_log_grows_in_the_store() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = worker(&store, "bench", "h", false);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "h");
+    begin(&o, "log-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(1)).unwrap();
+    let run = latest(&store, "log-1");
+    let handle = mechanism.handle_of(&run.id).unwrap();
+    mechanism.print(&handle, "adding 2 + 3\n");
+    w.tick(&now(2)).unwrap();
+    assert_eq!(store.log(&run.id).unwrap(), "adding 2 + 3\n");
+    drop(w);
+    let again = Worker::new("bench", "h", false, vec!["add-program".into()], store.clone(), mechanism.clone());
+    mechanism.print(&handle, "sum is 5\n");
+    again.tick(&now(3)).unwrap();
+    assert_eq!(store.log(&run.id).unwrap(), "adding 2 + 3\nsum is 5\n", "carried on from what the store holds");
+    let reader = orchestrator(&store, "elsewhere");
+    let p = reader.performers.iter().find(|p| p.describe().name == "bench").unwrap();
+    assert_eq!(p.log(&run.id).as_deref(), Some("adding 2 + 3\nsum is 5\n"), "any Orchestrator reads it");
+}

@@ -194,13 +194,13 @@ Small PRs, upstream first. The v1 contracts change in place, each break
 in `docs/BREAKING.md`.
 
 0. This note; the rule on providers in `CLAUDE.md`.
-1. Orders take over from dispatch: claims and leases *(built
-   2026-10-20, with the heartbeat and lost on a lapsed local claim)*,
-   pinned and open orders *(built: the pool `any`; cloud orders open
-   and taken over)*, `requires` and capabilities, the heartbeat, takeover or
-   lost, logs in the store. A walkthrough variation with two Workers
-   on one machine, standing in for a fleet, and a harness case with
-   two Orchestrators on one store.
+1. *(built 2026-10-20)* Orders take over from dispatch: claims and
+   leases, pinned and open orders (the pool `any`; cloud orders open
+   and taken over), `requires` and capabilities, the heartbeat,
+   takeover or lost, logs in the store, and a harness case with two
+   Orchestrators on one store. The walkthrough variation with two
+   Workers on one machine waits for the machine file (phase 2), which
+   changes how a Worker is set up.
 2. Plugins and configuration: the deployment and machine files, kinds
    registered for stores, Performers, secrets and sign-in; SQLite,
    commands, and environment and file secrets built in.
