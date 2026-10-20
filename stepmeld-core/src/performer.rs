@@ -110,6 +110,13 @@ impl MemoryPerformer {
         }
     }
 
+    /// Add to a Run's log, as a program would print.
+    pub fn print(&self, handle: &str, text: &str) {
+        if let Some(r) = self.inner.lock().unwrap().runs.get_mut(handle) {
+            r.log.push_str(text);
+        }
+    }
+
     /// End a Run.
     pub fn finish(&self, handle: &str, outcome: Outcome) {
         if let Some(r) = self.inner.lock().unwrap().runs.get_mut(handle) {

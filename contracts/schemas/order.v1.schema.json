@@ -102,7 +102,7 @@
         "at"
       ],
       "additionalProperties": false,
-      "description": "The claiming Worker's latest word: progress while it runs, the outcome once it ends (final), the log so far. An order nobody took may be ended canceled, and one whose local claim lapsed ended lost, by an Orchestrator.",
+      "description": "The claiming Worker's latest word: progress while it runs, the outcome once it ends (final). An order nobody took may be ended canceled, and one whose local claim lapsed ended lost, by an Orchestrator. The log is kept beside the order, appended as it grows, and is not part of this document.",
       "properties": {
         "at": {
           "$ref": "#/$defs/time"
@@ -112,9 +112,6 @@
         },
         "outcome": {
           "$ref": "#/$defs/outcome"
-        },
-        "log": {
-          "type": "string"
         }
       }
     }

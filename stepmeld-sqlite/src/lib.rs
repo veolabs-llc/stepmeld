@@ -49,13 +49,18 @@ impl SqliteStore {
              CREATE TABLE IF NOT EXISTS history (workflow TEXT NOT NULL, seq INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (workflow, seq));
              CREATE TABLE IF NOT EXISTS leases (workflow TEXT PRIMARY KEY, holder TEXT NOT NULL, until TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS workers (name TEXT PRIMARY KEY, doc TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS orders (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, worker TEXT NOT NULL, doc TEXT NOT NULL, cancel TEXT, claim TEXT, report TEXT, ended INTEGER NOT NULL DEFAULT 0);",
+             CREATE TABLE IF NOT EXISTS orders (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, worker TEXT NOT NULL, doc TEXT NOT NULL, cancel TEXT, claim TEXT, report TEXT, log TEXT NOT NULL DEFAULT '', ended INTEGER NOT NULL DEFAULT 0);",
         )
         .map_err(db)?;
         // a store made before claims (2026-10-20) gains the column
         let has_claim: bool = conn.prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'claim'").and_then(|mut s| s.exists([])).map_err(db)?;
         if !has_claim {
             conn.execute_batch("ALTER TABLE orders ADD COLUMN claim TEXT;").map_err(db)?;
+        }
+        // and before logs were kept beside the order (the same day)
+        let has_log: bool = conn.prepare("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'log'").and_then(|mut s| s.exists([])).map_err(db)?;
+        if !has_log {
+            conn.execute_batch("ALTER TABLE orders ADD COLUMN log TEXT NOT NULL DEFAULT '';").map_err(db)?;
         }
         Ok(SqliteStore {
             conn: Mutex::new(conn),
@@ -339,6 +344,29 @@ impl OrderBook for SqliteStore {
         tx.commit().map_err(db)
     }
 
+    fn log(&self, id: &str) -> Result<String, Error> {
+        let conn = self.conn.lock().unwrap();
+        let log: Option<String> = conn.query_row("SELECT log FROM orders WHERE id = ?1", params![id], |r| r.get(0)).optional().map_err(db)?;
+        Ok(log.unwrap_or_default())
+    }
+
+    fn append_log(&self, id: &str, worker: &str, at: u64, text: &str) -> Result<bool, Error> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = write(&mut conn)?;
+        let row: Option<(i64, Option<String>, i64)> = tx
+            .query_row("SELECT ended, claim, length(CAST(log AS BLOB)) FROM orders WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()
+            .map_err(db)?;
+        let Some((ended, claim, len)) = row else { return Ok(false) };
+        let holder = claim.map(|c| doc::<Claim>(&c, "an order's claim")).transpose()?.map(|c| c.worker);
+        if ended != 0 || holder.as_deref() != Some(worker) || len as u64 != at {
+            return Ok(false);
+        }
+        tx.execute("UPDATE orders SET log = log || ?2 WHERE id = ?1", params![id, text]).map_err(db)?;
+        tx.commit().map_err(db)?;
+        Ok(true)
+    }
+
     fn ask_cancel(&self, id: &str, ask: &CancelAsk) -> Result<(), Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE orders SET cancel = ?2 WHERE id = ?1 AND cancel IS NULL AND ended = 0", params![id, serde_json::to_string(ask).unwrap()])
@@ -588,5 +616,132 @@ mod tests {
             portable: false,
         };
         assert!(store.claim("o-1", None, &claim).unwrap());
+    }
+
+    /// Two Orchestrators on two connections to one file, ticking the
+    /// same Workflows as fast as they can while a Worker on a third
+    /// runs what they order: every Workflow finishes, and nothing is
+    /// minted, started or ordered twice (docs/PLACEMENT.md §2).
+    #[test]
+    fn two_orchestrators_keep_one_workflow_moving_without_doing_anything_twice() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        use stepmeld_core::definition::*;
+        use stepmeld_core::driver::Driver;
+        use stepmeld_core::engine::Command;
+        use stepmeld_core::orders::{wall_clock, OrderPerformer, Worker};
+        use stepmeld_core::performer::MemoryPerformer;
+        use stepmeld_core::workflow::{Actor, Outcome, PerformerFace, WorkflowStatus};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.sqlite");
+        let setup = SqliteStore::open(&path).unwrap();
+        let mut count = StepDefinition::new("count", 1);
+        count.program = Some("count-program".into());
+        count.inputs.push(InputDefinition {
+            name: "x".into(),
+            tag: "n".into(),
+            required: false,
+            label: None,
+        });
+        count.outputs.push(OutputDefinition {
+            name: "n".into(),
+            tag: "n".into(),
+            options: None,
+            label: None,
+        });
+        setup.put_step(&count).unwrap();
+        let mut two = WorkflowDefinition::new("two", 1);
+        for name in ["first", "second"] {
+            two.steps.push(StepEntry {
+                name: name.into(),
+                step: Ref::new("count", 1),
+                label: None,
+            });
+        }
+        two.bindings.push(Binding {
+            from: PortRef::new("first", "n"),
+            to: PortRef::new("second", "x"),
+            guard: None,
+        });
+        setup.put_workflow_definition(&two).unwrap();
+        fn now() -> String {
+            wall_clock()()
+        }
+        fn until() -> String {
+            stepmeld_core::later(&now(), 60).unwrap()
+        }
+        let ids: Vec<String> = (0..4).map(|i| format!("wf-{i}")).collect();
+        {
+            let d = Driver::new(Arc::new(SqliteStore::open(&path).unwrap()), "setup");
+            for id in &ids {
+                d.create(&Ref::new("two", 1), id, None, &Actor::person("t"), &now()).unwrap();
+                d.command(id, &Command::StartWorkflow, &Actor::person("t"), &now()).unwrap();
+            }
+        }
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = {
+            let (path, stop) = (path.clone(), stop.clone());
+            std::thread::spawn(move || {
+                let store = Arc::new(SqliteStore::open(&path).unwrap());
+                let mechanism = Arc::new(MemoryPerformer::new(PerformerFace {
+                    name: "m".into(),
+                    locality: Locality::ThisMachine,
+                    verbs: vec![Ref::new("count", 1)],
+                    pool: false,
+                }));
+                let w = Worker::new("bench", "h", false, vec!["count-program".into()], store, mechanism.clone()).with_slots(8);
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    w.tick(&now()).unwrap();
+                    for req in mechanism.started() {
+                        let h = mechanism.handle_of(&req.run).unwrap();
+                        if mechanism.run(&h).unwrap().outcome.is_none() {
+                            mechanism.finish(&h, Outcome::succeeded(BTreeMap::from([("n".to_string(), serde_json::json!(1))])));
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            })
+        };
+        let orchestrators: Vec<_> = ["o-1", "o-2"]
+            .into_iter()
+            .map(|holder| {
+                let (path, ids) = (path.clone(), ids.clone());
+                std::thread::spawn(move || {
+                    let store = Arc::new(SqliteStore::open(&path).unwrap());
+                    for _ in 0..3000 {
+                        let mut d = Driver::new(store.clone(), holder);
+                        for p in OrderPerformer::for_workers(store.clone(), &store.library().unwrap(), "h", wall_clock()).unwrap() {
+                            d = d.with_performer(Arc::new(p));
+                        }
+                        let statuses = d.tick_all(&now(), &until()).unwrap();
+                        if ids.iter().all(|id| statuses.get(id) == Some(&WorkflowStatus::Succeeded)) {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    panic!("{holder} gave up before every Workflow finished");
+                })
+            })
+            .collect();
+        for o in orchestrators {
+            o.join().unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        worker.join().unwrap();
+
+        let store = SqliteStore::open(&path).unwrap();
+        for id in &ids {
+            let (wf, _) = store.get(id).unwrap().unwrap();
+            for (name, step) in &wf.steps {
+                assert_eq!(step.runs.len(), 1, "{id}/{name} has one Run");
+                assert!(store.order(&step.runs[0].id).unwrap().unwrap().ended());
+            }
+            let kinds: Vec<String> = store.history(id).unwrap().into_iter().map(|e| e.kind).collect();
+            for kind in ["run-minted", "run-started"] {
+                assert_eq!(kinds.iter().filter(|k| *k == kind).count(), 2, "{id}: {kind} once per Step: {kinds:?}");
+            }
+        }
     }
 }

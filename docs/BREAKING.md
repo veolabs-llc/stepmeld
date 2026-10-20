@@ -9,6 +9,25 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A Run's log is kept beside its order and appended
+
+*Breaking for the library and the contract `stepmeld/order.v1` (its
+report loses `log`).*
+
+**Before:** each report carried the whole log so far, replaced every
+time. **Now:** the log is kept beside the order and grows by
+appending: only the claiming Worker appends, only while the order is
+open, and only at the length the store holds, so no chunk is written
+twice and a Worker restarted mid-Run carries on from what the store
+has.
+
+**Who notices:** `Report` has no `log`; `OrderBook` gains `log` and
+`append_log`. A shared store file from before gains its `log` column
+when opened; logs already inside reports are not carried over.
+
+**What to do:** read a Run's log with `OrderBook::log` (or the
+Orchestrator's `Performer::log`, as `stepmeld log` does).
+
 ## Open orders, the pool `any`, and what a StepDefinition requires
 
 *Breaking for the library; additive for the contracts. Note:

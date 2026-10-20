@@ -67,6 +67,7 @@ struct MemoryInner {
     workers: BTreeMap<String, crate::orders::WorkerFace>,
     /// In the order placed.
     orders: Vec<crate::orders::Order>,
+    order_logs: BTreeMap<String, String>,
 }
 
 impl MemoryStore {
@@ -246,6 +247,21 @@ impl crate::orders::OrderBook for MemoryStore {
             }
             _ => Ok(false),
         }
+    }
+
+    fn log(&self, id: &str) -> Result<String, Error> {
+        Ok(self.inner.lock().unwrap().order_logs.get(id).cloned().unwrap_or_default())
+    }
+
+    fn append_log(&self, id: &str, worker: &str, at: u64, text: &str) -> Result<bool, Error> {
+        let mut inner = self.inner.lock().unwrap();
+        let held = inner.orders.iter().any(|o| o.id == id && !o.ended() && o.claim.as_ref().is_some_and(|c| c.worker == worker));
+        let log = inner.order_logs.entry(id.to_string()).or_default();
+        if !held || log.len() as u64 != at {
+            return Ok(false);
+        }
+        log.push_str(text);
+        Ok(true)
     }
 
     fn ask_cancel(&self, id: &str, ask: &crate::orders::CancelAsk) -> Result<(), Error> {

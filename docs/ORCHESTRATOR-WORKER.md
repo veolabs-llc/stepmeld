@@ -103,8 +103,8 @@ My choices in the first form, each open to change:
 - The private store's default file is `stepmeld-worker.sqlite` in the
   current folder, beside the shared store's `stepmeld.sqlite`, so the
   walkthrough needs no flags. A Worker's name defaults to the host name.
-- A report carries the whole log so far, replaced on each report. Fine
-  for small logs; a long one wants appending.
+- A report carried the whole log so far, replaced on each report.
+  Since 2026-10-20 the log is kept beside the order and appended.
 - A cancel asked before the Worker took the order ends it as canceled
   without starting it (since 2026-10-20 the Orchestrator ends it, so a
   Worker that is away does not hold it up).
