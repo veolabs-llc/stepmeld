@@ -14,6 +14,7 @@ pub mod driver;
 pub mod engine;
 pub mod history;
 pub mod library;
+pub mod objects;
 pub mod orders;
 pub mod performer;
 pub mod store;
