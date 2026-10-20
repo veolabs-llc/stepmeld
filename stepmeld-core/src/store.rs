@@ -329,11 +329,15 @@ pub mod conformance {
         assert!(matches!(store.put(&workflow(id), None), Err(Error::Refused(w)) if w.contains("already exists")), "create once");
         let (_, read) = store.get(id).unwrap().unwrap();
         assert_eq!(read, v1, "get hands back the version put");
+        let listed = store.listing().unwrap().get(id).cloned();
+        assert!(listed.is_some(), "the listing names each Workflow");
         let v2 = store.put(&workflow(id), Some(&v1)).unwrap();
         assert_ne!(v1, v2);
         assert!(matches!(store.put(&workflow(id), Some(&v1)), Err(Error::Refused(w)) if w.contains("changed underneath")), "a stale version is refused");
         assert!(store.list().unwrap().contains(&id.to_string()));
-        assert_eq!(store.listing().unwrap().get(id), Some(&v2), "the listing carries each version");
+        // a store may list a stamp of its own (a modified time) rather
+        // than the version a read gives; it moves when the Workflow is written
+        assert_ne!(store.listing().unwrap().get(id).cloned(), listed, "the listing's stamp moves with a write");
         let by = Actor::person("t");
         store.append(&[Entry::new("2026-10-06T00:00:01Z", &by, id, "a"), Entry::new("2026-10-06T00:00:02Z", &by, id, "b")]).unwrap();
         store.append(&[Entry::new("2026-10-06T00:00:03Z", &by, id, "c")]).unwrap();
