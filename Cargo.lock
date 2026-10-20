@@ -172,6 +172,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-batch"
+version = "1.133.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa6e827a8bc2f7531240d23273927a515adf34f95a7c6f8517bbeeecb66a4b94"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema 0.2.1",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-ecr"
 version = "1.132.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2105,6 +2130,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
+ "aws-sdk-batch",
  "aws-sdk-ecr",
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
@@ -2115,6 +2141,7 @@ dependencies = [
  "stepmeld-config",
  "stepmeld-core",
  "stepmeld-local",
+ "tempfile",
  "tokio",
  "toml",
 ]

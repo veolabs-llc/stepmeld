@@ -1,0 +1,13 @@
+# hello-program for AWS Batch (README.md, "In the cloud"): the program
+# under stepmeld-run, which keeps the Run's folder in S3 in step with a
+# local copy. Built from the top of the repository:
+#   docker build -f examples/hello/Dockerfile.batch -t <registry>/stepmeld-hello-batch:1 .
+FROM rust:1.97.1-slim AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p stepmeld-example-hello -p stepmeld-aws
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/hello-program /src/target/release/stepmeld-run /usr/local/bin/
+ENTRYPOINT ["stepmeld-run", "hello-program"]

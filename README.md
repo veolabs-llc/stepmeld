@@ -324,6 +324,80 @@ mounts only the folders it shares, usually the user's own; the
 walkthrough lives in the repository, so it is shared. On Linux the
 container writes the Run's files as root.
 
+### In the cloud: AWS Batch, by hand
+
+The same Workflow with the work done as AWS Batch jobs, the shared store
+in S3, and a cloud Worker launching and watching the jobs
+(`docs/PLACEMENT.md`; `stepmeld-aws`). It needs an AWS account, so it is
+run by hand: nothing here runs it nightly. You need, in one region:
+
+- an S3 bucket (`my-bucket` below) for the shared store and the Runs'
+  folders;
+- an ECR repository for the image;
+- a Batch compute environment and job queue (`my-queue`);
+- a job definition (`stepmeld-hello`) for the image, whose job role may
+  read and write `s3://my-bucket/stepmeld/`;
+- an AWS profile (`my-profile`) that may use all of these.
+
+Build the image, `hello-program` under `stepmeld-run` (which keeps the
+Run's folder in S3 in step with a copy the program works on), and push
+it:
+
+```bash
+docker build -f examples/hello/Dockerfile.batch -t <account>.dkr.ecr.<region>.amazonaws.com/stepmeld-hello:1 .
+```
+```bash
+aws ecr get-login-password --profile my-profile | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+```
+```bash
+docker push <account>.dkr.ecr.<region>.amazonaws.com/stepmeld-hello:1
+```
+
+In a folder of its own (`walkthrough/cloud/`), the deployment file:
+
+```toml
+store = "shared"
+
+[providers.aws]
+region = "<region>"
+profile = "my-profile"
+runs = "s3://my-bucket/stepmeld/runs/"
+
+[stores.shared]
+kind = "s3"
+bucket = "my-bucket"
+
+[programs.hello-program.batch]
+definition = "stepmeld-hello"
+queues = { on-demand = "my-queue" }
+```
+
+Then the cloud Worker, in a terminal of its own, and the Workflow, from
+`walkthrough/cloud/`:
+
+```bash
+stepmeld worker set --name queue --cloud true
+stepmeld work --watch
+```
+```bash
+stepmeld library add ../../examples/hello/stepdef_add.json ../../examples/hello/stepdef_multiply.json ../../examples/hello/workflowdef_hello.json
+stepmeld create workflowdef_hello --id hello-cloud
+stepmeld set hello-cloud --step step_add --input a --value 2
+stepmeld set hello-cloud --step step_add --input b --value 3
+stepmeld set hello-cloud --step step_multiply --input factor --value 4
+stepmeld start hello-cloud
+stepmeld tick --watch
+```
+
+Each Step's order is open to any cloud Worker; `queue` claims it,
+submits a job with `STEPMELD_RUN` naming the Run's folder in S3, and
+watches it. A second cloud Worker on another machine (`--name
+queue-2`) would take over a job whose launcher went away, and go on
+watching the same job. A Step's `needs` (`memory_gib`, `vcpus`,
+`capacity`) pick the queue and the size, from `ladder` when the program
+gives one; a Policy with `confirm = ["cloud"]` holds each Step for a
+person before it is launched.
+
 
 ## Licence
 

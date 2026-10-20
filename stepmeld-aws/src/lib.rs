@@ -6,6 +6,7 @@
 //! | `s3` | store | `bucket`, `prefix` (default `stepmeld/`) |
 //! | `aws-secretsmanager` | secret | `id`, `key` (one field of a JSON secret) |
 //! | `aws` | sign-in | none: a registry login for an ECR image, and credentials for the container |
+//! | `batch` | Performer (cloud) | `[programs.<name>.batch]`: see [`batch`]; the Runs' folders at `[providers.aws] runs` |
 //!
 //! Every kind also reads `[providers.aws]`: `region`, `profile`, and
 //! `endpoint` (an S3-compatible endpoint, or a stand-in for tests); a
@@ -27,12 +28,14 @@
 //! id = "example/font-token"
 //! ```
 
+pub mod batch;
 pub mod s3;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
-use stepmeld_config::{Deployment, Kinds};
+use stepmeld_config::{Deployment, Kinds, PerformerKind, ProgramPlan, WorkerPlan};
 use stepmeld_core::objects::ObjectStore;
+use stepmeld_core::performer::Performer;
 use stepmeld_core::store::SharedStore;
 use stepmeld_core::Error;
 use stepmeld_local::{Image, SignedIn};
@@ -40,7 +43,38 @@ use toml::{Table, Value};
 
 /// stepmeld's kinds, and AWS's.
 pub fn kinds(k: Kinds) -> Kinds {
-    k.with_store("s3", s3_store).with_secret("aws-secretsmanager", secretsmanager_secret).with_sign_in("aws", sign_in)
+    k.with_store("s3", s3_store)
+        .with_secret("aws-secretsmanager", secretsmanager_secret)
+        .with_sign_in("aws", sign_in)
+        .with_performer("batch", PerformerKind { cloud: true, make: batch_performer })
+}
+
+/// An `s3://bucket/prefix/` URL's bucket and key prefix.
+pub fn s3_url(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("s3://")?;
+    let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+    (!bucket.is_empty()).then(|| (bucket.to_string(), prefix.to_string()))
+}
+
+fn batch_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn Performer>, Error> {
+    let d = w.deployment;
+    let url = d
+        .provider("aws")
+        .and_then(|p| p.get("runs"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Invalid("Batch keeps each Run's folder in S3: say where with [providers.aws] runs = \"s3://bucket/prefix/\"".into()))?;
+    let (bucket, prefix) = s3_url(url).ok_or_else(|| Error::Invalid(format!("[providers.aws] runs is an s3:// URL, not {url:?}")))?;
+    let mut parsed = BTreeMap::new();
+    for p in programs {
+        let program: batch::BatchProgram = Value::Table(p.settings.clone())
+            .try_into()
+            .map_err(|e: toml::de::Error| Error::Invalid(format!("[programs.{}.batch]: {}", p.name, e.message())))?;
+        parsed.insert(p.name.clone(), program);
+    }
+    let settings = Settings::of(d, &Table::new());
+    let jobs = Arc::new(batch::BatchJobs::new(aws_sdk_batch::Client::new(&settings.sdk())));
+    let folders = Arc::new(s3::S3Objects::new(settings.s3(), &bucket));
+    Ok(Arc::new(batch::BatchPerformer::new(&w.name, jobs, folders, url, &prefix, parsed)))
 }
 
 fn runtime() -> &'static tokio::runtime::Runtime {
