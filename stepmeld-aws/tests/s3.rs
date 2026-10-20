@@ -43,3 +43,39 @@ fn the_s3_store_conforms() {
     stepmeld_core::store::conformance::run(&store);
     stepmeld_core::orders::conformance::run(&store);
 }
+
+/// `stepmeld-run` as a Batch job runs it: told its folder by
+/// `STEPMELD_RUN`, it brings the request down, runs the program, and
+/// puts the log and the outcome up, all through the SDK.
+#[test]
+fn stepmeld_run_keeps_the_folder_in_s3_in_step() {
+    let fake = fake_s3::FakeS3::start();
+    let o = S3Objects::new(client(&fake.endpoint), "runs-bucket");
+    o.put(
+        "stepmeld/runs/r1/request.json",
+        br#"{"workflow":"wf","step":"s","run":"wf/s/1","definition":{"name":"d","version":1},"inputs":{"a":2},"parameters":{},"outputs":[]}"#,
+        Cond::None,
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("verb.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ngrep -q '\"a\":2' \"$1/request.json\" && echo 'got a = 2'\necho '{\"state\":\"succeeded\",\"outputs\":{}}' > \"$1/outcome.json\"\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_stepmeld-run"))
+        .args(["sh", &script.display().to_string()])
+        .env("STEPMELD_RUN", "s3://runs-bucket/stepmeld/runs/r1/")
+        .env("STEPMELD_S3_ENDPOINT", &fake.endpoint)
+        .env("STEPMELD_RUN_DIR", dir.path().join("local"))
+        .env("AWS_REGION", "us-east-2")
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let log = String::from_utf8(o.get("stepmeld/runs/r1/log.txt").unwrap().unwrap().0).unwrap();
+    assert!(log.contains("got a = 2"), "{log}");
+    assert!(o.get("stepmeld/runs/r1/outcome.json").unwrap().is_some());
+}

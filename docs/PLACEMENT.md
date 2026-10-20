@@ -206,9 +206,22 @@ in `docs/BREAKING.md`.
    walkthrough variation with two Workers on one machine.
 3. *(built 2026-10-20)* The Docker Performer and GPU probing; the
    walkthrough's program as an image on the stand-in fleet.
-4. `stepmeld-aws`: the S3 store, the Batch Performer, Secrets Manager,
-   container sign-in; a walkthrough variation in the cloud, run by
-   hand.
+4. *(built 2026-10-20)* `stepmeld-aws`: the S3 store, the Batch
+   Performer, Secrets Manager, container sign-in; a walkthrough
+   variation in the cloud, run by hand.
+
+   *My choices in building it, each open to change:* a Batch job's Run
+   folder is kept in S3 (`[providers.aws] runs`) and the job is told
+   where with `STEPMELD_RUN`; its image runs the program under
+   `stepmeld-run`, which keeps a local copy for the program and the S3
+   folder in step. (Before, the launcher program on a machine watched
+   the job and wrote the outcome, and the job never saw a run folder.)
+   Resuming is the job definition's retry strategy, the wrapper bringing
+   `state.json` back down. Secrets reach a Batch job through its job
+   definition, never through a submit. The provider-neutral part of the
+   store, `objects::ObjectStore`, is in the core. The four-hour floor on
+   a container's credentials, which the users' script kept, is not
+   carried over.
 5. The Orchestrator ticks only what moved.
 6. Downstream, after phase 4: the users bump, configure stepmeld, and
    delete what moved. Orders already running under the old dispatch

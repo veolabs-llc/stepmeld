@@ -9,6 +9,13 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## Programs may run as AWS Batch jobs
+
+*Additive.* `stepmeld-aws` adds the cloud Performer kind `batch`
+(`[programs.<name>.batch]`: `definition`, `queues`, `capacity`,
+`ladder`; the Runs' folders at `[providers.aws] runs`) and the
+`stepmeld-run` wrapper a Batch image runs its program under.
+
 ## The shared store may be any object store; S3 comes with the command
 
 *Additive.* `stepmeld_core::objects` keeps a whole shared store in an
