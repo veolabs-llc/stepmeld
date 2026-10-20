@@ -9,6 +9,36 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A deployment file and a machine file; the Worker store retires
+
+*Breaking for the command and the library. Note: `docs/PLACEMENT.md`
+§8.*
+
+**Before:** the shared store was `--store` (default `stepmeld.sqlite`)
+and a Worker kept its name and programs in a SQLite file of its own,
+`--worker-store` (default `stepmeld-worker.sqlite`). **Now:** a
+deployment file (`--deployment`, `STEPMELD_CONFIG`, `stepmeld.toml`
+here, or in the user's configuration folder) says which store is
+shared, each program's settings and its secrets; without one the store
+is `stepmeld.sqlite` here, as before, and `--store` still names a
+SQLite file outright. A machine file (`--machine`, `STEPMELD_MACHINE`,
+`stepmeld-machine.toml` here, or `machine.toml` in the configuration
+folder) holds the Worker's name, Runs folder, cloud flag, slots,
+capabilities and program commands. `stepmeld worker set` gains
+`--runs` (was `--root`), `--slots` and `--capability`.
+
+**Who notices:** `--worker-store` is gone; a Worker's settings in an
+old `stepmeld-worker.sqlite` are not read (set them again with
+`stepmeld worker set` and `worker program set`). In the library,
+`stepmeld_sqlite::WorkerStore` is gone; `SqliteStore::definitions` is
+now `StateStore::definitions` (a default, from the Library);
+`stepmeld_local::Program` gains `env` (build it with `Program::new`).
+New: `stepmeld-config` (`Deployment`, `Machine`, `Kinds`),
+`store::SharedStore`, `performer::Router`.
+
+**What to do:** register programs again on each Worker; pass
+`--machine` where `--worker-store` was.
+
 ## A Run's log is kept beside its order and appended
 
 *Breaking for the library and the contract `stepmeld/order.v1` (its

@@ -1,33 +1,41 @@
-//! `stepmeld`: the engine from a shell (docs/ORCHESTRATOR-WORKER.md).
-//! The shared store (definitions, Workflows, orders, published Workers)
-//! is one SQLite file; this machine's Worker keeps its programs in
-//! another. `tick` orchestrates, `work` runs this machine's Worker.
+//! `stepmeld`: the engine from a shell (docs/ORCHESTRATOR-WORKER.md,
+//! docs/PLACEMENT.md). The deployment file says which store is shared
+//! (definitions, Workflows, orders, published Workers; a SQLite file in
+//! the current folder without one); the machine file holds this
+//! machine's Worker. `tick` orchestrates, `work` runs the Worker.
 //! Refusals are one line and exit 1; nothing here is a UI.
 
 use clap::{Parser, Subcommand};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use stepmeld_config::{Deployment, Kinds, Machine};
 use stepmeld_core::definition::{Locality, Ref, StepDefinition, WorkflowDefinition};
 use stepmeld_core::driver::Driver;
 use stepmeld_core::engine::Command;
 use stepmeld_core::library::Library;
-use stepmeld_core::orders::{wall_clock, OrderBook, OrderPerformer, Worker};
-use stepmeld_core::store::StateStore;
+use stepmeld_core::orders::{wall_clock, OrderPerformer};
+use stepmeld_core::store::SharedStore;
 use stepmeld_core::workflow::{Actor, Gate, StepStatus, Waiting, Workflow, WorkflowStatus};
 use stepmeld_core::{iso, Error, Value};
-use stepmeld_local::{LocalPerformer, Program};
-use stepmeld_sqlite::{SqliteStore, WorkerStore};
+use stepmeld_sqlite::SqliteStore;
 
 #[derive(Parser)]
 #[command(name = "stepmeld", version, about = "A generic workflow engine: StepDefinitions, WorkflowDefinitions, Workflows, Orchestrators and Workers")]
 struct Cli {
-    /// The shared store: definitions, Workflows, orders, published Workers.
-    #[arg(long, default_value = "stepmeld.sqlite", global = true)]
-    store: PathBuf,
-    /// This machine's Worker's own store: its name and its programs.
-    #[arg(long, default_value = "stepmeld-worker.sqlite", global = true)]
-    worker_store: PathBuf,
+    /// The deployment file (else `STEPMELD_CONFIG`, else `stepmeld.toml`
+    /// here, else in the user's configuration folder; without one, the
+    /// shared store is `stepmeld.sqlite` here).
+    #[arg(long, global = true)]
+    deployment: Option<PathBuf>,
+    /// A SQLite file to use as the shared store, whatever the deployment says.
+    #[arg(long, global = true)]
+    store: Option<PathBuf>,
+    /// This machine's file (else `STEPMELD_MACHINE`, else
+    /// `stepmeld-machine.toml` here, else `machine.toml` in the user's
+    /// configuration folder; made here when first written).
+    #[arg(long, global = true)]
+    machine: Option<PathBuf>,
     /// Who is acting: `person:<id>` or `agent:<id>`.
     #[arg(long = "as", global = true)]
     actor: Option<String>,
@@ -177,12 +185,18 @@ enum WorkerCmd {
         /// Its name in the shared store (default: this machine's host name).
         #[arg(long)]
         name: Option<String>,
-        /// Where its Runs keep their files (default: `runs`).
+        /// Where its Runs keep their files, beside the machine file (default: `runs`).
         #[arg(long)]
-        root: Option<String>,
-        /// Whether its work happens in the cloud.
+        runs: Option<String>,
+        /// Whether it launches its work in the cloud.
         #[arg(long)]
         cloud: Option<bool>,
+        /// How many orders it runs at once (default 1; no limit for a cloud Worker).
+        #[arg(long)]
+        slots: Option<u32>,
+        /// A word it offers to what StepDefinitions require; repeat for several. Replaces the list.
+        #[arg(long = "capability")]
+        capabilities: Option<Vec<String>>,
     },
     /// This Worker's programs: the command that runs each, by the name StepDefinitions use.
     Program {
@@ -267,8 +281,8 @@ fn host() -> String {
 
 /// The Orchestrator: a driver over the shared store with one Performer
 /// per published Worker, and WorkflowDefinitions nested.
-fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
-    let store = Arc::new(shared_store(cli)?);
+fn driver(cli: &Cli) -> Result<(Arc<dyn SharedStore>, Driver), Error> {
+    let store = shared_store(cli)?;
     let mut driver = Driver::new(store.clone(), &format!("stepmeld@{}:{}", host(), std::process::id())).with_nesting();
     let lib = store.library()?;
     for p in OrderPerformer::for_workers(store.clone(), &lib, &host(), wall_clock())? {
@@ -277,59 +291,100 @@ fn driver(cli: &Cli) -> Result<(Arc<SqliteStore>, Driver), Error> {
     Ok((store, driver))
 }
 
+/// What this build can name in a deployment file.
+fn kinds() -> Kinds {
+    Kinds::builtin()
+}
+
+fn deployment(cli: &Cli) -> Result<Deployment, Error> {
+    Deployment::find(cli.deployment.as_deref())
+}
+
 /// The shared store, said aloud when this command made it: a command run
 /// from the wrong folder starts an empty store there, which is easy to
 /// miss otherwise.
-fn shared_store(cli: &Cli) -> Result<SqliteStore, Error> {
-    let new = !cli.store.exists();
-    let store = SqliteStore::open(&cli.store)?;
-    if new {
-        announce("the shared store", &cli.store);
+fn shared_store(cli: &Cli) -> Result<Arc<dyn SharedStore>, Error> {
+    if let Some(path) = &cli.store {
+        let new = !path.exists();
+        let store = SqliteStore::open(path)?;
+        if new {
+            announce("the shared store", path);
+        }
+        return Ok(Arc::new(store));
+    }
+    let d = deployment(cli)?;
+    let settings = d.store()?;
+    let made = (settings["kind"].as_str() == Some("sqlite"))
+        .then(|| d.resolve(settings.get("path").and_then(|p| p.as_str()).unwrap_or("stepmeld.sqlite")))
+        .filter(|p| !p.exists());
+    let store = kinds().open_store(&d)?;
+    if let Some(path) = made {
+        announce("the shared store", &path);
     }
     Ok(store)
 }
 
-/// One line on standard error: a new store file, and where it is.
+/// One line on standard error: a new file, and where it is.
 fn announce(what: &str, path: &Path) {
     let full = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     eprintln!("(made {what}: {})", full.display());
 }
 
-fn worker_store(cli: &Cli) -> Result<WorkerStore, Error> {
-    let new = !cli.worker_store.exists();
-    let ws = WorkerStore::open(&cli.worker_store, &host())?;
-    if new {
-        announce("this machine's Worker store", &cli.worker_store);
+fn machine(cli: &Cli) -> Result<Machine, Error> {
+    Machine::find(cli.machine.as_deref())
+}
+
+/// Write the machine file, saying so when this made it.
+fn save(m: &mut Machine) -> Result<(), Error> {
+    if m.save()? {
+        announce("this machine's file", &m.path);
     }
-    Ok(ws)
+    Ok(())
 }
 
-/// The StepDefinitions in the Library that name one of `programs`.
-fn offered(store: &SqliteStore, programs: &[String]) -> Result<Vec<String>, Error> {
-    Ok(store.library()?.steps().filter(|s| s.program.as_ref().is_some_and(|p| programs.contains(p))).map(|s| s.reference().to_string()).collect())
-}
-
-fn show_worker(cli: &Cli, store: &SqliteStore, ws: &WorkerStore) -> Result<(), Error> {
-    let s = ws.settings()?;
-    println!("worker   {}  (on {}; its store {})", s.name, host(), cli.worker_store.display());
-    println!("runs in  {}", s.root);
-    println!("cloud    {}", if s.cloud { "yes" } else { "no" });
-    let programs = ws.programs()?;
-    if programs.is_empty() {
+fn show_worker(cli: &Cli, store: &dyn SharedStore, m: &Machine) -> Result<(), Error> {
+    let w = &m.file.worker;
+    println!("worker   {}  (on {}; {}{})", m.name(&host()), host(), m.path.display(), if m.exists { "" } else { ", not written yet" });
+    println!("runs in  {}", m.runs().display());
+    println!("cloud    {}", if w.cloud { "yes" } else { "no" });
+    println!("slots    {}", if m.slots() == u32::MAX { "no limit".to_string() } else { m.slots().to_string() });
+    if !w.capabilities.is_empty() {
+        println!("has      {}  (capabilities)", w.capabilities.join(", "));
+    }
+    let routes = kinds().routes(&deployment(cli)?, m)?;
+    if routes.is_empty() {
         println!("programs none yet: `stepmeld worker program set <program> -- <command...>`");
     }
-    for (name, command) in &programs {
-        println!("program  {:<20} {}", name, command.join(" "));
+    for (kind, programs) in &routes {
+        for p in programs {
+            let how = match p.settings.get("command").and_then(|c| c.as_array()) {
+                Some(c) => c.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" "),
+                None => format!("({kind})"),
+            };
+            println!("program  {:<20} {how}", p.name);
+        }
     }
-    let names: Vec<String> = programs.into_iter().map(|(n, _)| n).collect();
-    let offers = offered(store, &names)?;
+    let programs: Vec<String> = routes.values().flatten().map(|p| p.name.clone()).collect();
+    let face = stepmeld_core::orders::WorkerFace {
+        contract: stepmeld_core::orders::WORKER.into(),
+        name: m.name(&host()),
+        host: host(),
+        cloud: w.cloud,
+        programs,
+        capabilities: w.capabilities.clone(),
+        slots: m.slots(),
+        holds: Vec::new(),
+        beat_s: stepmeld_core::orders::BEAT_S,
+        seen: String::new(),
+    };
+    let offers: Vec<String> = store.library()?.steps().filter(|s| face.offers(s)).map(|s| s.reference().to_string()).collect();
     println!("offers   {}", if offers.is_empty() { "nothing in the Library yet".into() } else { offers.join(", ") });
     Ok(())
 }
 
 fn run(cli: Cli) -> Result<(), Error> {
     if let Cmd::Library { what } = &cli.command {
-        return library(&cli, &shared_store(&cli)?, what);
+        return library(&cli, shared_store(&cli)?.as_ref(), what);
     }
     let (store, driver) = driver(&cli)?;
     let by = actor(&cli)?;
@@ -337,49 +392,52 @@ fn run(cli: Cli) -> Result<(), Error> {
     let until = || iso(now_secs() + 60);
     match &cli.command {
         // handled above, before the Library is checked; here for completeness
-        Cmd::Library { what } => library(&cli, &store, what)?,
+        Cmd::Library { what } => library(&cli, store.as_ref(), what)?,
         Cmd::Worker { what } => {
-            let ws = worker_store(&cli)?;
+            let mut m = machine(&cli)?;
             match what {
-                None | Some(WorkerCmd::Show) => show_worker(&cli, &store, &ws)?,
-                Some(WorkerCmd::Set { name, root, cloud }) => {
+                None | Some(WorkerCmd::Show) => show_worker(&cli, store.as_ref(), &m)?,
+                Some(WorkerCmd::Set { name, runs, cloud, slots, capabilities }) => {
+                    let w = &mut m.file.worker;
                     if let Some(n) = name {
                         if n == stepmeld_core::orders::ANY {
                             return Err(Error::Refused(format!("{n:?} names the pool of every Worker; choose another name")));
                         }
-                        ws.set_name(n)?;
+                        w.name = Some(n.clone());
                     }
-                    if let Some(r) = root {
-                        ws.set_root(r)?;
+                    if let Some(r) = runs {
+                        w.runs = Some(r.clone());
                     }
                     if let Some(c) = cloud {
-                        ws.set_cloud(*c)?;
+                        w.cloud = *c;
                     }
-                    show_worker(&cli, &store, &ws)?;
+                    if let Some(n) = slots {
+                        w.slots = Some(*n);
+                    }
+                    if let Some(c) = capabilities {
+                        w.capabilities = c.clone();
+                    }
+                    save(&mut m)?;
+                    show_worker(&cli, store.as_ref(), &m)?;
                 }
                 Some(WorkerCmd::Program { what: ProgramCmd::Set { program, command } }) => {
-                    ws.set_program(program, command)?;
+                    m.file.programs.insert(program.clone(), command.clone());
+                    save(&mut m)?;
                     println!("program {program}: {}", command.join(" "));
                 }
                 Some(WorkerCmd::Program { what: ProgramCmd::Remove { program } }) => {
-                    if !ws.remove_program(program)? {
+                    if m.file.programs.remove(program).is_none() {
                         return Err(Error::Refused(format!("this Worker has no program {program:?}")));
                     }
+                    save(&mut m)?;
                     println!("forgot program {program}");
                 }
             }
         }
         Cmd::Work { watch, every } => {
-            let ws = worker_store(&cli)?;
-            let settings = ws.settings()?;
-            let programs: Vec<Program> = ws.programs()?.into_iter().map(|(name, command)| Program { name, command }).collect();
-            if programs.is_empty() {
-                return Err(Error::Refused("this Worker has no programs yet: `stepmeld worker program set <program> -- <command...>`".into()));
-            }
-            let names: Vec<String> = programs.iter().map(|p| p.name.clone()).collect();
-            let mechanism = Arc::new(LocalPerformer::new(&settings.name, Path::new(&settings.root), programs));
-            let worker = Worker::new(&settings.name, &host(), settings.cloud, names.clone(), store.clone(), mechanism);
-            println!("worker {} on {}, with programs {}", settings.name, host(), names.join(", "));
+            let m = machine(&cli)?;
+            let worker = kinds().worker(&deployment(&cli)?, &m, store.clone(), &host())?;
+            println!("worker {} on {}, with programs {}", worker.name, host(), worker.programs.join(", "));
             loop {
                 for m in worker.tick(&iso(now_secs()))? {
                     println!("{}", format!("{:<32} {:<10} {}", m.order, m.word, m.detail).trim_end());
@@ -409,7 +467,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                 println!("{}", serde_json::to_string_pretty(&wf).unwrap());
             } else {
                 let faces: Vec<_> = driver.performers.iter().map(|p| p.describe()).collect();
-                show(&store, &wf, &faces)?;
+                show(store.as_ref(), &wf, &faces)?;
             }
         }
         Cmd::Set { workflow, step, input, parameter, value: v } => {
@@ -498,7 +556,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             let mut said: BTreeMap<(String, String), String> = BTreeMap::new();
             let lib = store.library()?;
             for id in store.list()? {
-                if let Some(now) = snapshot(&store, &lib, &faces(&driver), &id)? {
+                if let Some(now) = snapshot(store.as_ref(), &lib, &faces(&driver), &id)? {
                     if matches!(now.0.as_str(), "succeeded" | "failed" | "canceled") {
                         said.insert((id.clone(), String::new()), now.0.clone());
                         for (step, line) in now.1 {
@@ -516,7 +574,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                 let lib = store.library()?;
                 let mut busy = false;
                 for id in statuses.keys() {
-                    let Some((word, steps)) = snapshot(&store, &lib, &faces(&driver), id)? else { continue };
+                    let Some((word, steps)) = snapshot(store.as_ref(), &lib, &faces(&driver), id)? else { continue };
                     for (step, line) in steps {
                         if said.get(&(id.clone(), step.clone())) != Some(&line) {
                             println!("{id:<16} {step:<16} {line}");
@@ -586,7 +644,7 @@ fn who(a: &Actor) -> String {
     }
 }
 
-fn show(store: &SqliteStore, wf: &Workflow, faces: &[stepmeld_core::workflow::PerformerFace]) -> Result<(), Error> {
+fn show(store: &dyn SharedStore, wf: &Workflow, faces: &[stepmeld_core::workflow::PerformerFace]) -> Result<(), Error> {
     let lib = store.library()?;
     let def = lib.workflow(&wf.definition).ok_or_else(|| Error::Refused(format!("{} is not in the library", wf.definition)))?;
     println!("{}  ({}, {})", wf.id, wf.definition, format!("{:?}", wf.status(def)).to_lowercase());
@@ -661,7 +719,7 @@ fn reason(wf: &Workflow, name: &str, status: &StepStatus) -> String {
 /// The Library's commands. They read the definitions without checking
 /// them, so a store holding one that breaks a newer rule can still be
 /// shown and cleaned.
-fn library(cli: &Cli, store: &SqliteStore, what: &Option<LibraryCmd>) -> Result<(), Error> {
+fn library(cli: &Cli, store: &dyn SharedStore, what: &Option<LibraryCmd>) -> Result<(), Error> {
     match what {
         None | Some(LibraryCmd::Show) => {
             let (steps, workflows) = store.definitions()?;
@@ -794,15 +852,17 @@ fn ask(question: &str) -> bool {
     std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-/// Why a Run on a Worker shows no progress, when the order says: not
-/// yet taken, or its Worker is away.
-fn untaken(store: &SqliteStore, run: &str, worker: &str) -> String {
-    let Ok(Some(order)) = store.order(run) else { return String::new() };
-    let away = store.workers().ok().and_then(|ws| ws.into_iter().find(|w| w.name == worker)).is_some_and(|w| w.away(&iso(now_secs())));
+/// Where a Run with no progress is, as its order says: on the Worker
+/// that took it (an open order's too), not yet taken, or on a Worker
+/// that is away.
+fn where_it_runs(store: &dyn SharedStore, run: &str, placed: &str) -> String {
+    let Ok(Some(order)) = store.order(run) else { return format!("on {placed}") };
+    let who = order.claim.as_ref().map_or(placed, |c| c.worker.as_str());
+    let away = store.workers().ok().and_then(|ws| ws.into_iter().find(|w| w.name == who)).is_some_and(|w| w.away(&iso(now_secs())));
     match (&order.claim, away) {
-        (_, true) => " (away)".into(),
-        (None, false) => ", not yet taken".into(),
-        (Some(_), false) => String::new(),
+        (_, true) => format!("on {who} (away)"),
+        (None, false) => format!("on {who}, not yet taken"),
+        (Some(_), false) => format!("on {who}"),
     }
 }
 
@@ -813,7 +873,7 @@ type Snapshot = (String, Vec<(String, String)>);
 /// against the Workers that exist: the Workflow's status, then each
 /// Step in its WorkflowDefinition's order as "status  detail" (what it
 /// waits for, how far it is, its headline, why it failed).
-fn snapshot(store: &SqliteStore, lib: &Library, faces: &[stepmeld_core::workflow::PerformerFace], id: &str) -> Result<Option<Snapshot>, Error> {
+fn snapshot(store: &dyn SharedStore, lib: &Library, faces: &[stepmeld_core::workflow::PerformerFace], id: &str) -> Result<Option<Snapshot>, Error> {
     let Some((wf, _)) = store.get(id)? else { return Ok(None) };
     let Some(def) = lib.workflow(&wf.definition) else { return Ok(None) };
     let status = wf.status(def);
@@ -834,7 +894,7 @@ fn snapshot(store: &SqliteStore, lib: &Library, faces: &[stepmeld_core::workflow
             StepStatus::Running => {
                 let progress = reason(&wf, name, &st);
                 if progress.is_empty() {
-                    step.latest().map(|r| format!("on {}{}", r.performer, untaken(store, &r.id, &r.performer))).unwrap_or_default()
+                    step.latest().map(|r| where_it_runs(store, &r.id, &r.performer)).unwrap_or_default()
                 } else {
                     progress
                 }

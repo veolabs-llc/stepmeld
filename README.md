@@ -23,8 +23,10 @@ do the work; a UI reads documents and never gets called.
   and their conformance suites, the Driver, the nested-workflow
   Performer; the design note's scenarios as tests.
 - `stepmeld-sqlite`: the shared store (definitions, Workflows, orders,
-  published Workers) in one SQLite file, and a Worker's own store (its
-  name and programs) in another.
+  published Workers) in one SQLite file.
+- `stepmeld-config`: a deployment and a machine as files: which store
+  is shared, how each program runs (a command, and the kinds plugins
+  add), secrets by name; the kinds a deployment may name.
 - `stepmeld-local`: a Performer that runs the programs on this
   machine (files-in-a-directory protocol; any language).
 - `stepmeld-verb`: the program side of that protocol, for a program
@@ -84,9 +86,12 @@ Two roles take part (`docs/ORCHESTRATOR-WORKER.md`). The
 **Orchestrator** (`stepmeld tick`) advances Workflows. The **Worker**
 (`stepmeld work`) runs the programs on this machine. They meet in the
 shared store, `stepmeld.sqlite`: the Orchestrator places an order, the
-Worker carries it out and reports. The Worker keeps its own settings
-and programs in `stepmeld-worker.sqlite`. Both files are made in the
-current folder the first time a command needs them.
+Worker claims it, carries it out and reports. The Worker keeps its own
+settings and programs in its machine file, `stepmeld-machine.toml`.
+Both files are made in the current folder the first time a command
+needs them. (A deployment file, `stepmeld.toml`, says which store is
+shared; without one it is `stepmeld.sqlite` in the current folder. The
+fleet variation below uses one.)
 
 **Source and state are kept apart.** `examples/hello` holds the
 example's source, under version control. Everything the walkthrough
@@ -125,9 +130,10 @@ stepmeld worker program set hello-program -- ../target/release/hello-program
 ```
 
 The first command prints that it made the shared store,
-`walkthrough/stepmeld.sqlite`; the second, the Worker's store,
-`walkthrough/stepmeld-worker.sqlite`. `stepmeld worker` now shows the Worker's program and what it offers:
-`stepdef_add v1, stepdef_multiply v1`.
+`walkthrough/stepmeld.sqlite`; the second, this machine's file,
+`walkthrough/stepmeld-machine.toml`. `stepmeld worker` now shows the
+Worker's program and what it offers: `stepdef_add v1, stepdef_multiply
+v1`.
 
 Start the Worker in a second terminal, in the same folder, and leave
 it running:
@@ -214,6 +220,65 @@ repository:
 ```bash
 rm -rf walkthrough
 ```
+
+### A fleet, on one machine
+
+The same Workflow, with the work done by two Workers, standing in for
+two fleet machines on the local network (`docs/PLACEMENT.md` §2). Each
+gets a folder of its own, as a machine would have: its own machine
+file, its own folder for Runs, and a deployment file that points at
+the shared store (on a real fleet, every machine's deployment file is
+the same and names a store they all reach).
+
+Stop the Worker from the walkthrough above if it is still running.
+From `walkthrough/`, make the two Workers, `bench-a` and `bench-b`:
+
+```bash
+for b in bench-a bench-b; do mkdir $b; printf '[stores.shared]\nkind = "sqlite"\npath = "../stepmeld.sqlite"\n' > $b/stepmeld.toml; done
+(cd bench-a && stepmeld worker set --name bench-a && stepmeld worker program set hello-program -- ../../target/release/hello-program)
+(cd bench-b && stepmeld worker set --name bench-b && stepmeld worker program set hello-program -- ../../target/release/hello-program)
+```
+
+Start each in a terminal of its own and leave them running:
+
+```bash
+cd walkthrough/bench-a && stepmeld work --watch
+```
+```bash
+cd walkthrough/bench-b && stepmeld work --watch
+```
+
+Back in `walkthrough/`, make a second Workflow and start it:
+
+```bash
+stepmeld create workflowdef_hello --id hello-2
+stepmeld set hello-2 --step step_add --input a --value 2
+stepmeld set hello-2 --step step_add --input b --value 3
+stepmeld set hello-2 --step step_multiply --input factor --value 4
+stepmeld start hello-2
+stepmeld tick
+```
+
+With two Workers offering the work, nothing is chosen for you:
+
+```text
+hello-2          step_add         waiting    waiting for a placement: several Workers offer it (`place`)
+```
+
+Name a Worker, or `any` for the first one free to take it:
+
+```bash
+stepmeld place hello-2 --step step_add --worker any
+stepmeld place hello-2 --step step_multiply --worker any
+stepmeld tick --watch
+```
+
+Each order is open; whichever Worker looks first claims it, and its
+terminal says so. `tick` says who took it (`running    on bench-a`).
+A Worker that stops (Ctrl-C) while it holds a Run keeps its claim for
+five minutes; back within that time it carries on, and after it the
+Run is lost and its Step's Policy decides what follows. A Worker unheard
+for three minutes is away, and nothing new is placed on it.
 
 
 ## Licence

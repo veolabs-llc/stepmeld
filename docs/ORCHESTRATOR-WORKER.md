@@ -94,15 +94,17 @@ Orchestrator that takes over the Workflow later reads the same answer.
 | `OrderBook`: the shared store's orders and published Workers, with an in-memory implementation and a conformance suite | `stepmeld-core/src/orders.rs`; the SQLite store implements it in the same file as the Workflows |
 | `OrderPerformer`: the Orchestrator's Performer for one published Worker | `stepmeld-core/src/orders.rs` |
 | `Worker`: the loop that takes orders, runs them through a Performer and reports | `stepmeld-core/src/orders.rs` |
-| The Worker's private store | `stepmeld-sqlite` (`WorkerStore`), one SQLite file |
+| The Worker's private settings | its machine file, `stepmeld-config` (`Machine`); the SQLite `WorkerStore` until 2026-10-20 |
 | Contracts | `stepmeld/order.v1`, `stepmeld/worker.v1` |
 | The command | `stepmeld worker …` sets up this machine's Worker (`worker program set <program> -- <command…>`); `stepmeld work` runs it; `stepmeld tick` orchestrates |
 
 My choices in the first form, each open to change:
 
-- The private store's default file is `stepmeld-worker.sqlite` in the
+- The private store's default file was `stepmeld-worker.sqlite` in the
   current folder, beside the shared store's `stepmeld.sqlite`, so the
-  walkthrough needs no flags. A Worker's name defaults to the host name.
+  walkthrough needs no flags; since 2026-10-20 it is the machine file,
+  `stepmeld-machine.toml`, found the same way. A Worker's name defaults
+  to the host name.
 - A report carried the whole log so far, replaced on each report.
   Since 2026-10-20 the log is kept beside the order and appended.
 - A cancel asked before the Worker took the order ends it as canceled
