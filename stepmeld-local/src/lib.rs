@@ -163,12 +163,7 @@ pub fn container_command(image: &Image, docker: Vec<String>, dir: &Path, vars: &
     }
     let quote = |w: &str| format!("'{}'", w.replace('\'', "'\"'\"'"));
     let unset: Vec<String> = vars.keys().flat_map(|k| ["-u".to_string(), quote(k)]).collect();
-    let before: Vec<String> = ["env".to_string()]
-        .into_iter()
-        .chain(unset)
-        .chain(image.before.iter().map(|w| quote(w)))
-        .chain([quote(&dir.display().to_string())])
-        .collect();
+    let before: Vec<String> = ["env".to_string()].into_iter().chain(unset).chain(image.before.iter().map(|w| quote(w))).chain([quote(&dir.display().to_string())]).collect();
     let run: Vec<String> = docker.iter().map(|w| quote(w)).collect();
     vec!["sh".into(), "-c".into(), format!("set -e\n{}\nexec {}", before.join(" "), run.join(" "))]
 }
