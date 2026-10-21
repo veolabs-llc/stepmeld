@@ -30,6 +30,9 @@
 //! args = ["typeset"]              # the Run's folder is appended
 //! gpus = 1
 //!
+//! [programs.typeset-program.needs]    # what one request needs (needs.rs)
+//! memory_gib = "ceil(inputs.book.pages / 10) + 2"
+//!
 //! [secrets.FONT_TOKEN]
 //! kind = "env"                    # read from this variable where the Worker runs
 //! ```
@@ -54,13 +57,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use stepmeld_core::definition::Locality;
-use stepmeld_core::orders::{OrderBook, Worker};
+use stepmeld_core::orders::{OrderBook, Sizing, Worker};
 use stepmeld_core::performer::{Performer, Router};
 use stepmeld_core::store::SharedStore;
 use stepmeld_core::workflow::PerformerFace;
 use stepmeld_core::Error;
 use stepmeld_local::{Image, LocalPerformer, Program, SignedIn};
 use toml::{Table, Value};
+
+pub mod needs;
+pub use needs::{Formula, Needs};
 
 /// The variable naming the deployment file, and the machine file.
 pub const CONFIG_ENV: &str = "STEPMELD_CONFIG";
@@ -194,6 +200,32 @@ impl Deployment {
     /// The programs it has settings for.
     pub fn programs(&self) -> Vec<String> {
         self.section("programs").map(|t| t.keys().cloned().collect()).unwrap_or_default()
+    }
+
+    /// What a program's work needs, by formula: `[programs.<name>.needs]`
+    /// (`needs.rs`); none when it says nothing.
+    pub fn needs(&self, program: &str) -> Result<Option<Needs>, Error> {
+        let Some(v) = self.program(program).and_then(|p| p.get("needs")) else { return Ok(None) };
+        let t = v.as_table().ok_or_else(|| invalid(&self.path, format!("[programs.{program}] needs is a table of formulas")))?;
+        Needs::from_table(t).map(Some).map_err(|e| invalid(&self.path, format!("[programs.{program}] {e}")))
+    }
+
+    /// How the deployment sizes each request, over every program it says
+    /// the needs of; none when it says none's.
+    pub fn sizing(&self) -> Result<Option<Sizing>, Error> {
+        let mut by_program = BTreeMap::new();
+        for name in self.programs() {
+            if let Some(n) = self.needs(&name)? {
+                by_program.insert(name, n);
+            }
+        }
+        if by_program.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Arc::new(move |r: &stepmeld_core::engine::StartRequest| match r.program.as_deref().and_then(|p| by_program.get(p)) {
+            Some(n) => n.eval(r),
+            None => Ok(BTreeMap::new()),
+        })))
     }
 
     /// A secret's settings: `[secrets.<name>]`.
@@ -553,6 +585,9 @@ impl Kinds {
             // unless the machine says otherwise, however many commands run
             worker = worker.with_limit(in_containers, m.file.worker.docker_slots.unwrap_or(1));
         }
+        if let Some(sizing) = d.sizing()? {
+            worker = worker.with_sizing(sizing);
+        }
         Ok(if m.file.worker.cloud { worker } else { worker.with_gpus(Arc::new(stepmeld_local::gpus)) })
     }
 }
@@ -640,7 +675,9 @@ fn docker_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn 
         Some(sign_in) => sign_in(&deployment, image),
         None => Ok(SignedIn::default()),
     });
-    Ok(Arc::new(LocalPerformer::new(&w.name, &w.runs, built).with_sign_in(sign_in)))
+    // a container holds no more than the machine has: what one asks for
+    // past it is left for a larger machine (docs/PLACEMENT.md §7)
+    Ok(Arc::new(LocalPerformer::new(&w.name, &w.runs, built).with_sign_in(sign_in).with_room(stepmeld_local::probe().room())))
 }
 
 #[cfg(test)]
@@ -784,5 +821,44 @@ mod tests {
         assert!(Kinds::builtin().worker(&d, &here, store.clone(), "h").is_ok());
         let typo = Deployment::parse("[programs.p.docker]\nimgae = \"p:1\"\n", None).unwrap();
         assert!(Kinds::builtin().worker(&typo, &m, store, "h").is_err(), "an image is named");
+    }
+
+    /// A program's needs, by the deployment's formulas, reach the
+    /// request its Performer is handed; a formula that does not read is
+    /// refused when the Worker is built.
+    #[test]
+    fn a_program_s_needs_are_computed_for_each_request() {
+        use stepmeld_core::orders::{Order, ORDER};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(stepmeld_core::store::MemoryStore::new());
+        let mut m = Machine::read(&dir.path().join("m.toml")).unwrap();
+        m.file.programs.insert("p".into(), vec!["true".into()]);
+        let d = Deployment::parse("[programs.p.needs]\nmemory_gib = \"inputs.book.pages / 10 + 2\"\ncapacity = \"parameters.capacity ?? 'on-demand'\"\n", None).unwrap();
+        let w = Kinds::builtin().worker(&d, &m, store.clone(), "h").unwrap();
+        let request: stepmeld_core::engine::StartRequest = serde_json::from_value(serde_json::json!({
+            "workflow": "wf", "step": "s", "run": "wf-s-1", "definition": {"name": "typeset", "version": 1}, "program": "p",
+            "needs": {"gpus": 1}, "inputs": {"book": {"pages": 80}}, "parameters": {}, "outputs": []
+        }))
+        .unwrap();
+        store
+            .place(&Order {
+                contract: ORDER.into(),
+                id: "wf-s-1".into(),
+                worker: Some(w.name.clone()),
+                open: None,
+                placed: "2026-10-21T00:00:00Z".into(),
+                request,
+                cancel: None,
+                claim: None,
+                report: None,
+            })
+            .unwrap();
+        w.tick("2026-10-21T00:00:01Z").unwrap();
+        let written: Vec<_> = std::fs::read_dir(m.runs()).unwrap().map(|e| e.unwrap().path().join("request.json")).collect();
+        let sent: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&written[0]).unwrap()).unwrap();
+        assert_eq!(sent["needs"], serde_json::json!({"gpus": 1, "memory_gib": 10, "capacity": "on-demand"}), "the definition's, with the deployment's over them");
+        let bad = Deployment::parse("[programs.p.needs]\nmemory_gib = \"inputs.book.pages /\"\n", None).unwrap();
+        let err = Kinds::builtin().worker(&bad, &m, store, "h").err().unwrap().to_string();
+        assert!(err.contains("[programs.p] needs.memory_gib"), "{err}");
     }
 }

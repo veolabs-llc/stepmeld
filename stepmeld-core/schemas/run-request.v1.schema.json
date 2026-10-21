@@ -36,7 +36,7 @@
     },
     "needs": {
       "type": "object",
-      "description": "What the StepDefinition says the work needs, to size it by."
+      "description": "What the work needs, to size it by: the StepDefinition's needs, with what the deployment computes for this request over them (docs/PLACEMENT.md §7)."
     },
     "inputs": {
       "type": "object",

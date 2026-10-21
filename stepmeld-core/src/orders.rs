@@ -274,6 +274,22 @@ pub trait OrderBook: Send + Sync {
     fn append_log(&self, id: &str, worker: &str, at: u64, text: &str) -> Result<bool, Error>;
 }
 
+/// What a deployment says one request needs, computed from the request
+/// itself (its Inputs, its Parameters) before any Performer is asked:
+/// the keys it gives, laid over the StepDefinition's own `needs`. None
+/// for a program it says nothing of; the words of an `Err` refuse the
+/// order (docs/PLACEMENT.md §7).
+pub type Sizing = Arc<dyn Fn(&StartRequest) -> Result<BTreeMap<String, crate::Value>, String> + Send + Sync>;
+
+/// A request with what `sizing` says it needs laid over the
+/// StepDefinition's own.
+pub fn sized(request: &StartRequest, sizing: Option<&Sizing>) -> Result<StartRequest, String> {
+    let Some(size) = sizing else { return Ok(request.clone()) };
+    let mut out = request.clone();
+    out.needs.extend(size(request)?);
+    Ok(out)
+}
+
 /// The time, as stepmeld spells it, for the edge pieces that need one.
 pub type Clock = Arc<dyn Fn() -> String + Send + Sync>;
 
@@ -463,6 +479,8 @@ pub struct Worker {
     pub beat_s: u64,
     /// Measures its GPUs for each beat.
     gpus: Option<Arc<dyn Fn() -> Vec<Gpu> + Send + Sync>>,
+    /// What each request needs, by the deployment's word.
+    sizing: Option<Sizing>,
     book: Arc<dyn OrderBook>,
     performer: Arc<dyn Performer>,
     /// When it last published, and what it held then.
@@ -489,6 +507,7 @@ impl Worker {
             renew_s: RENEW_S,
             beat_s: BEAT_S,
             gpus: None,
+            sizing: None,
             book,
             performer,
             published: Mutex::new(None),
@@ -544,6 +563,14 @@ impl Worker {
         self
     }
 
+    /// Size each request before it is taken: what `sizing` computes is
+    /// laid over the StepDefinition's needs, and the Performer is asked
+    /// whether the work fits before the order is claimed.
+    pub fn with_sizing(mut self, sizing: Sizing) -> Worker {
+        self.sizing = Some(sizing);
+        self
+    }
+
     pub fn with_beat(mut self, beat_s: u64) -> Worker {
         self.beat_s = beat_s.max(1);
         self
@@ -589,6 +616,9 @@ impl Worker {
         let mut holds = Vec::new();
         let mut moved = Vec::new();
         for order in &orders {
+            // what the work needs, by the deployment's word: the request
+            // the Performer is handed
+            let request = sized(&order.request, self.sizing.as_ref());
             let fresh = Claim {
                 worker: self.name.clone(),
                 at: now.into(),
@@ -617,7 +647,25 @@ impl Worker {
                         }
                         continue;
                     }
-                    if held >= self.slots as usize || !self.fits(order, &in_use) || !self.book.claim(&order.id, None, &fresh)? {
+                    if held >= self.slots as usize || !self.fits(order, &in_use) {
+                        continue;
+                    }
+                    // work this Worker cannot hold: an open order is left
+                    // for one that can, a pinned one refused in words
+                    let refusal = match &request {
+                        Err(words) => Some(format!("its needs could not be computed: {words}")),
+                        Ok(r) => self.performer.fits(r).err().map(|why| format!("{why} ({} cannot hold it)", self.name)),
+                    };
+                    if let Some(why) = refusal {
+                        if order.worker.is_some() || request.is_err() {
+                            let r = Report::ended(now, Outcome::failed("refused", &why));
+                            if self.book.end(&order.id, None, &r)? {
+                                moved.push(Moved::of(&order.id, &r));
+                            }
+                        }
+                        continue;
+                    }
+                    if !self.book.claim(&order.id, None, &fresh)? {
                         continue;
                     }
                     held += 1;
@@ -630,6 +678,9 @@ impl Worker {
                     if !(c.lapsed(now) && c.portable && fresh.portable) || held >= self.slots as usize || !self.fits(order, &in_use) {
                         continue;
                     }
+                    if request.as_ref().map_or(true, |r| self.performer.fits(r).is_err()) {
+                        continue;
+                    }
                     let over = Claim { handle: c.handle.clone(), ..fresh };
                     if !self.book.claim(&order.id, Some(c), &over)? {
                         continue;
@@ -639,7 +690,7 @@ impl Worker {
                     (over, true)
                 }
             };
-            let Some((claim, report)) = self.carry(order, claim, now)? else {
+            let Some((claim, report)) = self.carry(order, &request, claim, now)? else {
                 holds.push(order.id.clone());
                 continue;
             };
@@ -725,13 +776,13 @@ impl Worker {
     /// Start or find the work, pass on a cancel, observe. The claim as
     /// it now stands (with its handle) and the report to write; `None`
     /// when the Performer could not be reached, which changes nothing.
-    fn carry(&self, order: &Order, mut claim: Claim, now: &str) -> Result<Option<(Claim, Report)>, Error> {
+    fn carry(&self, order: &Order, request: &Result<StartRequest, String>, mut claim: Claim, now: &str) -> Result<Option<(Claim, Report)>, Error> {
         let handle = match &claim.handle {
             // a portable handle is found, never started again
             Some(h) if claim.portable => h.clone(),
             // a local one is started again (idempotent): that is how
             // a program that said it is resumable resumes
-            _ => match self.performer.start(&order.request) {
+            _ => match request.as_ref().map_err(|w| format!("its needs could not be computed: {w}")).and_then(|r| self.performer.start(r)) {
                 Ok(h) => h,
                 Err(words) if words.starts_with("unreachable:") => return Ok(None),
                 Err(words) => return Ok(Some((claim, Report::ended(now, Outcome::failed("refused", &words))))),

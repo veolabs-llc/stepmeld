@@ -37,6 +37,16 @@ pub trait Performer: Send + Sync {
     fn portable(&self) -> bool {
         false
     }
+    /// Whether the work a request asks for, sized by its `needs`, fits
+    /// what this Performer has (a machine's memory, its GPUs), or why
+    /// not. Asked by a Worker before it takes an order: one that does
+    /// not fit is left for another Worker when it is open, and refused
+    /// in these words when it is pinned here. A Performer that buys
+    /// what it needs (a cloud job) fits everything, and refuses at its
+    /// start what nothing it can buy holds.
+    fn fits(&self, _request: &StartRequest) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Several Performers behind one, each for some programs: a Worker
@@ -99,6 +109,15 @@ impl Performer for Router {
     fn portable(&self) -> bool {
         self.routes.iter().all(|r| r.2.portable())
     }
+
+    /// As the route for the request's program says.
+    fn fits(&self, request: &StartRequest) -> Result<(), String> {
+        let program = request.program.as_deref().unwrap_or_default();
+        match self.routes.iter().find(|r| r.1.iter().any(|q| q == program)) {
+            Some((_, _, p)) => p.fits(request),
+            None => Ok(()),
+        }
+    }
 }
 
 /// A Performer held in memory: the tests'. It accepts every Run of the
@@ -106,6 +125,8 @@ impl Performer for Router {
 pub struct MemoryPerformer {
     face: PerformerFace,
     portable: bool,
+    /// The most `needs.memory_gib` it holds; no limit when none.
+    memory_gib: Option<f64>,
     inner: Mutex<MemoryInner>,
 }
 
@@ -134,8 +155,16 @@ impl MemoryPerformer {
         MemoryPerformer {
             face,
             portable: false,
+            memory_gib: None,
             inner: Mutex::new(MemoryInner::default()),
         }
+    }
+
+    /// One that holds at most this much `needs.memory_gib`: a machine
+    /// of that size.
+    pub fn with_memory_gib(mut self, gib: f64) -> MemoryPerformer {
+        self.memory_gib = Some(gib);
+        self
     }
 
     /// One whose handles are portable: shared by several Workers, it
@@ -211,6 +240,14 @@ impl Performer for MemoryPerformer {
 
     fn portable(&self) -> bool {
         self.portable
+    }
+
+    fn fits(&self, request: &StartRequest) -> Result<(), String> {
+        let need = request.needs.get("memory_gib").and_then(|v| v.as_f64());
+        match (need, self.memory_gib) {
+            (Some(need), Some(have)) if need > have => Err(format!("needs {need} GiB of memory; {} has {have}", self.face.name)),
+            _ => Ok(()),
+        }
     }
 
     fn start(&self, request: &StartRequest) -> Result<String, String> {

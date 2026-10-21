@@ -166,6 +166,13 @@ enum Cmd {
         #[command(subcommand)]
         what: Option<WorkerCmd>,
     },
+    /// What the deployment says a request needs (`[programs.<name>.needs]`),
+    /// from a Run's `request.json`: the StepDefinition's needs, with the
+    /// deployment's over them. Nothing is placed or run.
+    Needs {
+        /// A Run's `request.json`, or its folder.
+        request: PathBuf,
+    },
     /// Run this machine's Worker: take its orders, run them, report; with --watch, until stopped.
     Work {
         #[arg(long)]
@@ -388,9 +395,33 @@ fn show_worker(cli: &Cli, store: &dyn SharedStore, m: &Machine) -> Result<(), Er
     Ok(())
 }
 
+/// `stepmeld needs`: a request's needs by the deployment's formulas.
+fn needs(cli: &Cli, request: &Path) -> Result<(), Error> {
+    let path = if request.is_dir() { request.join("request.json") } else { request.to_path_buf() };
+    let text = std::fs::read_to_string(&path).map_err(|e| Error::Refused(format!("cannot read {}: {e}", path.display())))?;
+    let request: stepmeld_core::engine::StartRequest = serde_json::from_str(&text).map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))?;
+    let d = Deployment::find(cli.deployment.as_deref())?;
+    let sized = stepmeld_core::orders::sized(&request, d.sizing()?.as_ref()).map_err(Error::Refused)?;
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&sized.needs).unwrap());
+    } else {
+        let said = request.program.as_deref().map(|p| d.needs(p).map(|n| n.is_some())).transpose()?.unwrap_or(false);
+        if !said {
+            println!("the deployment says nothing of program {:?}: the StepDefinition's needs stand", request.program.as_deref().unwrap_or_default());
+        }
+        for (k, v) in &sized.needs {
+            println!("{k:<12} {v}");
+        }
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<(), Error> {
     if let Cmd::Library { what } = &cli.command {
         return library(&cli, shared_store(&cli)?.as_ref(), what);
+    }
+    if let Cmd::Needs { request } = &cli.command {
+        return needs(&cli, request);
     }
     let (store, driver) = driver(&cli)?;
     let by = actor(&cli)?;
@@ -399,6 +430,7 @@ fn run(cli: Cli) -> Result<(), Error> {
     match &cli.command {
         // handled above, before the Library is checked; here for completeness
         Cmd::Library { what } => library(&cli, store.as_ref(), what)?,
+        Cmd::Needs { request } => needs(&cli, request)?,
         Cmd::Worker { what } => {
             let mut m = machine(&cli)?;
             match what {

@@ -19,6 +19,7 @@ fn program() -> BatchProgram {
         queues: BTreeMap::from([("on-demand".to_string(), "od-queue".to_string()), ("spot".to_string(), "spot-queue".to_string())]),
         capacity: "on-demand".into(),
         ladder: vec![(28, 4), (56, 8), (120, 16)],
+        vram_gib: Some(48.0),
         env: BTreeMap::new(),
     }
 }
@@ -58,6 +59,8 @@ fn a_need_is_placed_on_the_smallest_size_that_holds_it() {
     assert_eq!(p.place(&needs(serde_json::json!({"memory_gib": 20, "vcpus": 10, "capacity": "spot"}))).unwrap(), ("spot-queue".to_string(), Some((120, 16))));
     assert!(p.place(&needs(serde_json::json!({"memory_gib": 500}))).unwrap_err().contains("more than the largest"));
     assert!(p.place(&needs(serde_json::json!({"capacity": "reserved"}))).unwrap_err().contains("no reserved queue"));
+    assert_eq!(p.place(&needs(serde_json::json!({"memory_gib": 30, "vram_gib": 40}))).unwrap(), ("od-queue".to_string(), Some((56, 8))));
+    assert!(p.place(&needs(serde_json::json!({"vram_gib": 80}))).unwrap_err().contains("more than its machines' GPUs have (48)"));
 }
 
 #[test]

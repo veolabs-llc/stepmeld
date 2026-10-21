@@ -78,8 +78,10 @@ pub struct StartRequest {
     /// command it registered under that name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program: Option<String>,
-    /// What the StepDefinition says the work needs, for the Performer
-    /// to size it by; opaque to the engine.
+    /// What the work needs, for the Performer to size it by: the
+    /// StepDefinition's, with what the deployment computes for this
+    /// request laid over them by the Worker (docs/PLACEMENT.md §7);
+    /// opaque to the engine.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub needs: BTreeMap<String, Value>,
     pub inputs: BTreeMap<String, Value>,
