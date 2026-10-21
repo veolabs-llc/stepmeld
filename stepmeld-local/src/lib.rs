@@ -153,13 +153,22 @@ pub fn docker_run(image: &Image, container: &str, dir: &Path, env: &BTreeMap<Str
 /// The command that starts an image's Run: `docker run` alone, or, when
 /// the image has a `before`, a shell that runs it on the Run's folder and
 /// then becomes `docker run`, so the start does not wait for it and a
-/// cancel stops whichever is running.
-pub fn container_command(image: &Image, docker: Vec<String>, dir: &Path) -> Vec<String> {
+/// cancel stops whichever is running. `vars` are the container's
+/// variables, which the shell holds for `docker run -e` to pass by name:
+/// `before` runs as this machine, without them (a cache variable that
+/// names the container's mount once sent a host's warm elsewhere).
+pub fn container_command(image: &Image, docker: Vec<String>, dir: &Path, vars: &BTreeMap<String, String>) -> Vec<String> {
     if image.before.is_empty() {
         return docker;
     }
     let quote = |w: &str| format!("'{}'", w.replace('\'', "'\"'\"'"));
-    let before: Vec<String> = image.before.iter().map(|w| quote(w)).chain([quote(&dir.display().to_string())]).collect();
+    let unset: Vec<String> = vars.keys().flat_map(|k| ["-u".to_string(), quote(k)]).collect();
+    let before: Vec<String> = ["env".to_string()]
+        .into_iter()
+        .chain(unset)
+        .chain(image.before.iter().map(|w| quote(w)))
+        .chain([quote(&dir.display().to_string())])
+        .collect();
     let run: Vec<String> = docker.iter().map(|w| quote(w)).collect();
     vec!["sh".into(), "-c".into(), format!("set -e\n{}\nexec {}", before.join(" "), run.join(" "))]
 }
@@ -305,7 +314,8 @@ impl LocalPerformer {
                 let _ = Command::new("docker").args(["rm", "-f", &Self::container(handle)]).stdout(Stdio::null()).stderr(Stdio::null()).status();
                 let dir = std::fs::canonicalize(dir).map_err(|e| e.to_string())?;
                 let (docker, vars) = docker_run(image, &Self::container(handle), &dir, &program.env, &signed);
-                (container_command(image, docker, &dir), vars)
+                let command = container_command(image, docker, &dir, &vars);
+                (command, vars)
             }
         };
         // a command is handed the Run's folder; `docker run` already
@@ -800,7 +810,7 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
         assert!(!argv.iter().any(|a| a.contains("s3cret")), "no secret on the command line");
         assert_eq!(vars.len(), 2);
         assert_eq!(LocalPerformer::container("wf/s:1"), "stepmeld-wf_s_1");
-        assert_eq!(container_command(&image, argv.clone(), Path::new("/runs/wf_s_1")), argv, "no `before`: docker run itself");
+        assert_eq!(container_command(&image, argv.clone(), Path::new("/runs/wf_s_1"), &vars), argv, "no `before`: docker run itself");
 
         let warmed = Image {
             before: vec!["/opt/warm".into(), "it's".into()],
@@ -809,9 +819,10 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
         };
         let (argv, _) = docker_run(&warmed, "c", Path::new("/runs/r"), &BTreeMap::new(), &SignedIn::default());
         assert!(argv.join(" ").contains(" -v /cache:/objects:ro "), "{argv:?}");
-        let cmd = container_command(&warmed, argv, Path::new("/runs/r"));
+        let vars = BTreeMap::from([("CACHE".to_string(), "/objects".to_string())]);
+        let cmd = container_command(&warmed, argv, Path::new("/runs/r"), &vars);
         assert_eq!(&cmd[..2], ["sh", "-c"]);
-        assert!(cmd[2].starts_with("set -e\n'/opt/warm' 'it'\"'\"'s' '/runs/r'\nexec 'docker' 'run' "), "{}", cmd[2]);
+        assert!(cmd[2].starts_with("set -e\nenv -u 'CACHE' '/opt/warm' 'it'\"'\"'s' '/runs/r'\nexec 'docker' 'run' "), "{}", cmd[2]);
     }
 
     /// With Docker here: an image that speaks the run directory runs as
@@ -848,7 +859,7 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
             env: BTreeMap::from([("TOKEN".to_string(), "t-42".to_string())]),
             image: Some(Image {
                 reference: "stepmeld-test-verb:1".into(),
-                before: vec!["sh".into(), "-c".into(), format!("echo warm > {}/note; echo \"made ready for $0\"", cache.display())],
+                before: vec!["sh".into(), "-c".into(), format!("echo warm > {}/note; echo \"made ready for $0 (token: ${{TOKEN:-none}})\"", cache.display())],
                 volumes: vec![format!("{}:/cache:ro", cache.display())],
                 ..Default::default()
             }),
@@ -863,6 +874,7 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
         assert!(p.log(&h).unwrap().contains("token is t-42"), "the secret reached the container by name");
         let log = p.log(&h).unwrap();
         assert!(log.contains("made ready for ") && log.contains("cached warm"), "`before` ran first, on the Run's folder, and the mount is there: {log}");
+        assert!(log.contains("(token: none)"), "`before` runs as the machine, without the container's variables: {log}");
 
         let mut slow = request("wf/slow/1", &["out"]);
         slow.inputs.insert("speed".into(), serde_json::json!("slow"));

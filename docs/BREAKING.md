@@ -9,6 +9,14 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A container's `before` runs without the container's variables
+
+*Behaviour.* The shell that starts a container holds its variables for
+`docker run -e` to pass by name; the image's `before` ran in that shell
+and saw them, so a variable meant for inside the container (a cache's
+mount point) steered the machine's own command. It now runs with each of
+them unset (`env -u`). `container_command` takes the variables.
+
 ## A machine may make a container ready, and mount its own folders
 
 *Additive.* An image may name `before`, a command run on the machine
