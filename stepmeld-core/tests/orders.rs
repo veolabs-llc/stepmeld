@@ -438,6 +438,30 @@ fn a_worker_takes_as_many_orders_as_it_has_slots() {
     assert_eq!(mechanism.started().len(), 2);
 }
 
+/// A Performer's own slots hold within the Worker's: with room for
+/// eight orders, one container at a time still waits its turn.
+#[test]
+fn a_program_s_limit_holds_within_the_worker_s_slots() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = worker(&store, "bench", "h", false);
+    let w = w.with_slots(8).with_limit(vec!["add-program".into()], 1);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "h");
+    begin(&o, "limit-1");
+    begin(&o, "limit-2");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    assert_eq!(w.tick(&now(1)).unwrap().len(), 1, "one taken, with seven slots to spare");
+    let (first, second) = (latest(&store, "limit-1"), latest(&store, "limit-2"));
+    assert!(store.order(&second.id).unwrap().unwrap().claim.is_none(), "the second waits for the program's slot");
+    w.tick(&now(2)).unwrap();
+    assert!(store.order(&second.id).unwrap().unwrap().claim.is_none(), "held, not just taken in one round");
+    mechanism.finish(&mechanism.handle_of(&first.id).unwrap(), Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    w.tick(&now(3)).unwrap();
+    w.tick(&now(4)).unwrap();
+    assert!(store.order(&second.id).unwrap().unwrap().claim.is_some());
+}
+
 /// A cancel on an order nobody took ends it at once, without waiting
 /// for a Worker that may never come back.
 #[test]
