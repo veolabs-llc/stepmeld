@@ -244,13 +244,23 @@ in `docs/BREAKING.md`.
    a cloud Worker, and its page places on Workers and on `any`.
    Deploying that moves every machine together with no Run live.
 
-   *Left (contract), each needing images, infrastructure or runs on GPUs
-   and in the cloud to prove:* the GPU jobs' images run their programs
-   under stepmeld (a `docker` kind on machines; `batch` with
-   `stepmeld-run` in the image and job definitions that start it), so
-   the launchers, the old dispatch and its claimant, and the users'
-   execution contract and executors retire; the stand-in program table
-   goes once the Library is published again.
+   *Built 2026-10-20 (contract, as code, deployed nowhere):* the GPU
+   jobs' images run their programs themselves: in its own image, the
+   open library's program builds the job's environment, runs the
+   image's entry and reads or commits the run; an entry given a command
+   runs it instead, so the launchers keep working. Beside them, the
+   first user's deployment file routes each GPU program to its image on
+   a machine and to a Batch job definition whose command is
+   `stepmeld-run` in the cloud. Here: a program's non-secret `env`, no
+   secret in a Batch submit, and one container at a time on a machine.
+
+   *Left, each needing images, infrastructure or runs on GPUs and in the
+   cloud to prove:* the downstream daemon building its Workers from
+   those files, the images rebuilt, the job definitions deployed, the
+   Library published again with programs and requirements, every
+   machine moved at once; then the launchers, the old dispatch and its
+   claimant, the stand-in program table, and the users' execution
+   contract and executors retire. The users' runbook holds the order.
 
 ## 11. Not decided yet
 
