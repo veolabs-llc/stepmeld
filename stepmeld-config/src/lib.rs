@@ -235,6 +235,10 @@ pub struct WorkerSection {
     /// cloud Worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slots: Option<u32>,
+    /// How many containers at once, within `slots`: one by default
+    /// (docs/PLACEMENT.md §5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_slots: Option<u32>,
     /// Words it offers beyond those it detects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
@@ -494,6 +498,7 @@ impl Kinds {
                 if m.file.worker.cloud { ", or a cloud kind's settings for the program in the deployment file" } else { "" }
             )));
         }
+        let in_containers: Vec<String> = routes.get(DOCKER).map(|ps| ps.iter().map(|p| p.name.clone()).collect()).unwrap_or_default();
         let mut built: Vec<(String, Vec<String>, Arc<dyn Performer>)> = Vec::new();
         for (kind, programs) in &routes {
             let make = self.performers[kind].make;
@@ -511,7 +516,12 @@ impl Kinds {
             };
             Arc::new(Router::new(face, built))
         };
-        let worker = Worker::new(&plan.name, host, m.file.worker.cloud, programs, book, performer).with_slots(m.slots()).with_capabilities(capabilities(m));
+        let mut worker = Worker::new(&plan.name, host, m.file.worker.cloud, programs, book, performer).with_slots(m.slots()).with_capabilities(capabilities(m));
+        if !in_containers.is_empty() {
+            // a container is a GPU's or a machine's whole: one at a time
+            // unless the machine says otherwise, however many commands run
+            worker = worker.with_limit(in_containers, m.file.worker.docker_slots.unwrap_or(1));
+        }
         Ok(if m.file.worker.cloud { worker } else { worker.with_gpus(Arc::new(stepmeld_local::gpus)) })
     }
 }
@@ -715,6 +725,7 @@ mod tests {
         let d = Deployment::parse("[programs.p.docker]\nimage = \"registry.example/p:1\"\nargs = [\"p\"]\ngpus = 1\n", None).unwrap();
         let w = Kinds::builtin().worker(&d, &m, store.clone(), "h").unwrap();
         assert_eq!(w.programs, ["p"]);
+        assert_eq!(w.limits, [(vec!["p".to_string()], 1)], "one container at a time");
         let bad = Deployment::parse("[programs.p.docker]\nimage = \"p:1\"\nsign_in = \"nowhere\"\n", None).unwrap();
         let err = Kinds::builtin().worker(&bad, &m, store.clone(), "h").err().unwrap().to_string();
         assert!(err.contains("\"nowhere\""), "{err}");

@@ -111,7 +111,10 @@ dispatch into stepmeld (Max, 2026-10-20); this is the rest of it.
   (as built).
 - **Slots.** A Worker takes as many orders at once as each of its
   Performers has slots: by default one for a command and one for a
-  Docker image, no limit for Batch (my choice).
+  Docker image, no limit for Batch (my choice). As built: the machine
+  file's `slots` is the Worker's (one, or no limit for a cloud Worker),
+  and its containers share one slot within it (`docker_slots`), so a
+  machine running several commands still runs one container at a time.
 - **Logs go in the store**, appended as they grow (Max, 2026-10-20),
   rather than replaced whole on each report.
 

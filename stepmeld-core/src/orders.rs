@@ -454,6 +454,10 @@ pub struct Worker {
     pub capabilities: Vec<String>,
     /// How many orders it runs at once.
     pub slots: u32,
+    /// Within those, how many of some programs' orders at once: a
+    /// Performer's own slots (docs/PLACEMENT.md §5; one Docker container
+    /// at a time, say, beside several commands).
+    pub limits: Vec<(Vec<String>, u32)>,
     pub lease_s: u64,
     pub renew_s: u64,
     pub beat_s: u64,
@@ -480,6 +484,7 @@ impl Worker {
             programs,
             capabilities: Vec::new(),
             slots: 1,
+            limits: Vec::new(),
             lease_s: LEASE_S,
             renew_s: RENEW_S,
             beat_s: BEAT_S,
@@ -500,6 +505,30 @@ impl Worker {
     pub fn with_slots(mut self, slots: u32) -> Worker {
         self.slots = slots.max(1);
         self
+    }
+
+    /// At most `slots` orders at once of these programs, within the
+    /// Worker's own slots.
+    pub fn with_limit(mut self, programs: Vec<String>, slots: u32) -> Worker {
+        self.limits.push((programs, slots.max(1)));
+        self
+    }
+
+    /// Whether one more of `order`'s program fits every limit it falls
+    /// under, given the orders held.
+    fn fits(&self, order: &Order, in_use: &[usize]) -> bool {
+        let program = order.request.program.as_deref().unwrap_or_default();
+        self.limits.iter().zip(in_use).all(|((programs, slots), used)| !programs.iter().any(|p| p == program) || *used < *slots as usize)
+    }
+
+    /// Count `order` against every limit its program falls under.
+    fn count(&self, order: &Order, in_use: &mut [usize]) {
+        let program = order.request.program.as_deref().unwrap_or_default();
+        for ((programs, _), used) in self.limits.iter().zip(in_use.iter_mut()) {
+            if programs.iter().any(|p| p == program) {
+                *used += 1;
+            }
+        }
     }
 
     /// Hold claims for `lease_s` seconds, renewing every `renew_s`.
@@ -553,6 +582,10 @@ impl Worker {
             .filter(|o| o.claim.as_ref().is_some_and(|c| c.worker == self.name) || o.for_worker(&self.name, self.cloud, &self.programs, &self.capabilities))
             .collect();
         let mut held = orders.iter().filter(|o| o.claim.as_ref().is_some_and(|c| c.worker == self.name)).count();
+        let mut in_use = vec![0; self.limits.len()];
+        for o in orders.iter().filter(|o| o.claim.as_ref().is_some_and(|c| c.worker == self.name)) {
+            self.count(o, &mut in_use);
+        }
         let mut holds = Vec::new();
         let mut moved = Vec::new();
         for order in &orders {
@@ -584,16 +617,17 @@ impl Worker {
                         }
                         continue;
                     }
-                    if held >= self.slots as usize || !self.book.claim(&order.id, None, &fresh)? {
+                    if held >= self.slots as usize || !self.fits(order, &in_use) || !self.book.claim(&order.id, None, &fresh)? {
                         continue;
                     }
                     held += 1;
+                    self.count(order, &mut in_use);
                     (fresh, true)
                 }
                 // another Worker's claim: taken over only once lapsed,
                 // and only when the work can be found from here
                 Some(c) => {
-                    if !(c.lapsed(now) && c.portable && fresh.portable) || held >= self.slots as usize {
+                    if !(c.lapsed(now) && c.portable && fresh.portable) || held >= self.slots as usize || !self.fits(order, &in_use) {
                         continue;
                     }
                     let over = Claim { handle: c.handle.clone(), ..fresh };
@@ -601,6 +635,7 @@ impl Worker {
                         continue;
                     }
                     held += 1;
+                    self.count(order, &mut in_use);
                     (over, true)
                 }
             };

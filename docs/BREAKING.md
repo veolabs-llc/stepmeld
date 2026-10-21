@@ -9,6 +9,15 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A machine runs one container at a time
+
+*Behaviour.* A Worker built from a machine file now runs at most one
+order at once among the programs it runs as Docker images (PLACEMENT.md
+§5's slot for the Docker Performer), whatever its `slots`; `[worker]
+docker_slots = n` says otherwise. Before, a Worker with several slots
+could start several containers at once. `Worker::with_limit` is the
+rule for any embedder: at most so many orders of some programs at once.
+
 ## A program may be given variables that are no secret
 
 *Additive.* `[programs.<name>] env = { NAME = "value" }` hands a program
