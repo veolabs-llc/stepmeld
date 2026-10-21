@@ -23,6 +23,7 @@
 //!
 //! [programs.typeset-program]
 //! secrets = ["FONT_TOKEN"]        # handed to the program by name
+//! env = { TYPESET_PAPER = "a4" }  # and these, which are no secret
 //!
 //! [programs.typeset-program.docker]   # where no machine has a command for it
 //! image = "registry.example/typeset:3"
@@ -319,8 +320,13 @@ pub struct ProgramPlan {
     /// Its settings for this kind: `[programs.<name>.<kind>]` from the
     /// deployment file, or `{ command = [...] }` from the machine file.
     pub settings: Table,
-    /// The secrets its settings list, read: name to value.
+    /// The variables it is given: its `env` (no secret), then the
+    /// secrets its settings list, read: name to value.
     pub env: BTreeMap<String, String>,
+    /// Which of those are its `env`: the variables a kind that keeps
+    /// secrets out of its own requests (a cloud job's submit) may still
+    /// send.
+    pub vars: BTreeMap<String, String>,
 }
 
 /// The Worker a kind of Performer is built for.
@@ -450,12 +456,23 @@ impl Kinds {
                     .find_map(|(kind, _)| common.and_then(|c| c.get(kind)).and_then(Value::as_table).map(|t| (kind.clone(), t.clone()))),
             };
             let Some((kind, settings)) = route else { continue };
-            let mut env = BTreeMap::new();
+            let mut vars = BTreeMap::new();
+            if let Some(table) = common.and_then(|c| c.get("env")) {
+                let table = table.as_table().ok_or_else(|| invalid(&d.path, format!("[programs.{name}] env is a table of variables")))?;
+                for (k, v) in table {
+                    let v = v.as_str().ok_or_else(|| invalid(&d.path, format!("[programs.{name}] env.{k} is a string")))?;
+                    vars.insert(k.clone(), v.to_string());
+                }
+            }
+            let mut env = vars.clone();
             for secret in common.and_then(|c| c.get("secrets")).and_then(Value::as_array).into_iter().flatten() {
                 let s = secret.as_str().ok_or_else(|| invalid(&d.path, format!("[programs.{name}] secrets are names")))?;
+                if vars.contains_key(s) {
+                    return Err(invalid(&d.path, format!("[programs.{name}] names {s} as a secret and in env: one or the other")));
+                }
                 env.insert(s.to_string(), self.secret(d, s)?);
             }
-            routes.entry(kind).or_default().push(ProgramPlan { name, settings, env });
+            routes.entry(kind).or_default().push(ProgramPlan { name, settings, env, vars });
         }
         Ok(routes)
     }
@@ -639,6 +656,30 @@ mod tests {
         let plan = &routes[COMMAND][0];
         assert_eq!((plan.env["TOKEN"].as_str(), plan.env["PATH_SEEN"].clone()), ("s3cret", std::env::var("PATH").unwrap()));
         assert!(kinds.secret(&d, "NOPE").is_err());
+    }
+
+    /// A program's `env` is handed to it beside its secrets, and kept
+    /// apart from them for a kind that sends no secret in a request.
+    #[test]
+    fn a_program_s_env_is_handed_to_it_and_kept_apart_from_its_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("token"), "s3cret").unwrap();
+        let d = Deployment::parse(
+            "[programs.p]\nsecrets = [\"TOKEN\"]\nenv = { PAPER = \"a4\", CONFIG = \"\"\"\nstore = \\\"x\\\"\n\"\"\" }\n[secrets.TOKEN]\nkind = \"file\"\npath = \"token\"\n",
+            Some(dir.path().join("stepmeld.toml")),
+        )
+        .unwrap();
+        let mut m = Machine::read(&dir.path().join("m.toml")).unwrap();
+        m.file.programs.insert("p".into(), vec!["/bin/p".into()]);
+        let routes = Kinds::builtin().routes(&d, &m).unwrap();
+        let plan = &routes[COMMAND][0];
+        assert_eq!(plan.env.keys().collect::<Vec<_>>(), ["CONFIG", "PAPER", "TOKEN"]);
+        assert_eq!((plan.env["PAPER"].as_str(), plan.env["CONFIG"].as_str()), ("a4", "store = \"x\"\n"));
+        assert_eq!(plan.vars.keys().collect::<Vec<_>>(), ["CONFIG", "PAPER"], "the secret is not among them");
+        let both = Deployment::parse("[programs.p]\nsecrets = [\"T\"]\nenv = { T = \"1\" }\n[secrets.T]\nkind = \"env\"\nvar = \"PATH\"\n", None).unwrap();
+        assert!(Kinds::builtin().routes(&both, &m).unwrap_err().to_string().contains("one or the other"));
+        let number = Deployment::parse("[programs.p]\nenv = { N = 1 }\n", None).unwrap();
+        assert!(Kinds::builtin().routes(&number, &m).unwrap_err().to_string().contains("env.N is a string"));
     }
 
     /// A Worker runs a program by its command, else by a kind of its

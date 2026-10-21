@@ -66,9 +66,18 @@ fn batch_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn P
     let (bucket, prefix) = s3_url(url).ok_or_else(|| Error::Invalid(format!("[providers.aws] runs is an s3:// URL, not {url:?}")))?;
     let mut parsed = BTreeMap::new();
     for p in programs {
-        let program: batch::BatchProgram = Value::Table(p.settings.clone())
+        let mut program: batch::BatchProgram = Value::Table(p.settings.clone())
             .try_into()
             .map_err(|e: toml::de::Error| Error::Invalid(format!("[programs.{}.batch]: {}", p.name, e.message())))?;
+        // the program's `env` and none of its secrets: a submit's
+        // variables are readable in the job's description
+        program.env = p.vars.clone();
+        if let Some(secret) = p.env.keys().find(|k| !p.vars.contains_key(*k)) {
+            return Err(Error::Invalid(format!(
+                "[programs.{}] gives {secret} as a secret, and a Batch job takes its secrets from its job definition: name it there instead",
+                p.name
+            )));
+        }
         parsed.insert(p.name.clone(), program);
     }
     let settings = Settings::of(d, &Table::new());

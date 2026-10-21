@@ -9,6 +9,16 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A program may be given variables that are no secret
+
+*Additive.* `[programs.<name>] env = { NAME = "value" }` hands a program
+variables beside its secrets: as its environment for a command, by name
+(`-e`) for a container, and with the submit for a Batch job (where a
+secret is refused: a Batch job takes its secrets from its job
+definition, as before). A name may be a secret or in `env`, not both.
+`ProgramPlan` gains `vars`, the `env` part of its `env`;
+`BatchProgram` gains `env`, filled from it.
+
 ## An Orchestrator ticks only what moved
 
 *Additive.* `Driver::tick_moved` ticks a Workflow only when its version
