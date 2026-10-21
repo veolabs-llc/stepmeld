@@ -70,14 +70,10 @@ fn batch_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn P
             .try_into()
             .map_err(|e: toml::de::Error| Error::Invalid(format!("[programs.{}.batch]: {}", p.name, e.message())))?;
         // the program's `env` and none of its secrets: a submit's
-        // variables are readable in the job's description
+        // variables are readable in the job's description, so a Batch
+        // job takes the secrets its program names (the same ones a
+        // container on a machine is handed) from its job definition
         program.env = p.vars.clone();
-        if let Some(secret) = p.env.keys().find(|k| !p.vars.contains_key(*k)) {
-            return Err(Error::Invalid(format!(
-                "[programs.{}] gives {secret} as a secret, and a Batch job takes its secrets from its job definition: name it there instead",
-                p.name
-            )));
-        }
         parsed.insert(p.name.clone(), program);
     }
     let settings = Settings::of(d, &Table::new());
@@ -258,6 +254,22 @@ mod tests {
         assert_eq!(ecr_registry("123456789012.dkr.ecr.us-east-2.amazonaws.com/team/typeset:3"), Some("123456789012.dkr.ecr.us-east-2.amazonaws.com"));
         assert_eq!(ecr_registry("registry.example/typeset:3"), None);
         assert_eq!(ecr_registry("typeset:3"), None);
+    }
+
+    /// A program's secrets are a container's on a machine and its job
+    /// definition's on Batch: a cloud Worker is built for it all the same.
+    #[test]
+    fn a_program_with_secrets_runs_on_batch_too() {
+        let d = Deployment::parse(
+            "[providers.aws]\nregion = \"us-east-2\"\nruns = \"s3://b/runs/\"\n[programs.p]\nsecrets = [\"T\"]\nenv = { A = \"1\" }\n[programs.p.batch]\ndefinition = \"p-def\"\nqueues = { on-demand = \"q\" }\n[secrets.T]\nkind = \"env\"\nvar = \"PATH\"\n",
+            None,
+        )
+        .unwrap();
+        let mut m = stepmeld_config::Machine::read(std::path::Path::new("/nonexistent/m.toml")).unwrap();
+        m.file.worker.cloud = true;
+        let store = Arc::new(stepmeld_core::store::MemoryStore::new());
+        let w = kinds(Kinds::builtin()).worker(&d, &m, store, "h").unwrap();
+        assert_eq!(w.programs, ["p"]);
     }
 
     #[test]

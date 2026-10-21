@@ -24,9 +24,10 @@
 //! What a Step needs (`needs`): `memory_gib`, `vcpus`, `capacity`. A
 //! need above the top of the ladder is refused in words. Secrets reach a
 //! Batch job through its job definition, never through a submit: a
-//! submit's variables can be read back from the job's description. A
-//! program's `env` (`[programs.<name>] env`, no secret) is sent with the
-//! submit, beside `STEPMELD_RUN`.
+//! submit's variables can be read back from the job's description, so
+//! the secrets a program names are not sent; its job definition injects
+//! them. A program's `env` (`[programs.<name>] env`, no secret) is sent
+//! with the submit, beside `STEPMELD_RUN`.
 
 use crate::block_on;
 use std::collections::BTreeMap;
