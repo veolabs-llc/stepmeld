@@ -696,3 +696,111 @@ fn an_orchestrator_ticks_only_what_moved() {
     o.tick_moved(&now(8), &now(9), &mut seen).unwrap();
     assert!(seen.ticked.is_empty(), "nothing left to move");
 }
+
+/// A Worker whose machine holds `gib` of memory, sized by a deployment
+/// that says `add` needs ten GiB per unit of `a`.
+fn sized_worker(store: &Arc<MemoryStore>, name: &str, gib: f64) -> (Worker, Arc<MemoryPerformer>) {
+    let mechanism = Arc::new(
+        MemoryPerformer::new(PerformerFace {
+            pool: false,
+            name: name.into(),
+            locality: Locality::ThisMachine,
+            verbs: vec![Ref::new("add", 1)],
+        })
+        .with_memory_gib(gib),
+    );
+    let sizing: stepmeld_core::orders::Sizing = Arc::new(|r| {
+        let a = r.inputs.get("a").and_then(Value::as_f64).ok_or("no `a` to size it by")?;
+        Ok(BTreeMap::from([("memory_gib".to_string(), Value::from(a * 10.0))]))
+    });
+    let w = Worker::new(name, name, false, vec!["add-program".into()], store.clone(), mechanism.clone()).with_sizing(sizing);
+    (w, mechanism)
+}
+
+#[test]
+fn a_worker_hands_its_performer_the_needs_the_deployment_computes() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = sized_worker(&store, "big", 64.0);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "big");
+    begin(&o, "sized-1");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(2)).unwrap();
+    let started = mechanism.started();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].needs.get("memory_gib"), Some(&Value::from(20.0)), "a = 2, at ten GiB each");
+    let order = store.order(&started[0].run).unwrap().unwrap();
+    assert!(order.request.needs.is_empty(), "the order keeps the request as placed");
+}
+
+#[test]
+fn work_too_large_for_the_machine_it_is_pinned_to_is_refused_before_it_starts() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (w, mechanism) = sized_worker(&store, "small", 16.0);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "small");
+    begin(&o, "sized-2");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(2)).unwrap();
+    o.tick_all(&now(3), &now(9)).unwrap();
+    assert!(mechanism.started().is_empty(), "nothing started");
+    let outcome = latest(&store, "sized-2").outcome.unwrap();
+    assert_eq!(outcome.class.as_deref(), Some("refused"));
+    assert_eq!(outcome.reason.as_deref(), Some("needs 20 GiB of memory; small has 16 (small cannot hold it)"));
+}
+
+#[test]
+fn an_open_order_waits_for_a_worker_that_holds_it() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (small, ms) = sized_worker(&store, "small", 16.0);
+    let (big, mb) = sized_worker(&store, "big", 64.0);
+    small.tick(&now(0)).unwrap();
+    big.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "desk");
+    begin(&o, "sized-3");
+    o.command(
+        "sized-3",
+        &Command::Place {
+            step: "add".into(),
+            performer: "any".into(),
+            locality: Locality::LocalNetwork,
+        },
+        &person(),
+        &now(1),
+    )
+    .unwrap();
+    o.tick_all(&now(1), &now(9)).unwrap();
+    let run = latest(&store, "sized-3");
+    small.tick(&now(2)).unwrap();
+    let order = store.order(&run.id).unwrap().unwrap();
+    assert!(order.claim.is_none() && !order.ended(), "the small machine leaves it, and it waits");
+    assert!(ms.started().is_empty());
+    big.tick(&now(3)).unwrap();
+    assert_eq!(store.order(&run.id).unwrap().unwrap().claim.unwrap().worker, "big");
+    assert_eq!(mb.started()[0].needs.get("memory_gib"), Some(&Value::from(20.0)));
+}
+
+#[test]
+fn needs_that_cannot_be_computed_refuse_the_order_in_words() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let mechanism = Arc::new(MemoryPerformer::new(PerformerFace {
+        pool: false,
+        name: "desk".into(),
+        locality: Locality::ThisMachine,
+        verbs: vec![Ref::new("add", 1)],
+    }));
+    let sizing: stepmeld_core::orders::Sizing = Arc::new(|_| Err("`cameras` is not in Input model".into()));
+    let w = Worker::new("desk", "desk", false, vec!["add-program".into()], store.clone(), mechanism.clone()).with_sizing(sizing);
+    w.tick(&now(0)).unwrap();
+    let o = orchestrator(&store, "desk");
+    begin(&o, "sized-4");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    w.tick(&now(2)).unwrap();
+    assert!(mechanism.started().is_empty());
+    let outcome = store.order(&latest(&store, "sized-4").id).unwrap().unwrap().report.unwrap().outcome.unwrap();
+    assert_eq!(outcome.reason.as_deref(), Some("its needs could not be computed: `cameras` is not in Input model"));
+}

@@ -195,6 +195,43 @@ pub struct LocalPerformer {
     programs: Vec<Program>,
     children: Mutex<BTreeMap<String, std::process::Child>>,
     sign_in: Option<SignIn>,
+    /// What this machine has for the work, when its programs' needs are
+    /// to be held to it.
+    room: Option<Room>,
+}
+
+/// What a machine has for one Run's work: a request whose `needs` ask
+/// for more does not fit here (docs/PLACEMENT.md §7).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Room {
+    /// The memory a container may have, in GiB; unknown when none.
+    pub memory_gib: Option<f64>,
+    pub gpus: Vec<stepmeld_core::orders::Gpu>,
+}
+
+impl Room {
+    /// Whether `needs` fit (`memory_gib`, `gpus`, `vram_gib`), or why
+    /// not. A need it does not know is not its to judge.
+    pub fn fits(&self, needs: &BTreeMap<String, serde_json::Value>, here: &str) -> Result<(), String> {
+        let num = |k: &str| needs.get(k).and_then(|v| v.as_f64());
+        if let (Some(need), Some(have)) = (num("memory_gib"), self.memory_gib) {
+            if need > have {
+                return Err(format!("needs {need} GiB of memory; {here} has {have:.0}"));
+            }
+        }
+        if let Some(need) = num("gpus") {
+            if need > self.gpus.len() as f64 {
+                return Err(format!("needs {need} GPUs; {here} has {}", self.gpus.len()));
+            }
+        }
+        if let Some(need) = num("vram_gib") {
+            let most = self.gpus.iter().map(|g| g.memory_mib as f64 / 1024.0).fold(0.0, f64::max);
+            if need > most {
+                return Err(format!("needs {need} GiB of GPU memory; {here}'s largest GPU has {most:.0}"));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl LocalPerformer {
@@ -208,7 +245,14 @@ impl LocalPerformer {
             programs,
             children: Mutex::new(BTreeMap::new()),
             sign_in: None,
+            room: None,
         }
+    }
+
+    /// Hold each request's needs to what this machine has.
+    pub fn with_room(mut self, room: Room) -> LocalPerformer {
+        self.room = Some(room);
+        self
     }
 
     /// Sign each container in before it runs: what an image program's
@@ -382,6 +426,13 @@ impl Performer for LocalPerformer {
         }
     }
 
+    fn fits(&self, request: &StartRequest) -> Result<(), String> {
+        match &self.room {
+            Some(room) => room.fits(&request.needs, &self.name),
+            None => Ok(()),
+        }
+    }
+
     fn start(&self, request: &StartRequest) -> Result<String, String> {
         let handle = Self::handle_for(request);
         let dir = self.dir(&handle);
@@ -497,12 +548,23 @@ pub struct Probe {
     pub docker: bool,
     pub cuda: bool,
     pub gpus: Vec<stepmeld_core::orders::Gpu>,
+    /// The memory Docker may give a container, in GiB (its machine's,
+    /// or its virtual machine's where it runs in one).
+    pub memory_gib: Option<f64>,
 }
 
 impl Probe {
     /// The capability words it found: `docker`, `cuda`.
     pub fn capabilities(&self) -> Vec<String> {
         [("docker", self.docker), ("cuda", self.cuda)].into_iter().filter(|(_, has)| *has).map(|(w, _)| w.to_string()).collect()
+    }
+
+    /// What it found for one Run's work.
+    pub fn room(&self) -> Room {
+        Room {
+            memory_gib: self.memory_gib,
+            gpus: self.gpus.clone(),
+        }
     }
 }
 
@@ -532,10 +594,12 @@ pub fn gpus() -> Vec<stepmeld_core::orders::Gpu> {
 pub fn probe() -> Probe {
     let runtimes = output("docker", &["info", "--format", "{{json .Runtimes}}"]);
     let gpus = gpus();
+    let memory_gib = output("docker", &["info", "--format", "{{.MemTotal}}"]).and_then(|t| t.trim().parse::<f64>().ok()).map(|b| b / (1u64 << 30) as f64);
     Probe {
         docker: runtimes.is_some(),
         cuda: runtimes.is_some_and(|r| r.contains("nvidia")) && !gpus.is_empty(),
         gpus,
+        memory_gib,
     }
 }
 
@@ -812,6 +876,27 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
         let cmd = container_command(&warmed, argv, Path::new("/runs/r"));
         assert_eq!(&cmd[..2], ["sh", "-c"]);
         assert!(cmd[2].starts_with("set -e\n'/opt/warm' 'it'\"'\"'s' '/runs/r'\nexec 'docker' 'run' "), "{}", cmd[2]);
+    }
+
+    #[test]
+    fn a_machine_holds_the_needs_it_has_room_for() {
+        let gpu = |gib: u64| stepmeld_core::orders::Gpu {
+            name: "card".into(),
+            memory_mib: gib * 1024,
+            used_mib: 0,
+        };
+        let room = Room { memory_gib: Some(64.0), gpus: vec![gpu(24)] };
+        let needs = |v: serde_json::Value| serde_json::from_value::<BTreeMap<String, serde_json::Value>>(v).unwrap();
+        assert_eq!(room.fits(&needs(serde_json::json!({"memory_gib": 60, "gpus": 1, "vram_gib": 20, "capacity": "spot"})), "box"), Ok(()));
+        assert_eq!(room.fits(&needs(serde_json::json!({"memory_gib": 96})), "box"), Err("needs 96 GiB of memory; box has 64".into()));
+        assert_eq!(room.fits(&needs(serde_json::json!({"gpus": 2})), "box"), Err("needs 2 GPUs; box has 1".into()));
+        assert_eq!(room.fits(&needs(serde_json::json!({"vram_gib": 40})), "box"), Err("needs 40 GiB of GPU memory; box's largest GPU has 24".into()));
+        assert_eq!(Room::default().fits(&needs(serde_json::json!({"memory_gib": 900})), "box"), Ok(()), "memory unknown: not judged");
+        let p = LocalPerformer::new("box", Path::new("/nonexistent"), Vec::new()).with_room(room);
+        let mut r = request("r", &[]);
+        r.needs = needs(serde_json::json!({"memory_gib": 96}));
+        assert!(p.fits(&r).is_err());
+        assert!(LocalPerformer::new("box", Path::new("/nonexistent"), Vec::new()).fits(&r).is_ok(), "no room said: everything fits");
     }
 
     /// With Docker here: an image that speaks the run directory runs as

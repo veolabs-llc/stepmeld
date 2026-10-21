@@ -206,6 +206,11 @@ pub struct BatchProgram {
     /// (GiB, vCPU) sizes, smallest first.
     #[serde(default)]
     pub ladder: Vec<(u64, u64)>,
+    /// The GPU memory each of its machines has, in GiB, where its jobs
+    /// get a GPU: a request that needs more (`needs.vram_gib`) is
+    /// refused before anything is submitted.
+    #[serde(default)]
+    pub vram_gib: Option<f64>,
     /// Variables sent with each submit: the program's `env`, never a
     /// secret.
     #[serde(skip)]
@@ -224,6 +229,11 @@ impl BatchProgram {
             .queues
             .get(capacity)
             .ok_or_else(|| format!("no {capacity} queue for {} (there are {:?})", self.definition, self.queues.keys().collect::<Vec<_>>()))?;
+        if let (Some(need), Some(have)) = (needs.get("vram_gib").and_then(|v| v.as_f64()), self.vram_gib) {
+            if need > have {
+                return Err(format!("{} needs {need} GiB of GPU memory, more than its machines' GPUs have ({have})", self.definition));
+            }
+        }
         let memory = needs.get("memory_gib").and_then(|v| v.as_f64());
         let vcpus = needs.get("vcpus").and_then(|v| v.as_f64());
         if memory.is_none() && vcpus.is_none() {

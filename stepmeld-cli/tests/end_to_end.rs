@@ -250,3 +250,29 @@ fn library_remove_and_what_it_leaves_unused() {
     let (ok, out) = stepmeld(d, &["library"]);
     assert!(ok && out.trim().is_empty(), "{out}");
 }
+
+/// `stepmeld needs`: what the deployment's formulas say a Run's request
+/// needs, from its `request.json`, on any machine; nothing is placed.
+#[test]
+fn needs_are_computed_from_a_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    std::fs::write(
+        d.join("stepmeld.toml"),
+        "[programs.hello-program.needs]\nmemory_gib = \"inputs.a * 4 + needs.base\"\ncapacity = \"parameters.capacity ?? 'on-demand'\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("request.json"),
+        r#"{"workflow": "wf", "step": "step_add", "run": "r1", "definition": {"name": "stepdef_add", "version": 1}, "program": "hello-program",
+            "needs": {"base": 2}, "inputs": {"a": 5, "b": 1}, "parameters": {"capacity": "spot"}, "outputs": []}"#,
+    )
+    .unwrap();
+    let (ok, out) = stepmeld(d, &["--deployment", "stepmeld.toml", "--json", "needs", "request.json"]);
+    assert!(ok, "{out}");
+    let needs: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(needs, serde_json::json!({"base": 2, "memory_gib": 22, "capacity": "spot"}));
+    std::fs::write(d.join("other.toml"), "").unwrap();
+    let (ok, out) = stepmeld(d, &["--deployment", "other.toml", "needs", "."]);
+    assert!(ok && out.contains("says nothing of program \"hello-program\"") && out.contains("base"), "{out}");
+}

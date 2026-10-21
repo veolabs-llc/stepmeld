@@ -148,8 +148,32 @@ deferred the design, 2026-10-20; agreed as below).
   meet.
 - **Capabilities** are the words a Worker offers: those it detects
   (§6) and those its machine file adds.
-- **No arithmetic.** A deployment that wants to match on size says so
-  in a word (`vram-24g`). The engine compares strings, as it does tags.
+- **No arithmetic in the engine.** A deployment that wants to match on
+  size says so in a word (`vram-24g`). The engine compares strings, as
+  it does tags.
+- **Needs computed from the request** (Max, 2026-10-21). A
+  StepDefinition's `needs` are the same for every Run, and the work's
+  size is not: a job over twice the images needs twice the memory. So
+  the deployment file may say a program's needs as formulas over the
+  request, `[programs.<name>.needs]` (`stepmeld-config`'s `needs.rs`):
+  its Inputs, its Parameters, the StepDefinition's own needs. They are
+  a heuristic, retuned when a job runs out of memory, so they live in
+  the deployment rather than in the program or its image, and any
+  Worker computes them without running anything (`stepmeld needs
+  <run-dir>` prints them). A Value is still opaque to the engine; a
+  formula that reads one of its fields is the deployment's choice, at
+  the edge. What the formulas give is laid over the StepDefinition's
+  needs, and that is what the Performer is handed and the program reads
+  in `request.json`.
+- **A Worker asks its Performer whether the work fits** before it takes
+  an order (`Performer::fits`). A Docker Performer holds `memory_gib`,
+  `gpus` and `vram_gib` to what the machine has; a Batch Performer buys
+  what it needs, choosing the ladder rung and the queue (`capacity`),
+  and refuses at its start what no rung or GPU holds. Work that does
+  not fit is refused in words when the order is pinned to that Worker,
+  and left for a Worker that holds it when the order is open (Max,
+  2026-10-21: it waits). Needs that cannot be computed refuse the
+  order.
 
 ## 8. Configuration
 

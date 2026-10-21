@@ -14,6 +14,7 @@ stepmeld-core.workspace = true
 stepmeld-sqlite.workspace = true
 stepmeld-local.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 # The deployment and machine files (MIT OR Apache-2.0).
 toml = "0.9"
 
