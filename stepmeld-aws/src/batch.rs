@@ -24,7 +24,9 @@
 //! What a Step needs (`needs`): `memory_gib`, `vcpus`, `capacity`. A
 //! need above the top of the ladder is refused in words. Secrets reach a
 //! Batch job through its job definition, never through a submit: a
-//! submit's variables can be read back from the job's description.
+//! submit's variables can be read back from the job's description. A
+//! program's `env` (`[programs.<name>] env`, no secret) is sent with the
+//! submit, beside `STEPMELD_RUN`.
 
 use crate::block_on;
 use std::collections::BTreeMap;
@@ -203,6 +205,10 @@ pub struct BatchProgram {
     /// (GiB, vCPU) sizes, smallest first.
     #[serde(default)]
     pub ladder: Vec<(u64, u64)>,
+    /// Variables sent with each submit: the program's `env`, never a
+    /// secret.
+    #[serde(skip)]
+    pub env: BTreeMap<String, String>,
 }
 
 fn on_demand() -> String {
@@ -335,7 +341,7 @@ impl Performer for BatchPerformer {
             name: job_name,
             queue,
             definition: program.definition.clone(),
-            env: vec![(RUN_ENV.to_string(), format!("{}{handle}/", self.url))],
+            env: program.env.iter().map(|(k, v)| (k.clone(), v.clone())).chain([(RUN_ENV.to_string(), format!("{}{handle}/", self.url))]).collect(),
             size,
         };
         let job = self.jobs.submit(&spec)?;

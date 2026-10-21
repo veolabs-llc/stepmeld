@@ -168,7 +168,9 @@ today.
   configuration.
 - **Secrets** are named, with a kind: an environment variable or a file
   built in, Secrets Manager in `stepmeld-aws`. A program's
-  configuration lists the secrets it is given.
+  configuration lists the secrets it is given, and may give it
+  variables that are no secret (`env`; a Batch job is sent those with
+  its submit and takes its secrets from its job definition).
 - **An embedder** may hand stepmeld its configuration through a trait
   instead of files.
 - **`TRIPOD_*` names are renamed** `STEPMELD_*` (Max, 2026-10-20).

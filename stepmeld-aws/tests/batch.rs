@@ -19,6 +19,7 @@ fn program() -> BatchProgram {
         queues: BTreeMap::from([("on-demand".to_string(), "od-queue".to_string()), ("spot".to_string(), "spot-queue".to_string())]),
         capacity: "on-demand".into(),
         ladder: vec![(28, 4), (56, 8), (120, 16)],
+        env: BTreeMap::new(),
     }
 }
 
@@ -104,6 +105,18 @@ fn a_job_is_told_its_folder_and_observed_by_its_state_and_its_folder() {
         Observation::Ended { outcome } => assert!(outcome.state == RunState::Failed && outcome.reason.unwrap().contains("exit 3")),
         other => panic!("{other:?}"),
     }
+}
+
+/// A program's `env` goes with the submit, beside where its folder is.
+#[test]
+fn a_program_s_env_is_sent_with_the_submit() {
+    let (jobs, folders) = (Arc::new(MemoryJobs::new()), Arc::new(MemoryObjects::new()));
+    let mut typeset = program();
+    typeset.env = BTreeMap::from([("TYPESET_PAPER".to_string(), "a4".to_string())]);
+    let p = BatchPerformer::new("queue", jobs.clone(), folders, "s3://b/runs/", "runs/", BTreeMap::from([("typeset-program".to_string(), typeset)]));
+    let h = p.start(&request("wf/typeset/1", serde_json::json!({}))).unwrap();
+    let (_, spec) = jobs.submitted().pop().unwrap();
+    assert_eq!(spec.env, [("TYPESET_PAPER".to_string(), "a4".to_string()), (RUN_ENV.to_string(), format!("s3://b/runs/{h}/"))]);
 }
 
 #[test]
