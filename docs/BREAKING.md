@@ -9,6 +9,17 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A machine may make a container ready, and mount its own folders
+
+*Additive.* An image may name `before`, a command run on the machine
+first with the Run's folder appended (the container starts only if it
+succeeds; the start does not wait for it), and `volumes`, folders
+mounted with `-v`. A machine file's `[docker]` section (`before`,
+`volumes`, `env`) adds these to every container that machine runs: its
+`before` where the image names none, its folders after the image's, its
+variables beside the program's. `stepmeld_local::container_command` is
+the command a container's Run starts with.
+
 ## A machine runs one container at a time
 
 *Behaviour.* A Worker built from a machine file now runs at most one

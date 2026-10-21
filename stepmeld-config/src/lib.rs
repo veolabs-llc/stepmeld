@@ -42,6 +42,11 @@
 //!
 //! [programs]
 //! typeset-program = ["/opt/typeset/bin/typeset"]
+//!
+//! [docker]                        # added to every container this machine runs
+//! before = ["/opt/fonts/bin/warm"]    # run first, with the Run's folder appended
+//! volumes = ["/srv/fonts:/fonts:ro"]
+//! env = { FONT_DIR = "/fonts" }
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -216,6 +221,32 @@ pub struct MachineFile {
     /// the Run's folder is appended.
     #[serde(default)]
     pub programs: BTreeMap<String, Vec<String>>,
+    /// What this machine adds to every container it runs.
+    #[serde(default, skip_serializing_if = "DockerSection::is_empty")]
+    pub docker: DockerSection,
+}
+
+/// `[docker]`: what one machine adds to every image a program runs as
+/// here, beside the deployment's settings for it: what only this machine
+/// knows, such as where its cache is.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct DockerSection {
+    /// A command run first, with the Run's folder appended, for an image
+    /// that names none of its own (`Image::before`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before: Vec<String>,
+    /// Folders mounted, after the image's own (`Image::volumes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
+    /// Variables given, beside the program's (no secret).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+impl DockerSection {
+    pub fn is_empty(&self) -> bool {
+        self.before.is_empty() && self.volumes.is_empty() && self.env.is_empty()
+    }
 }
 
 /// `[worker]`.
@@ -580,17 +611,26 @@ fn command_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn
 /// signed in by the kind its `sign_in` names.
 fn docker_performer(w: &WorkerPlan, programs: &[ProgramPlan]) -> Result<Arc<dyn Performer>, Error> {
     let mut built = Vec::new();
+    let here = &w.machine.file.docker;
     for p in programs {
-        let image: Image = Value::Table(p.settings.clone())
+        let mut image: Image = Value::Table(p.settings.clone())
             .try_into()
             .map_err(|e: toml::de::Error| invalid(&w.deployment.path, format!("[programs.{}.docker]: {}", p.name, e.message())))?;
+        // what this machine adds: its own `before` where the image has
+        // none, its folders after the image's, its variables
+        if image.before.is_empty() {
+            image.before = here.before.clone();
+        }
+        image.volumes.extend(here.volumes.iter().cloned());
+        let mut env = here.env.clone();
+        env.extend(p.env.clone());
         if let Some(kind) = &image.sign_in {
             if !w.kinds.sign_ins.contains_key(kind) {
                 return Err(invalid(&w.deployment.path, format!("[programs.{}.docker] signs in by {kind:?}, which this build has no kind for", p.name)));
             }
         }
         built.push(Program {
-            env: p.env.clone(),
+            env,
             image: Some(image),
             ..Program::new(&p.name, Vec::new())
         });
@@ -729,6 +769,19 @@ mod tests {
         let bad = Deployment::parse("[programs.p.docker]\nimage = \"p:1\"\nsign_in = \"nowhere\"\n", None).unwrap();
         let err = Kinds::builtin().worker(&bad, &m, store.clone(), "h").err().unwrap().to_string();
         assert!(err.contains("\"nowhere\""), "{err}");
+        // what the machine adds to every container: read back as written
+        let dir = tempfile::tempdir().unwrap();
+        let mut here = Machine::read(&dir.path().join("m.toml")).unwrap();
+        here.file.docker = DockerSection {
+            before: vec!["/opt/warm".into()],
+            volumes: vec!["/cache:/objects:ro".into()],
+            env: BTreeMap::from([("CACHE".to_string(), "/objects".to_string())]),
+        };
+        here.save().unwrap();
+        let text = std::fs::read_to_string(&here.path).unwrap();
+        assert!(text.contains("[docker]") && text.contains("before = [\"/opt/warm\"]"), "{text}");
+        assert_eq!(Machine::read(&here.path).unwrap().file.docker, here.file.docker);
+        assert!(Kinds::builtin().worker(&d, &here, store.clone(), "h").is_ok());
         let typo = Deployment::parse("[programs.p.docker]\nimgae = \"p:1\"\n", None).unwrap();
         assert!(Kinds::builtin().worker(&typo, &m, store, "h").is_err(), "an image is named");
     }

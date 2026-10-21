@@ -163,7 +163,10 @@ today.
   user's configuration folder (my choice of names).
 - **The machine file** belongs to one machine: its Worker's name (the
   host name by default), where Runs keep their files, the command for
-  each program it runs as a command, capabilities it adds, and slots.
+  each program it runs as a command, capabilities it adds, slots, and
+  what it adds to every container it runs (`[docker]`: a command run
+  first on the Run's folder, folders mounted, variables), such as a
+  cache only that machine has.
   `stepmeld worker program set` writes it. The SQLite Worker store of
   2026-10-17 retires.
 - **A StepDefinition says only what does its work** (its program) and
