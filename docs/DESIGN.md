@@ -63,7 +63,7 @@ recipes; never any values) and what exists once a workflow is minted
 |---|---|
 | **Library** | The WorkflowDefinitions and StepDefinitions available for composing and running. Running never writes to it. |
 | **StepDefinition** | A verb: its InputDefinitions, ParameterDefinitions and OutputDefinitions, and the program that does its work, by name. Which command runs that program is each Worker's to say (`docs/ORCHESTRATOR-WORKER.md` §4); the engine never runs it itself. |
-| **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Versioned, immutable. It declares no inputs or outputs of its own (§5.3). |
+| **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Identified by name and version; putting one under a name and version already held replaces it in place (every store, and `stepmeld library add`, do). It declares no inputs or outputs of its own (§5.3). |
 | **Binding** | A connection from one named step's Output to another named step's Input, optionally guarded. The only structure in a recipe; there is no step order. |
 | **InputDefinition** | A name, a tag, whether required. |
 | **ParameterDefinition** | The same, plus a default. |
@@ -85,7 +85,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **Value** | An opaque blob the engine never reads, usually a reference into a store. Compared for equality. |
 | **Run** | One execution of a Step: its Inputs and Parameters as resolved, its Performer and placement, its handle, its progress, its Outcome, its metrics. Append-only: a retake is a new Run. A stored run (§8) is the durable trace of one. |
 | **Gate** | A Step's go/no-go: the conjunction of its Predicates (§5.5). Derived each time the engine looks. |
-| **Status** | Derived, never stored. Step: not ready, ready, running, waiting on a person (with the Predicate that is closed), succeeded, failed, skipped, stale. Workflow: follows from its Steps. |
+| **Status** | Derived, never stored. Step: not ready, ready, running, waiting (with its reason: the Workflow not started, an Input, a Parameter, a go, a placement, no Performer offering it, a confirmation, a person's completion), succeeded, failed, canceled, skipped, stale. Workflow: follows from its Steps. |
 | **Stale** | A succeeded Step whose Inputs or Parameters now differ from its current Run's record (§5.7). |
 
 ### 3.3 Execution side
@@ -99,7 +99,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **Outcome** | How a Run ended: succeeded, failed, canceled or lost, with a class, a reason, a Summary and, on success, the Outputs. Refused is a start that never ran. "Could not be asked" is never an Outcome. |
 | **Summary** | The Performer's account of what it did: a headline and opaque details. |
 | **Actor** | Who is responsible for a decision: a person, an agent, or a Policy (which names the recipe version it came from). On every record. Max: the label may yet change. |
-| **Command** | What an Actor issues: create, set, start, approve, retry, skip, cancel, complete. With Performer reports, the engine's only input. |
+| **Command** | What an Actor issues: create, start-workflow, set, start (a first start, a retake or a rerun), place, confirm (a placement the Policy asks about), set-policy, skip, cancel, complete. With Performer reports, the engine's only input. |
 | **History** | The append-only record of Commands, Placements, progress and Outcomes, each with its Actor and time. Not "events": that word is kept for an external signal, should one be needed. |
 | **StateStore** | The engine's persistence: read, conditional write, append, list, and a lease per Workflow. SQLite first; a server later. |
 | **Orchestrator** | A role: advances Workflows (Gates, minting, placement, applying what comes back). Any machine with the shared store can play it (`docs/ORCHESTRATOR-WORKER.md`). |
@@ -176,7 +176,9 @@ estimate(step)           -> optional: cost or duration, changing nothing
   Final; a lost Run is retaken as a new Run, never revived.
 - A running report may carry an **attention** flag with a reason
   ("blocked inside: upload failed"; "quota exceeded, waiting"), for a
-  Performer whose work needs a person without having ended.
+  Performer whose work needs a person without having ended. Today only
+  the nested-workflow Performer raises it: neither the run directory nor
+  an order's report carries one yet.
 - A Performer never reads or writes a Workflow, never retries, never
   holds for review. It reports; the engine and its Policies decide.
 - Capacity is the Performer's: if five Gates open and a GPU takes one
@@ -253,8 +255,8 @@ conformance suite beside it.
    the Gate's answer, and its reason is the first closed Predicate.
 6. **All rules are known ahead of time; there is no runtime referee.**
    Guards are fixed forms over step statuses and Decisions. Policies
-   are a menu: start automatically or on Command; on success accept or
-   hold for review; on failure stop or retake up to N times for named
+   are a menu: start automatically or on Command; on failure stop or
+   retake up to N times for named
    classes; on stale wait or rerun; placement fixed, chosen, or
    confirmed before a locality. Anything the engine cannot judge from
    what it holds becomes a Step whose Run is the judge: a Performer's
@@ -354,7 +356,10 @@ recipes. A user picks a WorkflowDefinition and sees Steps with reasons
 never meet a Binding. Authors meet Bindings, but the recipe format may
 infer the obvious ones (one Input below one Output of the same tag) as
 sugar compiled to explicit Bindings before anything runs. Defaults cover
-the rest: start automatically, place on this machine, stop on failure.
+the rest: start automatically, place on the one Worker that offers the
+step (where several do, a person chooses one or the pool `any`;
+`docs/PLACEMENT.md` §11), stop on failure. Review is a person's Step
+producing a Decision, not a Policy.
 A simple recipe is a list of verbs.
 
 ## 10. Prior art
@@ -444,8 +449,10 @@ and its tests, and none contradicts the rules above.
   directory (§10a.11). A transport other than a shared store (a server)
   is still open. Placement on fleet machines and in the cloud:
   `docs/PLACEMENT.md` §11.
-- The exact fixed forms a Guard may take, and whether a numeric
-  engine-readable Output kind joins Decision for thresholds.
+- Whether a numeric engine-readable Output kind joins Decision for
+  thresholds. (The fixed forms a Guard may take are settled: a Decision
+  holds a word, a Step ended a given way, an Output is present, and
+  all, any or not of those.)
 
 ## 12. Next steps
 

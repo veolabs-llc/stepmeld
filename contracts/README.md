@@ -26,4 +26,7 @@ Step's work speak on one machine, is `run-directory.v1.md`; the four
 
 Behavioural contracts (Commands, Performer, StateStore) are described
 in `docs/DESIGN.md` §4 and held by the conformance suites in
-`stepmeld-core`. A change to a contract is expand, then contract.
+`stepmeld-core`. A change to a contract is expand, then contract,
+except while the test harness is reshaping the engine (Max,
+2026-10-17): the v1 contracts then change in place, each break recorded
+in `docs/BREAKING.md`, until one bump to v2.
