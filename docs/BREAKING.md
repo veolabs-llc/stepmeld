@@ -9,6 +9,26 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A canceled Batch job's program is stopped at the deadline
+
+*Behaviour, `stepmeld-aws` (`stepmeld-run`).* **Before:** `stepmeld-run`
+copied `cancel.json` down and nothing more. Batch's terminate at the
+deadline sent SIGTERM to the wrapper, not the program, so a program
+that did not watch `cancel.json` ran on to its end, published what it
+made and the job could end SUCCEEDED. **Now:** the wrapper keeps the
+cancel as a machine does. At the deadline it sends SIGTERM to the
+program's process group (the program and whatever it started), then
+SIGKILL ten seconds later (`STOP_GRACE`). It passes a SIGTERM of its own
+straight on. A program that ends after a cancel without an outcome of
+its own ends canceled. The program now runs in its own process group.
+
+**Who notices:** a program that ignored cancels in a Batch job is now
+stopped. One that stops cleanly on SIGTERM can still do so. `wrapped`
+keeps its signature; `wrapped_until` also takes the flag
+`stepmeld-run` sets on SIGTERM.
+
+**What to do:** rebuild the images that carry `stepmeld-run`.
+
 ## A container's `before` runs without the container's variables
 
 *Behaviour.* The shell that starts a container holds its variables for

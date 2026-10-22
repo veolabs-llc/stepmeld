@@ -4,12 +4,28 @@
 //! the program (in `STEPMELD_RUN_DIR`, else a temporary folder), runs
 //! the program on it as stepmeld runs any program, and keeps the S3
 //! folder up to date until the program's outcome is there. Its exit
-//! code is the program's.
+//! code is the program's. A SIGTERM (Batch terminating the job) is
+//! passed on to the program, which is killed if it has not ended a
+//! little later.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+static TERM: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn on_term(_: libc::c_int) {
+    TERM.store(true, Ordering::SeqCst);
+}
+
 fn main() {
+    #[cfg(unix)]
+    // SAFETY: the handler only stores to an atomic
+    unsafe {
+        libc::signal(libc::SIGTERM, on_term as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_term as *const () as libc::sighandler_t);
+    }
     let program: Vec<String> = std::env::args().skip(1).collect();
     let url = std::env::var(stepmeld_aws::batch::RUN_ENV).unwrap_or_default();
     let Some((bucket, prefix)) = stepmeld_aws::s3_url(&url) else {
@@ -25,7 +41,7 @@ fn main() {
         endpoint: std::env::var("STEPMELD_S3_ENDPOINT").ok(),
     };
     let folders = stepmeld_aws::s3::S3Objects::new(settings.s3(), &bucket);
-    match stepmeld_aws::batch::wrapped(&folders, &prefix, &program, &local, Duration::from_secs(5)) {
+    match stepmeld_aws::batch::wrapped_until(&folders, &prefix, &program, &local, Duration::from_secs(5), &TERM) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
             eprintln!("stepmeld-run: {e}");
