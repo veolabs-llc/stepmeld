@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use stepmeld_aws::batch::{wrapped, BatchPerformer, BatchProgram, JobState, Jobs, MemoryJobs, RUN_ENV};
+use stepmeld_aws::batch::{wrapped, wrapped_until, BatchPerformer, BatchProgram, JobState, Jobs, MemoryJobs, RUN_ENV};
 use stepmeld_core::definition::Ref;
 use stepmeld_core::engine::{Observation, StartRequest};
 use stepmeld_core::objects::{Cond, MemoryObjects, Objects};
@@ -177,6 +177,72 @@ fn the_wrapper_runs_the_program_on_a_copy_of_the_folder() {
     let outcome: Outcome = serde_json::from_str(&get("outcome.json")).unwrap();
     assert_eq!(outcome.state, RunState::Succeeded);
     assert!(wrapped(&folders, "runs/none", &["true".into()], &dir.path().join("l2"), Duration::from_millis(20)).is_err(), "no request, no run");
+}
+
+/// A program that ignores a cancel is stopped at its deadline by the
+/// wrapper itself, with whatever it started, and the Run ends canceled:
+/// a terminate of the job reaches the wrapper, not the program.
+#[test]
+fn the_wrapper_stops_a_program_at_the_cancel_deadline() {
+    let folders = MemoryObjects::new();
+    folders
+        .put("runs/r2/request.json", serde_json::to_vec(&request("wf/typeset/2", serde_json::json!({}))).unwrap().as_slice(), Cond::None)
+        .unwrap();
+    folders
+        .put("runs/r2/cancel.json", br#"{"reason":"asked by person:ann","at":"2026-10-21T00:00:00Z","deadline":"2026-10-21T00:00:30Z"}"#, Cond::None)
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("published");
+    let script = dir.path().join("verb.sh");
+    // the program and a process of its own both run on past the cancel
+    std::fs::write(&script, format!("#!/bin/sh\n(sleep 3; touch '{}') &\nsleep 30\n", marker.display())).unwrap();
+    let began = std::time::Instant::now();
+    let code = wrapped(&folders, "runs/r2", &["sh".into(), script.display().to_string()], &dir.path().join("local"), Duration::from_millis(20)).unwrap();
+    assert!(began.elapsed() < Duration::from_secs(10), "stopped, not run to its end");
+    assert_ne!(code, 0);
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(!marker.exists(), "what the program started was stopped with it");
+    let outcome: Outcome = serde_json::from_slice(&folders.get("runs/r2/outcome.json").unwrap().unwrap().0).unwrap();
+    assert_eq!(outcome.state, RunState::Canceled);
+    assert!(outcome.reason.unwrap().starts_with("asked by person:ann"));
+}
+
+/// Before the deadline a cancel is a request: the program that stops on
+/// its own does so, and its own outcome stands.
+#[test]
+fn the_wrapper_leaves_a_program_its_grace() {
+    let folders = MemoryObjects::new();
+    folders
+        .put("runs/r3/request.json", serde_json::to_vec(&request("wf/typeset/3", serde_json::json!({}))).unwrap().as_slice(), Cond::None)
+        .unwrap();
+    folders.put("runs/r3/cancel.json", br#"{"reason":"enough","at":"2026-10-21T00:00:00Z","deadline":"2999-01-01T00:00:00Z"}"#, Cond::None).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("verb.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nrun=\"$1\"\nwhile [ ! -f \"$run/cancel.json\" ]; do sleep 0.02; done\necho '{\"state\":\"canceled\",\"class\":\"canceled\",\"reason\":\"cleaned up\",\"outputs\":{}}' > \"$run/outcome.json\"\n",
+    )
+    .unwrap();
+    let code = wrapped(&folders, "runs/r3", &["sh".into(), script.display().to_string()], &dir.path().join("local"), Duration::from_millis(20)).unwrap();
+    assert_eq!(code, 0);
+    let outcome: Outcome = serde_json::from_slice(&folders.get("runs/r3/outcome.json").unwrap().unwrap().0).unwrap();
+    assert_eq!(outcome.reason.as_deref(), Some("cleaned up"));
+}
+
+/// A SIGTERM to the wrapper (Batch terminating the job) is passed on.
+#[test]
+fn the_wrapper_passes_a_terminate_on() {
+    let folders = MemoryObjects::new();
+    folders
+        .put("runs/r4/request.json", serde_json::to_vec(&request("wf/typeset/4", serde_json::json!({}))).unwrap().as_slice(), Cond::None)
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let term = std::sync::atomic::AtomicBool::new(true);
+    let began = std::time::Instant::now();
+    let code = wrapped_until(&folders, "runs/r4", &["sh".into(), "-c".into(), "sleep 30".into()], &dir.path().join("local"), Duration::from_millis(20), &term).unwrap();
+    assert!(began.elapsed() < Duration::from_secs(10));
+    assert_ne!(code, 0);
+    assert!(folders.get("runs/r4/outcome.json").unwrap().is_none(), "no cancel asked: the Performer judges the job");
 }
 
 /// Two cloud Workers whose programs run as Batch jobs. The first

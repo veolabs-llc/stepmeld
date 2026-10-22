@@ -2136,6 +2136,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-smithy-http-client",
  "base64 0.22.1",
+ "libc",
  "serde",
  "serde_json",
  "stepmeld-config",

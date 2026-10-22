@@ -32,8 +32,9 @@
 use crate::block_on;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use stepmeld_core::definition::Locality;
 use stepmeld_core::engine::{Observation, StartRequest};
 use stepmeld_core::objects::{Cond, Objects};
@@ -459,13 +460,31 @@ impl Performer for BatchPerformer {
 /// object store.
 const UP: [&str; 4] = ["progress.json", "log.txt", "state.json", "resumable"];
 
+/// How long a program told to stop (SIGTERM) has before it is killed.
+/// Under Batch's default stop timeout (30 s), after which the container
+/// itself is killed.
+pub const STOP_GRACE: Duration = Duration::from_secs(10);
+
 /// Run `program` (its executable and leading arguments) on a local copy
 /// of the Run's folder kept at `prefix` in `folders`: what `stepmeld-run`
 /// does inside a Batch job. The request (and any state from an earlier
 /// attempt) comes down; progress, log, state and, last, the outcome go
 /// up every `every` and at the end; a cancel asked comes down. The
 /// program's exit code.
+///
+/// A cancel is kept as on a machine: the program has until the
+/// deadline in `cancel.json` to end on its own; then it is told to stop
+/// (SIGTERM to its process group) and, [`STOP_GRACE`] later, killed. A
+/// program gone after a cancel without an outcome of its own ends
+/// canceled.
 pub fn wrapped(folders: &dyn Objects, prefix: &str, program: &[String], local: &Path, every: Duration) -> Result<i32, Error> {
+    wrapped_until(folders, prefix, program, local, every, &AtomicBool::new(false))
+}
+
+/// [`wrapped`], also stopping the program as soon as `term` is set:
+/// `stepmeld-run` sets it on SIGTERM, which Batch sends the job's first
+/// process (the wrapper, not the program) when the job is terminated.
+pub fn wrapped_until(folders: &dyn Objects, prefix: &str, program: &[String], local: &Path, every: Duration, term: &AtomicBool) -> Result<i32, Error> {
     let prefix = if prefix.ends_with('/') { prefix.to_string() } else { format!("{prefix}/") };
     std::fs::create_dir_all(local).map_err(|e| Error::Refused(format!("cannot make {}: {e}", local.display())))?;
     for file in ["request.json", "state.json", "resumable"] {
@@ -479,13 +498,12 @@ pub fn wrapped(folders: &dyn Objects, prefix: &str, program: &[String], local: &
     let (exe, args) = program.split_first().ok_or_else(|| Error::Refused("stepmeld-run needs the program to run".into()))?;
     let log = std::fs::OpenOptions::new().create(true).append(true).open(local.join("log.txt")).map_err(|e| Error::Refused(e.to_string()))?;
     let err = log.try_clone().map_err(|e| Error::Refused(e.to_string()))?;
-    let mut child = std::process::Command::new(exe)
-        .args(args)
-        .arg(local)
-        .stdout(std::process::Stdio::from(log))
-        .stderr(std::process::Stdio::from(err))
-        .spawn()
-        .map_err(|e| Error::Refused(format!("cannot run {exe}: {e}")))?;
+    let mut command = std::process::Command::new(exe);
+    command.args(args).arg(local).stdout(std::process::Stdio::from(log)).stderr(std::process::Stdio::from(err));
+    // its own process group, so a stop reaches what it started too
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command.spawn().map_err(|e| Error::Refused(format!("cannot run {exe}: {e}")))?;
     let mut sent: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
     let sync = |sent: &mut BTreeMap<&'static str, Vec<u8>>| -> Result<(), Error> {
         for file in UP {
@@ -503,18 +521,70 @@ pub fn wrapped(folders: &dyn Objects, prefix: &str, program: &[String], local: &
         }
         Ok(())
     };
+    // the program is watched more often than the folder is synced
+    let tick = every.min(Duration::from_millis(200));
+    let mut synced: Option<Instant> = None;
+    let mut stopping: Option<Instant> = None;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| Error::Refused(e.to_string()))? {
             break status;
         }
-        // an object store that is out of reach for a moment is tried again next time
-        let _ = sync(&mut sent);
-        std::thread::sleep(every);
+        if synced.is_none_or(|at| at.elapsed() >= every) {
+            // an object store that is out of reach for a moment is tried again next time
+            let _ = sync(&mut sent);
+            synced = Some(Instant::now());
+        }
+        match stopping {
+            None if term.load(Ordering::SeqCst) || cancel_due(local) => {
+                stop(&mut child, false);
+                stopping = Some(Instant::now());
+            }
+            Some(at) if at.elapsed() >= STOP_GRACE => stop(&mut child, true),
+            _ => {}
+        }
+        std::thread::sleep(tick);
     };
     sync(&mut sent)?;
+    if !local.join("outcome.json").exists() {
+        if let Some(reason) = cancel_reason(local) {
+            let reason = if stopping.is_some() { format!("{reason} (stopped at the deadline)") } else { reason };
+            let _ = std::fs::write(local.join("outcome.json"), serde_json::to_vec_pretty(&Outcome::canceled(&reason)).unwrap());
+        }
+    }
     // an outcome the Performer wrote first (canceled at the deadline) stands
     if let Ok(body) = std::fs::read(local.join("outcome.json")) {
         folders.put(&format!("{prefix}outcome.json"), &body, Cond::IfNoneMatch)?;
     }
     Ok(status.code().unwrap_or(1))
+}
+
+/// The reason of the cancel asked in the local copy, if one was.
+fn cancel_reason(local: &Path) -> Option<String> {
+    let asked: serde_json::Value = serde_json::from_slice(&std::fs::read(local.join("cancel.json")).ok()?).ok()?;
+    Some(asked.get("reason").and_then(|r| r.as_str()).unwrap_or("canceled").to_string())
+}
+
+/// Whether a cancel was asked and its deadline has passed.
+fn cancel_due(local: &Path) -> bool {
+    let Some(asked) = std::fs::read(local.join("cancel.json")).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else {
+        return false;
+    };
+    let deadline = asked.get("deadline").and_then(|d| d.as_str()).unwrap_or_default();
+    let now = stepmeld_core::iso(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()));
+    deadline <= now.as_str()
+}
+
+/// Tell the program's process group to stop (SIGTERM), or kill it.
+fn stop(child: &mut std::process::Child, kill: bool) {
+    #[cfg(unix)]
+    {
+        let signal = if kill { libc::SIGKILL } else { libc::SIGTERM };
+        // SAFETY: a plain kill(2) on the group the child leads
+        unsafe { libc::kill(-(child.id() as libc::pid_t), signal) };
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = kill;
+        let _ = child.kill();
+    }
 }
