@@ -123,6 +123,11 @@
           },
           "label": {
             "type": "string"
+          },
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A named set this Parameter belongs to, for presentation only: a user interface shows the ungrouped Parameters first and folds each group away under its name. The engine never reads it."
           }
         }
       }

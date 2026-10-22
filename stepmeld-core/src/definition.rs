@@ -81,6 +81,11 @@ pub struct ParameterDefinition {
     pub default: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// A named set this Parameter belongs to, for presentation only: a
+    /// user interface shows the ungrouped Parameters first and folds each
+    /// group away under its name. The engine never reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

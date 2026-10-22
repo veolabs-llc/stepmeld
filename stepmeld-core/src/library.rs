@@ -117,6 +117,7 @@ impl Library {
                     required: p.required,
                     default: p.default.clone(),
                     label: p.label.clone(),
+                    group: p.group.clone(),
                 });
             }
             for o in &def.outputs {
