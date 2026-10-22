@@ -326,6 +326,29 @@ impl<O: Objects> StateStore for ObjectStore<O> {
     }
 
     fn remove(&self, id: &str) -> Result<(), Error> {
+        // its Runs' ids are `<id>/<step>/<n>`: the orders under that
+        // prefix, each checked by the Workflow its request names
+        let prefix = self.key(&self.order_doc(&format!("{id}/")));
+        let prefix = prefix.strip_suffix(".json").unwrap_or(&prefix).to_string();
+        let mut orders = Vec::new();
+        for k in self.objects.list(&prefix)? {
+            let Some((body, _)) = self.objects.get(&k)? else { continue };
+            let order: Order = serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("{k}: {e}")))?;
+            if order.request.workflow != id {
+                continue;
+            }
+            if !order.ended() {
+                return Err(crate::orders::live_order(id, &order.id));
+            }
+            orders.push((k, order.id));
+        }
+        for (k, order) in orders {
+            for (_, chunk) in self.chunks(&order)? {
+                self.objects.delete(&chunk)?;
+            }
+            self.objects.delete(&self.key(&self.open_key(&order)))?;
+            self.objects.delete(&k)?;
+        }
         self.objects.delete(&self.key(&format!("workflows/{id}.json")))?;
         for (_, _, k) in self.appends(id)? {
             self.objects.delete(&k)?;
@@ -543,6 +566,7 @@ mod tests {
     #[test]
     fn the_object_store_keeps_orders_as_the_book_says() {
         crate::orders::conformance::run(&ObjectStore::new(MemoryObjects::new(), "stepmeld/"));
+        crate::orders::conformance::removing(&ObjectStore::new(MemoryObjects::new(), "stepmeld/"));
     }
 
     #[test]

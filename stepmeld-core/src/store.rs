@@ -56,9 +56,12 @@ pub trait StateStore: Send + Sync {
         }
         Ok(out)
     }
-    /// Forget a Workflow: its document, its History and its lease. A
-    /// Workflow that is not there is nothing to do. The driver decides
-    /// whether one may go ([`crate::driver::Driver::remove`]).
+    /// Forget a Workflow: its document, its History and its lease, and
+    /// in a store that also keeps orders, the orders its Runs placed and
+    /// their logs. One with an order still live is refused in words,
+    /// before anything is forgotten. A Workflow that is not there is
+    /// nothing to do. The driver decides whether one may go
+    /// ([`crate::driver::Driver::remove`]).
     fn remove(&self, id: &str) -> Result<(), Error>;
     // ---- History ----
     /// Append, assigning each entry the next `seq` of its workflow.
@@ -160,6 +163,14 @@ impl StateStore for MemoryStore {
 
     fn remove(&self, id: &str) -> Result<(), Error> {
         let mut inner = self.inner.lock().unwrap();
+        if let Some(live) = inner.orders.iter().find(|o| o.request.workflow == id && !o.ended()) {
+            return Err(crate::orders::live_order(id, &live.id));
+        }
+        let gone: Vec<String> = inner.orders.iter().filter(|o| o.request.workflow == id).map(|o| o.id.clone()).collect();
+        inner.orders.retain(|o| o.request.workflow != id);
+        for o in gone {
+            inner.order_logs.remove(&o);
+        }
         inner.workflows.remove(id);
         inner.history.remove(id);
         inner.leases.remove(id);
@@ -400,5 +411,6 @@ mod tests {
     #[test]
     fn the_memory_store_keeps_orders_as_the_book_says() {
         crate::orders::conformance::run(&super::MemoryStore::new());
+        crate::orders::conformance::removing(&super::MemoryStore::new());
     }
 }

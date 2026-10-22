@@ -194,6 +194,28 @@ impl StateStore for SqliteStore {
     fn remove(&self, id: &str) -> Result<(), Error> {
         let mut conn = self.conn.lock().unwrap();
         let tx = write(&mut conn)?;
+        // its Runs' ids are `<id>/<step>/<n>`: the orders under that
+        // prefix, each checked by the Workflow its request names
+        let prefix = format!("{id}/");
+        let mine: Vec<(String, bool)> = {
+            let mut stmt = tx.prepare("SELECT id, doc, ended FROM orders WHERE substr(id, 1, length(?1)) = ?1").map_err(db)?;
+            let rows = stmt.query_map(params![prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0))).map_err(db)?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (order, text, ended) = row.map_err(db)?;
+                let held: Order = doc(&text, "an order")?;
+                if held.request.workflow == id {
+                    out.push((order, ended));
+                }
+            }
+            out
+        };
+        if let Some((live, _)) = mine.iter().find(|(_, ended)| !ended) {
+            return Err(stepmeld_core::orders::live_order(id, live));
+        }
+        for (order, _) in &mine {
+            tx.execute("DELETE FROM orders WHERE id = ?1", params![order]).map_err(db)?;
+        }
         tx.execute("DELETE FROM history WHERE workflow = ?1", params![id]).map_err(db)?;
         tx.execute("DELETE FROM leases WHERE workflow = ?1", params![id]).map_err(db)?;
         tx.execute("DELETE FROM workflows WHERE id = ?1", params![id]).map_err(db)?;
@@ -391,6 +413,7 @@ mod tests {
     #[test]
     fn the_sqlite_store_keeps_orders_as_the_book_says() {
         stepmeld_core::orders::conformance::run(&SqliteStore::in_memory().unwrap());
+        stepmeld_core::orders::conformance::removing(&SqliteStore::in_memory().unwrap());
     }
 
     /// A definition stored before a rule it now breaks (a StepDefinition
