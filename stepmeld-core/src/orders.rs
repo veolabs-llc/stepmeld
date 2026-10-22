@@ -239,6 +239,11 @@ impl Order {
 }
 
 /// The shared store's side of orders and Workers.
+/// The refusal of removing a Workflow while an order of its is live.
+pub fn live_order(workflow: &str, order: &str) -> Error {
+    Error::Refused(format!("{workflow} has an order still live ({order}): cancel it first, and let its Worker end it"))
+}
+
 pub trait OrderBook: Send + Sync {
     /// Publish a Worker, replacing what it published before.
     fn publish_worker(&self, face: &WorkerFace) -> Result<(), Error>;
@@ -850,6 +855,41 @@ pub mod conformance {
             handle: None,
             portable: false,
         }
+    }
+
+    /// Removing a Workflow takes the orders its Runs placed and their
+    /// logs, once none is live; another Workflow's stay.
+    pub fn removing(store: &dyn crate::store::SharedStore) {
+        let placed = |id: &str, workflow: &str| {
+            let mut o = order(id, "w1");
+            o.request.workflow = workflow.into();
+            store.place(&o).unwrap();
+            let c = claim("w1", "2026-10-17T00:05:00Z");
+            assert!(store.claim(id, None, &c).unwrap());
+            assert!(store.append_log(id, "w1", 0, "working\n").unwrap());
+        };
+        placed("gone/s/1", "gone");
+        placed("gone/s/2", "gone");
+        placed("gone~s-1/t/1", "gone~s-1");
+        placed("kept/s/1", "kept");
+        placed("gone-too/s/1", "gone-too");
+        let refused = store.remove("gone").unwrap_err().to_string();
+        assert!(refused.contains("still live"), "{refused}");
+        assert!(store.order("gone/s/1").unwrap().is_some(), "nothing is forgotten when one is live");
+        for id in ["gone/s/1", "gone/s/2"] {
+            store.report(id, "w1", &Report::ended("2026-10-17T00:04:00Z", Outcome::succeeded(BTreeMap::new()))).unwrap();
+        }
+        store.remove("gone").unwrap();
+        for id in ["gone/s/1", "gone/s/2"] {
+            assert!(store.order(id).unwrap().is_none(), "{id} went with its Workflow");
+            assert_eq!(store.log(id).unwrap(), "", "and its log");
+        }
+        for id in ["gone~s-1/t/1", "kept/s/1", "gone-too/s/1"] {
+            assert!(store.order(id).unwrap().is_some(), "{id} is another Workflow's");
+            assert_eq!(store.log(id).unwrap(), "working\n");
+        }
+        assert_eq!(store.open_orders("w1").unwrap().len(), 3, "the others are still open");
+        store.remove("nothing-here").unwrap();
     }
 
     pub fn run(book: &dyn OrderBook) {

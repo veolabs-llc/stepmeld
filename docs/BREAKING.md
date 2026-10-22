@@ -9,6 +9,21 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## Removing a Workflow takes its orders and their logs
+
+*Behaviour, every `StateStore` that keeps orders (memory, SQLite, the
+object store).* **Before:** `remove` forgot the Workflow, its History
+and its lease; the orders its Runs placed (`orders/`, `open/`) and their
+logs (`logs/`) stayed, and had to be removed by hand. **Now:** they go
+with it. A Workflow with an order that has not ended is refused in
+words, before anything is forgotten.
+
+**Who notices:** a store that removed a Workflow while an order of its
+was still live; nothing that removes finished Workflows.
+
+**What to do:** nothing. Orders left by earlier removals stay until
+removed by hand.
+
 ## A canceled Batch job's program is stopped at the deadline
 
 *Behaviour, `stepmeld-aws` (`stepmeld-run`).* **Before:** `stepmeld-run`

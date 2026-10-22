@@ -42,6 +42,8 @@ fn the_s3_store_conforms() {
     let store = ObjectStore::new(S3Objects::new(client(&fake.endpoint), "b"), "stepmeld/");
     stepmeld_core::store::conformance::run(&store);
     stepmeld_core::orders::conformance::run(&store);
+    let fresh = ObjectStore::new(S3Objects::new(client(&fake.endpoint), "b"), "removing/");
+    stepmeld_core::orders::conformance::removing(&fresh);
 }
 
 /// `stepmeld-run` as a Batch job runs it: told its folder by

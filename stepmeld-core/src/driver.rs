@@ -107,8 +107,10 @@ impl Driver {
     /// Forget a Workflow and the children its Runs made (`<id>~…`): what
     /// a person asks once it is over. One with a Run still live, or
     /// held under another driver's lease, is refused in words; cancel
-    /// it first, and tick. The Runs' files on the Performers' side stay
-    /// where they are: the engine never owned them.
+    /// it first, and tick. The orders its Runs placed and their logs go
+    /// with it (the store's [`StateStore::remove`]); the Runs' files on
+    /// the Performers' side stay where they are: the engine never owned
+    /// them.
     pub fn remove(&self, id: &str, now: &str, lease_until: &str) -> Result<Vec<String>, Error> {
         let lib = self.store.library()?;
         let (wf, _) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
