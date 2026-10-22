@@ -66,7 +66,7 @@ recipes; never any values) and what exists once a workflow is minted
 | **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Identified by name and version; putting one under a name and version already held replaces it in place (every store, and `stepmeld library add`, do). It declares no inputs or outputs of its own (§5.3). |
 | **Binding** | A connection from one named step's Output to another named step's Input, optionally guarded. The only structure in a recipe; there is no step order. |
 | **InputDefinition** | A name, a tag, whether required. |
-| **ParameterDefinition** | The same, plus a default. |
+| **ParameterDefinition** | The same, plus a default, and optionally a group: a name for presentation only (a UI shows the ungrouped first and folds each group away), never read by the engine. |
 | **OutputDefinition** | A name and a tag. A **Decision** is an OutputDefinition whose options are declared (`accept`, `revise`) and whose Value the engine may read. |
 | **Guard** | A condition on a Binding, over facts the engine holds: step statuses and Decisions. Composed from a few fixed forms; no expression language. |
 | **Policy** | Per-step rules from a fixed menu (§5.6). |

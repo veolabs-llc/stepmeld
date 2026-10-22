@@ -23,6 +23,7 @@
   "parameters": [
     {
       "default": 600,
+      "group": "print",
       "name": "dpi",
       "required": false,
       "tag": "integer"

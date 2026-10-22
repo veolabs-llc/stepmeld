@@ -40,6 +40,7 @@ fn verb(name: &str, inputs: &[(&str, &str)], params: &[(&str, &str, Option<Value
             required: false,
             default: dflt.clone(),
             label: None,
+            group: None,
         })
         .collect();
     d.outputs = outputs
