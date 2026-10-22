@@ -20,7 +20,12 @@ A StepDefinition names its program; the request carries that name
 (`program`), and the Worker runs the command it registered under it
 (`stepmeld worker program set <program> -- <command...>`), with the
 Run's directory appended as the last argument. Standard input is closed. Standard output and standard error
-both go to `log.txt`. One directory per Run, named from the Run's id;
+both go to `log.txt`, every line stamped: the helpers (`stepmeld.verb`,
+`stepmeld-verb`) stamp everything the program's process writes, at the
+file descriptors, so a library's own logging and a child process's
+output are stamped too, and a line that already carries a stamp keeps
+it; a program without them stamps its own lines. A line without a
+stamp (a program that does not) is shown as written. One directory per Run, named from the Run's id;
 asked to start the same Run again, the Performer starts nothing and
 returns the same handle.
 
@@ -35,7 +40,7 @@ returns the same handle.
 | `state.json` | program | when it has work elsewhere to pick back up; optional | the program's own: opaque |
 | `resumable` | program | beside `state.json`: empty, says the program can be started again | — |
 | `resumes` | Performer | how many times the program was started again | a count, as text |
-| `log.txt` | the program's output | throughout | text; one line per message, stamped in UTC by the helpers |
+| `log.txt` | the program's output, and the Performer's own lines | throughout | text; every line begins with its moment, `YYYY-MM-DDTHH:MM:SSZ ` (UTC), so a reader can show one clock per line |
 | `pid` | Performer | at each start | the process id, as text |
 
 Files another process may be reading (`progress.json`,
