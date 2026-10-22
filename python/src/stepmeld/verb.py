@@ -6,7 +6,8 @@ Performer (`stepmeld-local`).
       <run-dir>/progress.json   written as the work goes (optional)
       <run-dir>/outcome.json    written once, when the work ends
       <run-dir>/cancel.json     read: a cancel asked for, and its deadline
-      <run-dir>/log.txt         stdout and stderr, kept by the Performer
+      <run-dir>/log.txt         stdout and stderr, kept by the Performer;
+                                every line stamped in UTC (`main`)
 
 A verb whose work goes on elsewhere (a launcher following a job on a
 cloud queue) saves what it would need to pick the work back up with
@@ -26,7 +27,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import threading
 import traceback
 from pathlib import Path
 from typing import Any, Callable
@@ -165,13 +168,81 @@ def _now() -> str:
 Verb = Callable[[Run], None]
 
 
+_STAMPED = re.compile(rb"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ(?: |$)")
+
+
+def stamped(line: bytes) -> bytes:
+    """A line of output as the log keeps it: stamped with the moment
+    it was read, unless it already carries a stamp (`Run.log`'s)."""
+    return line if _STAMPED.match(line) else _now().encode() + b" " + line
+
+
+class _Stamper:
+    """Everything this process writes to stdout and stderr, at the file
+    descriptors (so a C library's logging, glog in COLMAP, and every
+    child process are covered too), stamped line by line on its way to
+    where stdout went before (the Run's `log.txt`). A log a reader
+    shows with one clock per line (contracts/run-directory.v1.md)."""
+
+    def __init__(self) -> None:
+        for f in (sys.stdout, sys.stderr):
+            f.flush()
+        self.out = os.dup(1)
+        read, write = os.pipe()
+        self.saved_err = os.dup(2)
+        os.dup2(write, 1)
+        os.dup2(write, 2)
+        os.close(write)
+        for f in (sys.stdout, sys.stderr):
+            try:
+                f.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+            except (AttributeError, ValueError):
+                pass
+        self.thread = threading.Thread(target=self._pump, args=(read,), daemon=True)
+        self.thread.start()
+
+    def _pump(self, read: int) -> None:
+        pending = b""
+        while chunk := os.read(read, 65536):
+            pending += chunk
+            *lines, pending = pending.split(b"\n")
+            if lines:
+                os.write(self.out, b"".join(stamped(l) + b"\n" for l in lines))
+        if pending:
+            os.write(self.out, stamped(pending) + b"\n")
+        os.close(read)
+
+    def stop(self) -> None:
+        """Put stdout and stderr back and let the last lines through. A
+        child process still holding the pipe is not waited for long."""
+        for f in (sys.stdout, sys.stderr):
+            try:
+                f.flush()
+            except (OSError, ValueError):
+                pass
+        os.dup2(self.out, 1)
+        os.dup2(self.saved_err, 2)
+        self.thread.join(timeout=5)
+        os.close(self.out)
+        os.close(self.saved_err)
+
+
 def main(verbs: dict[str, Verb], argv: list[str] | None = None) -> int:
     """Run the verb the request names. The last argument is the run
-    directory; anything before it is the program's own."""
+    directory; anything before it is the program's own. Every line
+    the program writes while it runs is stamped (`_Stamper`)."""
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         print("usage: <program> <run-dir>", file=sys.stderr)
         return 2
+    stamper = _Stamper()
+    try:
+        return _main(verbs, argv)
+    finally:
+        stamper.stop()
+
+
+def _main(verbs: dict[str, Verb], argv: list[str]) -> int:
     run = Run(argv[-1])
     verb = verbs.get(run.verb)
     if verb is None:

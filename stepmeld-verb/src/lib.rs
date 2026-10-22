@@ -43,18 +43,7 @@ pub fn refused(words: impl Into<String>) -> Box<dyn std::error::Error> {
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn now() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    stepmeld_core::iso(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))
 }
 
 fn write_atomic(path: &Path, doc: &Value) -> std::io::Result<()> {
@@ -191,11 +180,175 @@ impl Run {
 
 pub type Verb = fn(&mut Run) -> Result<()>;
 
+/// A line of output as the log keeps it: stamped with the moment it
+/// was read, unless it already carries a stamp ([`Run::log`]'s).
+pub fn stamped(line: &[u8]) -> Vec<u8> {
+    let has = line.len() >= 20
+        && line[..20].iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            19 => *c == b'Z',
+            _ => c.is_ascii_digit(),
+        })
+        && (line.len() == 20 || line[20] == b' ');
+    if has {
+        return line.to_vec();
+    }
+    let mut out = now().into_bytes();
+    out.push(b' ');
+    out.extend_from_slice(line);
+    out
+}
+
+/// Everything this process writes to stdout and stderr, at the file
+/// descriptors (so a C library's logging and every child process are
+/// covered too), stamped line by line on its way to where stdout went
+/// before (the Run's `log.txt`): a log a reader shows with one clock per
+/// line (contracts/run-directory.v1.md). Unix only; elsewhere output
+/// goes as written and only [`Run::log`]'s lines are stamped.
+#[cfg(unix)]
+mod stamper {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+
+    pub struct Stamper {
+        out: i32,
+        err: i32,
+        thread: std::thread::JoinHandle<()>,
+    }
+
+    /// One at a time: a `main` called while another runs in this
+    /// process (tests run in parallel) writes as it is.
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub fn start() -> Option<Stamper> {
+        use std::sync::atomic::Ordering;
+        if ON.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return None;
+        }
+        let stamper = open();
+        if stamper.is_none() {
+            ON.store(false, Ordering::SeqCst);
+        }
+        stamper
+    }
+
+    fn open() -> Option<Stamper> {
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        // SAFETY: plain descriptor calls; each result is checked
+        unsafe {
+            let mut fds = [0i32; 2];
+            if libc::pipe(fds.as_mut_ptr()) != 0 {
+                return None;
+            }
+            let (read, write) = (fds[0], fds[1]);
+            let out = libc::dup(1);
+            let err = libc::dup(2);
+            if out < 0 || err < 0 || libc::dup2(write, 1) < 0 || libc::dup2(write, 2) < 0 {
+                libc::close(read);
+                libc::close(write);
+                return None;
+            }
+            libc::close(write);
+            let mut reader = std::fs::File::from_raw_fd(read);
+            let mut sink = std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(out));
+            let thread = std::thread::spawn(move || {
+                let mut pending = Vec::new();
+                let mut buf = [0u8; 65536];
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    pending.extend_from_slice(&buf[..n]);
+                    let mut lines = Vec::new();
+                    while let Some(at) = pending.iter().position(|c| *c == b'\n') {
+                        let line: Vec<u8> = pending.drain(..=at).collect();
+                        lines.extend(super::stamped(&line[..line.len() - 1]));
+                        lines.push(b'\n');
+                    }
+                    if !lines.is_empty() {
+                        let _ = sink.write_all(&lines);
+                    }
+                }
+                if !pending.is_empty() {
+                    let mut last = super::stamped(&pending);
+                    last.push(b'\n');
+                    let _ = sink.write_all(&last);
+                }
+            });
+            Some(Stamper { out, err, thread })
+        }
+    }
+
+    impl Stamper {
+        /// Put stdout and stderr back and let the last lines through. A
+        /// child process still holding the pipe is not waited for long.
+        pub fn stop(self) {
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+            let _ = std::io::stderr().flush();
+            // SAFETY: the descriptors saved in `start`
+            unsafe {
+                libc::dup2(self.out, 1);
+                libc::dup2(self.err, 2);
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !self.thread.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if self.thread.is_finished() {
+                let _ = self.thread.join();
+            }
+            // SAFETY: as above; the thread is done with `out` or is left
+            unsafe {
+                libc::close(self.err);
+            }
+            ON.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 /// Run the verb the request names on the run directory the last
-/// argument names; the exit status for `main`.
+/// argument names; the exit status for `main`. Every line the program
+/// writes while it runs is stamped (unix).
 pub fn main(verbs: &[(&str, Verb)], args: &[String]) -> i32 {
-    let Some(dir) = args.last() else {
+    if args.is_empty() {
         eprintln!("usage: <program> <run-dir>");
+        return 2;
+    }
+    let stamping = stamp_output();
+    let code = run_main(verbs, args);
+    drop(stamping);
+    code
+}
+
+/// Stamp every line this process writes to stdout and stderr until
+/// the guard is dropped, as [`main`] does for a verb: for a command a
+/// Performer runs that is not a verb (one run before the program).
+/// Unix only; None elsewhere, or while another guard is held.
+pub fn stamp_output() -> Option<Stamping> {
+    #[cfg(unix)]
+    return stamper::start().map(|s| Stamping(Some(s)));
+    #[cfg(not(unix))]
+    None
+}
+
+/// Output stamped while held: see [`stamp_output`].
+pub struct Stamping(#[cfg(unix)] Option<stamper::Stamper>);
+
+impl Drop for Stamping {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(s) = self.0.take() {
+            s.stop();
+        }
+    }
+}
+
+fn run_main(verbs: &[(&str, Verb)], args: &[String]) -> i32 {
+    let Some(dir) = args.last() else {
         return 2;
     };
     let mut run = match Run::open(Path::new(dir)) {
@@ -235,6 +388,61 @@ pub fn main(verbs: &[(&str, Verb)], args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamp_is_added_once() {
+        let line = stamped(b"I20261022 13:02:04.090663 87 image.cc:377] glog");
+        assert_eq!(line[19], b'Z');
+        assert_eq!(&line[21..], b"I20261022 13:02:04.090663 87 image.cc:377] glog");
+        assert_eq!(stamped(&line), line);
+        assert_eq!(stamped(b"2026-10-22T13:02:04Z"), b"2026-10-22T13:02:04Z");
+        assert_ne!(stamped(b"2026-10-22T13:02:04Zx"), b"2026-10-22T13:02:04Zx");
+    }
+
+    /// Run as the Performer runs it: this test binary again, its stdout
+    /// and stderr a file. A print, a raw write to fd 2 (a C library's
+    /// logging), a child process and `run.log` land one stamp each.
+    #[cfg(unix)]
+    #[test]
+    fn every_line_the_program_writes_is_stamped_once() {
+        const CHILD: &str = "STEPMELD_VERB_STAMP_CHILD";
+        if let Ok(dir) = std::env::var(CHILD) {
+            fn talk(run: &mut Run) -> Result<()> {
+                // the harness's own `test ... ` has no newline yet
+                println!();
+                println!("== begin");
+                println!("a print");
+                let glog = b"I20261022 13:02:04.090663 87 image.cc:377] glog\n";
+                unsafe { libc::write(2, glog.as_ptr().cast(), glog.len()) };
+                std::process::Command::new("sh").args(["-c", "echo a child"]).status()?;
+                run.log("said twice\nby run.log");
+                print!("no newline at the end");
+                run.succeed(BTreeMap::new(), "talked", None)
+            }
+            main(&[("count-lines", talk)], &[dir]);
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        request(tmp.path(), "count-lines");
+        let log = std::fs::File::create(tmp.path().join("log.txt")).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::every_line_the_program_writes_is_stamped_once", "--nocapture", "--test-threads=1"])
+            .env(CHILD, tmp.path())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let text = std::fs::read_to_string(tmp.path().join("log.txt")).unwrap();
+        let lines: Vec<&str> = text.lines().skip_while(|l| !l.ends_with("== begin")).take(7).collect();
+        assert!(lines.iter().all(|l| stamped(l.as_bytes()) == l.as_bytes() && stamped(&l.as_bytes()[21..]) != l.as_bytes()[21..]), "{text}");
+        let bodies: Vec<&str> = lines.iter().map(|l| &l[21..]).collect();
+        assert_eq!(
+            bodies,
+            ["== begin", "a print", "I20261022 13:02:04.090663 87 image.cc:377] glog", "a child", "said twice", "by run.log", "no newline at the end"],
+            "{text}"
+        );
+    }
     use stepmeld_core::definition::{OutputDefinition, Ref};
 
     fn request(dir: &Path, verb: &str) {

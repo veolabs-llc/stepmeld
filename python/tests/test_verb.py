@@ -159,3 +159,39 @@ def test_a_verb_runs_without_jsonschema():
     code = "import sys; sys.modules['jsonschema'] = None; import stepmeld.verb; print('ok')"
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert done.returncode == 0 and done.stdout.strip() == "ok", done.stderr
+
+
+def test_every_line_the_program_writes_is_stamped_once(tmp_path):
+    """Run as the Performer runs it: a program whose stdout and stderr
+    are the log. Its prints, a raw write to fd 2 (a C library's
+    logging), a child process and `run.log` all land one stamp each."""
+    import re
+    import subprocess
+    import sys
+    import textwrap
+
+    d = request(tmp_path / "run")
+    program = tmp_path / "prog.py"
+    program.write_text(textwrap.dedent("""
+        import os, subprocess, sys
+        from stepmeld import verb
+
+        def count(run):
+            print("a print")
+            os.write(2, b"I20261022 13:02:04.090663 87 image.cc:377] glog\\n")
+            subprocess.run([sys.executable, "-c", "print('a child')"], check=True)
+            run.log("said twice\\nby run.log")
+            sys.stdout.write("no newline at the end")
+            run.succeed({"counts": []})
+
+        sys.exit(verb.main({"count-lines": count}))
+    """))
+    with open(d / "log.txt", "w") as log:
+        code = subprocess.run([sys.executable, str(program), str(d)], stdout=log, stderr=log).returncode
+    assert code == 0
+    lines = (d / "log.txt").read_text().splitlines()
+    stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ "
+    assert all(re.match(stamp, l) for l in lines), lines
+    assert not any(re.match(stamp + stamp, l) for l in lines), lines
+    bodies = [l[21:] for l in lines]
+    assert bodies == ["a print", "I20261022 13:02:04.090663 87 image.cc:377] glog", "a child", "said twice", "by run.log", "no newline at the end"], bodies

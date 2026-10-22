@@ -124,7 +124,9 @@ pub type SignIn = std::sync::Arc<dyn Fn(&Image) -> Result<SignedIn, String> + Se
 /// the variables the `docker` client is given (each passed to the
 /// container by name with `-e`, so no value is on a command line).
 pub fn docker_run(image: &Image, container: &str, dir: &Path, env: &BTreeMap<String, String>, signed: &SignedIn) -> (Vec<String>, BTreeMap<String, String>) {
-    let mut argv: Vec<String> = ["docker", "run", "--rm", "--init", "--name", container].map(str::to_string).to_vec();
+    // --quiet: no pull progress, unstamped, in the Run's log; the
+    // Performer's own line names the image
+    let mut argv: Vec<String> = ["docker", "run", "--rm", "--init", "--quiet", "--name", container].map(str::to_string).to_vec();
     argv.extend(["-v".to_string(), format!("{}:{RUN_IN_CONTAINER}", dir.display())]);
     let mut vars = env.clone();
     vars.extend(signed.env.clone());
@@ -362,9 +364,17 @@ impl LocalPerformer {
         let folder = program.image.is_none().then_some(dir);
         let (exe, args) = command.split_first().ok_or_else(|| format!("{} has no command for program {}", self.name, program.name))?;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("log.txt")).map_err(|e| format!("cannot open the log: {e}"))?;
-        if resume {
+        {
+            // the Performer's own lines are stamped like the program's
+            // (contracts/run-directory.v1.md)
             use std::io::Write;
-            let _ = writeln!(&log, "== resumed by {} ({})", self.name, Self::read::<u32>(&dir.join("resumes")).unwrap_or(0));
+            let at = stepmeld_core::iso(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()));
+            if resume {
+                let _ = writeln!(&log, "{at} == resumed by {} ({})", self.name, Self::read::<u32>(&dir.join("resumes")).unwrap_or(0));
+            }
+            if let Some(image) = &program.image {
+                let _ = writeln!(&log, "{at} == {} runs {} in a container", self.name, image.reference);
+            }
         }
         let err = log.try_clone().map_err(|e| e.to_string())?;
         let child = Command::new(exe)
@@ -406,8 +416,14 @@ impl LocalPerformer {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
+    /// The log's last words, without the line's stamp.
     fn last_line(path: &Path) -> Option<String> {
-        std::fs::read_to_string(path).ok()?.lines().rev().find(|l| !l.trim().is_empty()).map(str::to_string)
+        let text = std::fs::read_to_string(path).ok()?;
+        let unstamped = |l: &str| match l.get(..20).and_then(stepmeld_core::secs) {
+            Some(_) => l[20..].trim_start().to_string(),
+            None => l.to_string(),
+        };
+        text.lines().map(unstamped).rev().find(|l| !l.trim().is_empty())
     }
 
     /// Whether the process a Run's `pid` file names is alive.
@@ -864,7 +880,7 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
         let (argv, vars) = docker_run(&image, "stepmeld-wf_s_1", Path::new("/runs/wf_s_1"), &env, &signed);
         assert_eq!(
             argv.join(" "),
-            "docker run --rm --init --name stepmeld-wf_s_1 -v /runs/wf_s_1:/stepmeld/run -e AWS_SESSION_TOKEN -e FONT_TOKEN --gpus 1 --shm-size 8g --pull always -v /cache:/cache:ro registry.example/typeset:3 typeset --fast /stepmeld/run"
+            "docker run --rm --init --quiet --name stepmeld-wf_s_1 -v /runs/wf_s_1:/stepmeld/run -e AWS_SESSION_TOKEN -e FONT_TOKEN --gpus 1 --shm-size 8g --pull always -v /cache:/cache:ro registry.example/typeset:3 typeset --fast /stepmeld/run"
         );
         assert!(!argv.iter().any(|a| a.contains("s3cret")), "no secret on the command line");
         assert_eq!(vars.len(), 2);
