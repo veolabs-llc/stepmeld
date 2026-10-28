@@ -37,9 +37,15 @@ impl SqliteStore {
         // rusqlite waits five seconds for another writer's lock; the
         // store's own transactions begin IMMEDIATE (`write`) so that the
         // wait happens at BEGIN, before any read, and never ends in a
-        // stale snapshot.
+        // stale snapshot. `synchronous = NORMAL` (SQLite's usual setting
+        // for WAL): a commit no longer waits on the disk, so writers hold
+        // the lock briefly; a power cut or OS crash may lose the last
+        // commits, never the file, and an app crash loses nothing (Max,
+        // 2026-10-28: on a slow WSL disk, fsync-per-commit let a
+        // writer wait out the five seconds; the 2026-10-23..27 nightlies).
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
              CREATE TABLE IF NOT EXISTS definitions (kind TEXT NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (kind, name, version));
              CREATE TABLE IF NOT EXISTS workflows (id TEXT PRIMARY KEY, version INTEGER NOT NULL, doc TEXT NOT NULL);
