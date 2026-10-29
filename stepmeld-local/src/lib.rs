@@ -416,6 +416,17 @@ impl LocalPerformer {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     }
 
+    /// A line of this Performer's own in the Run's log, stamped like the
+    /// program's (contracts/run-directory.v1.md).
+    fn note(&self, dir: &Path, words: &str) {
+        use std::io::Write;
+        let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("log.txt")) else {
+            return;
+        };
+        let at = stepmeld_core::iso(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()));
+        let _ = writeln!(&log, "{at} == {} {words}", self.name);
+    }
+
     /// The log's last words, without the line's stamp.
     fn last_line(path: &Path) -> Option<String> {
         let text = std::fs::read_to_string(path).ok()?;
@@ -529,7 +540,17 @@ impl Performer for LocalPerformer {
                     Some(s) if s.success() && declared.is_empty() => Outcome::succeeded(BTreeMap::new()),
                     Some(s) if s.success() => Outcome::failed("fault", &format!("the program exited 0 without writing outcome.json; it owed {declared:?}")),
                     Some(s) => Outcome::failed("exit", &format!("the program ended with {s}{gave_up}: {}", Self::last_line(&dir.join("log.txt")).unwrap_or_else(|| "(no output)".into()))),
-                    None => Outcome::lost(&format!("the process is gone and wrote no outcome ({not_resumed})")),
+                    None => {
+                        // not our child, so how it died is unknown here: the
+                        // log says what this Performer found, with the pid,
+                        // so a reader of the log alone (not the outcome)
+                        // sees why the Run ended, and can look the pid up
+                        // where the host keeps such things
+                        let pid = std::fs::read_to_string(dir.join("pid")).map(|p| p.trim().to_string()).unwrap_or_else(|_| "unknown".into());
+                        let why = format!("the process is gone and wrote no outcome ({not_resumed})");
+                        self.note(&dir, &format!("found the process (pid {pid}) gone with no outcome: {why}; the Run is lost"));
+                        Outcome::lost(&why)
+                    }
                 };
                 let _ = std::fs::write(dir.join("outcome.json"), serde_json::to_string_pretty(&outcome).unwrap());
                 Observation::Ended { outcome }
@@ -848,6 +869,47 @@ echo '{"job":"j-9"}' > "$1/state.json"; touch "$1/resumable"; echo "submitted j-
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// A Run whose process died while no Performer was watching (the
+    /// host restarted; the kernel took the process) is found lost by the
+    /// next Performer, and the Run's log says so, with the pid, so a
+    /// reader of the log alone learns why it ended and where to look.
+    #[test]
+    fn a_run_whose_process_died_unwatched_is_lost_and_its_log_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = performer(dir.path(), "echo working; sleep 30");
+        let h = p.start(&request("wf/s/1", &[])).unwrap();
+        let run = dir.path().join("runs").join(&h);
+        let pid = std::fs::read_to_string(run.join("pid")).unwrap().trim().to_string();
+        for _ in 0..200 {
+            if p.log(&h).is_some_and(|l| l.contains("working")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // the process dies behind the Performer's back, and the Performer
+        // that started it is gone too (its child reaped so no zombie
+        // answers for the pid)
+        let _ = Command::new("kill").args(["-KILL", &pid]).status();
+        if let Some(mut child) = p.children.lock().unwrap().remove(&h) {
+            let _ = child.wait();
+        }
+        drop(p);
+        let next = performer(dir.path(), "true");
+        match next.observe(&h) {
+            Observation::Ended { outcome } => {
+                assert_eq!(outcome.state, stepmeld_core::workflow::RunState::Lost, "{outcome:?}");
+                assert!(outcome.reason.as_deref().unwrap_or("").contains("the process is gone and wrote no outcome"), "{outcome:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+        let log = next.log(&h).unwrap();
+        let last = log.lines().last().unwrap();
+        assert!(last.contains(&format!("== local found the process (pid {pid}) gone with no outcome")), "{log}");
+        assert!(last.ends_with("the Run is lost"), "{last}");
+        assert!(stepmeld_core::secs(&last[..20]).is_some(), "stamped like every line: {last}");
+        assert!(log.contains("working"), "the program's own lines stay: {log}");
     }
 
     #[test]
