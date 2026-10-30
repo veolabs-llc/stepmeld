@@ -142,6 +142,34 @@ enum Cmd {
     },
     /// Forget a finished Workflow and the children its Runs made (cancel a live one first).
     Remove { workflow: String },
+    /// Edit a Workflow's own WorkflowDefinition: steps, Bindings, Guards, labels, the values a step starts from.
+    Edit {
+        workflow: String,
+        #[command(subcommand)]
+        what: EditCmd,
+    },
+    /// A Workflow's definition as one to keep in the Library, under a name and version: printed, or added with --add.
+    Definition {
+        workflow: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value_t = 1)]
+        version: u32,
+        #[arg(long)]
+        label: Option<String>,
+        /// Keep the Parameter values a person chose on this Workflow's Steps as the entries' own.
+        #[arg(long)]
+        values: bool,
+        /// Keep each Step's Policy where it differs from its verb's.
+        #[arg(long)]
+        policies: bool,
+        /// Keep placements on a Worker by name (the locality is kept either way).
+        #[arg(long)]
+        named_placements: bool,
+        /// Add it to the Library (replacing one of that name and version) and note on the Workflow that it was saved there.
+        #[arg(long)]
+        add: bool,
+    },
     /// Bring a Workflow made before each carried its own WorkflowDefinition up to date: the Library's definition it names is copied onto it. With no Workflow named, every one that needs it.
     Adopt { workflow: Option<String> },
     /// Orchestrate: advance every Workflow once; with --watch, keep going until nothing is running.
@@ -224,6 +252,72 @@ enum ProgramCmd {
     },
     /// Forget a program.
     Remove { program: String },
+}
+
+#[derive(Subcommand)]
+enum EditCmd {
+    /// Add a step: a use of a verb under a name. A name with a slash (`publish/extra`) is inside that nested step's definition, until it starts.
+    AddStep {
+        name: String,
+        /// The verb (a StepDefinition or WorkflowDefinition), by name.
+        #[arg(long)]
+        uses: String,
+        #[arg(long, default_value_t = 1)]
+        version: u32,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Remove a step and every Binding to or from it (cancel its live Run first).
+    RemoveStep { step: String },
+    /// Bind an Output to an Input (`step.port` each; tried after the Bindings already into that Input).
+    Bind {
+        from: String,
+        to: String,
+        /// A Guard, as JSON.
+        #[arg(long)]
+        guard: Option<String>,
+    },
+    /// Remove a Binding by its index in the definition.
+    Unbind {
+        index: usize,
+        /// The nested step whose definition holds it.
+        #[arg(long)]
+        within: Option<String>,
+    },
+    /// Try a Binding one place earlier (or, with --later, later) among those into the same Input.
+    MoveBinding {
+        index: usize,
+        #[arg(long)]
+        later: bool,
+        #[arg(long)]
+        within: Option<String>,
+    },
+    /// Set a Binding's Guard (as JSON), or clear it with --none.
+    Guard {
+        index: usize,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        none: bool,
+        #[arg(long)]
+        within: Option<String>,
+    },
+    /// Set a step's label, or clear it with no --label.
+    Relabel {
+        step: String,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Set the value a step starts from for one Parameter, or drop it with --none.
+    Override {
+        step: String,
+        #[arg(long)]
+        parameter: String,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long)]
+        none: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -586,6 +680,93 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Remove { workflow } => {
             let gone = driver.remove(workflow, &now, &until())?;
             println!("removed {}", gone.join(", "));
+        }
+        Cmd::Edit { workflow, what } => {
+            let json = |text: &str, what: &str| serde_json::from_str(text).map_err(|e| Error::Refused(format!("{what} is not JSON of the right shape: {e}")));
+            let (cmd, said) = match what {
+                EditCmd::AddStep { name, uses, version, label } => (
+                    Command::AddStep {
+                        name: name.clone(),
+                        uses: Ref::new(uses, *version),
+                        label: label.clone(),
+                    },
+                    format!("added step {name} ({uses} v{version})"),
+                ),
+                EditCmd::RemoveStep { step } => (Command::RemoveStep { step: step.clone() }, format!("removed step {step} and its bindings")),
+                EditCmd::Bind { from, to, guard } => (
+                    Command::Bind {
+                        from: stepmeld_core::definition::PortRef(from.clone()),
+                        to: stepmeld_core::definition::PortRef(to.clone()),
+                        guard: guard.as_deref().map(|g| json(g, "--guard")).transpose()?,
+                    },
+                    format!("bound {from} -> {to}"),
+                ),
+                EditCmd::Unbind { index, within } => (Command::Unbind { index: *index, within: within.clone() }, format!("unbound binding {index}")),
+                EditCmd::MoveBinding { index, later, within } => (
+                    Command::MoveBinding {
+                        index: *index,
+                        earlier: !later,
+                        within: within.clone(),
+                    },
+                    format!("binding {index} tried {}", if *later { "later" } else { "earlier" }),
+                ),
+                EditCmd::Guard { index, to, none, within } => {
+                    if to.is_some() == *none {
+                        return Err(Error::Refused("guard takes --to <json> or --none".into()));
+                    }
+                    (
+                        Command::SetGuard {
+                            index: *index,
+                            guard: to.as_deref().map(|g| json(g, "--to")).transpose()?,
+                            within: within.clone(),
+                        },
+                        format!("guard on binding {index} {}", if *none { "cleared" } else { "set" }),
+                    )
+                }
+                EditCmd::Relabel { step, label } => (Command::Relabel { step: step.clone(), label: label.clone() }, format!("{step} labelled {}", label.as_deref().unwrap_or("nothing"))),
+                EditCmd::Override { step, parameter, value: v, none } => {
+                    if v.is_some() == *none {
+                        return Err(Error::Refused("override takes --value or --none".into()));
+                    }
+                    (
+                        Command::SetOverride {
+                            step: step.clone(),
+                            parameter: parameter.clone(),
+                            value: v.as_deref().map(value),
+                        },
+                        format!("{step} starts {parameter} from {}", v.as_deref().unwrap_or("the verb's default")),
+                    )
+                }
+            };
+            driver.command(workflow, &cmd, &by, &now)?;
+            println!("{said}");
+        }
+        Cmd::Definition {
+            workflow,
+            name,
+            version,
+            label,
+            values,
+            policies,
+            named_placements,
+            add,
+        } => {
+            let lib = store.library()?;
+            let (wf, _) = store.get(workflow)?.ok_or_else(|| Error::Refused(format!("no workflow {workflow:?}")))?;
+            let keep = stepmeld_core::edit::Keep {
+                values: *values,
+                policies: *policies,
+                placements_by_name: *named_placements,
+            };
+            let def = stepmeld_core::edit::definition_of(&wf, &lib, name, *version, label.as_deref(), &keep);
+            lib.check_workflow(&def)?;
+            if *add {
+                store.put_workflow_definition(&def)?;
+                driver.command(workflow, &Command::Saved { definition: def.reference() }, &by, &now)?;
+                println!("added WorkflowDefinition {} to the library; {} was saved as it", def.reference(), wf.id);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&def).map_err(|e| Error::Protocol(e.to_string()))?);
+            }
         }
         Cmd::Adopt { workflow } => {
             let ids = match workflow {

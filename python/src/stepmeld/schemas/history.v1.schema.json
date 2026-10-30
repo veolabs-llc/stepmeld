@@ -54,7 +54,7 @@
         "run-ended",
         "progress",
         "attention"
-      ]
+      , "step-added", "step-removed", "bound", "unbound", "binding-moved", "guard-set", "relabeled", "override-set", "saved", "adopted"]
     },
     "detail": {}
   },

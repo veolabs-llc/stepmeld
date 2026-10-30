@@ -1260,3 +1260,299 @@ fn a_child_is_made_from_the_parents_copy() {
     assert_eq!(child_wf.from, Some(child.reference()));
     assert_eq!(child_wf.step_status(&child_wf.workflow_definition, "package"), StepStatus::Running);
 }
+
+/// A Workflow's own definition is edited by Commands: a step added and
+/// wired in while the Workflow runs, its record made as at creation;
+/// a Binding unmade lets go of the Value it fed; a step is not removed
+/// while its Run is live; every edit leaves a History entry that holds
+/// enough to undo it.
+#[test]
+fn a_workflow_is_edited_while_it_runs() {
+    let store = Arc::new(MemoryStore::new());
+    add_library(&store);
+    store.put_step(&verb("double", &[("x", "integer")], &[], &[("y", "integer")])).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["add", "double"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-1");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
+    rig.tick();
+
+    // a step added while add runs, then wired from add's sum
+    rig.command(Command::AddStep {
+        name: "double".into(),
+        uses: Ref::new("double", 1),
+        label: Some("Twice".into()),
+    })
+    .unwrap();
+    let wf = rig.wf();
+    assert_eq!(wf.workflow_definition.steps.len(), 2);
+    assert_eq!(wf.step("double").unwrap().label.as_deref(), Some("Twice"));
+    assert_eq!(rig.status("double"), StepStatus::Waiting(Waiting::Input { name: "x".into() }));
+    let taken = rig.command(Command::AddStep {
+        name: "double".into(),
+        uses: Ref::new("double", 1),
+        label: None,
+    });
+    assert!(matches!(taken, Err(Error::Refused(w)) if w.contains("already there")));
+    let unknown = rig.command(Command::AddStep {
+        name: "triple".into(),
+        uses: Ref::new("triple", 1),
+        label: None,
+    });
+    assert!(matches!(&unknown, Err(Error::Invalid(w)) if w.contains("not in the library")), "{unknown:?}");
+    rig.command(Command::Bind {
+        from: PortRef::new("add", "sum"),
+        to: PortRef::new("double", "x"),
+        guard: None,
+    })
+    .unwrap();
+    assert!(rig.wf().step("double").unwrap().inputs["x"].bound);
+    let tags = rig.command(Command::Bind {
+        from: PortRef::new("add", "sum"),
+        to: PortRef::new("double", "x"),
+        guard: None,
+    });
+    assert!(matches!(tags, Err(Error::Refused(w)) if w.contains("already feeds")));
+
+    // a running step is not removed; add finishes and double runs on its sum
+    let running = rig.command(Command::RemoveStep { step: "add".into() });
+    assert!(matches!(running, Err(Error::Refused(w)) if w.contains("running")));
+    local.finish(&rig.handle(&local, "add"), Outcome::succeeded(outs(&[("sum", 5.into())])));
+    let wf = rig.tick();
+    assert_eq!(wf.step("double").unwrap().inputs["x"].value, Some(5.into()));
+    assert_eq!(wf.step_status(&wf.workflow_definition, "double"), StepStatus::Running);
+    assert_eq!(local.started().last().unwrap().inputs["x"], Value::from(5));
+    local.finish(&rig.handle(&local, "double"), Outcome::succeeded(outs(&[("y", 10.into())])));
+    rig.tick();
+
+    // unbound: the Input lets go of what it was fed, and double is stale
+    rig.command(Command::Unbind { index: 0, within: None }).unwrap();
+    let wf = rig.wf();
+    let x = &wf.step("double").unwrap().inputs["x"];
+    assert!(!x.bound && x.value.is_none());
+    assert_eq!(wf.step_status(&wf.workflow_definition, "double"), StepStatus::Waiting(Waiting::Input { name: "x".into() }));
+    // a value set by hand keeps a wire out until it is cleared
+    rig.command(set("double", "x", 7.into())).unwrap();
+    assert_eq!(rig.status("double"), StepStatus::Stale);
+    let by_hand = rig.command(Command::Bind {
+        from: PortRef::new("add", "sum"),
+        to: PortRef::new("double", "x"),
+        guard: None,
+    });
+    assert!(matches!(by_hand, Err(Error::Refused(w)) if w.contains("set by hand")));
+
+    // a label, an override a Step not chosen by a person follows, a removal
+    rig.command(Command::Relabel { step: "double".into(), label: None }).unwrap();
+    assert_eq!(rig.wf().step("double").unwrap().label, None);
+    rig.command(Command::SetOverride {
+        step: "add".into(),
+        parameter: "beat-seconds".into(),
+        value: Some(4.into()),
+    })
+    .unwrap();
+    let p = rig.wf().step("add").unwrap().parameters["beat-seconds"].clone();
+    assert_eq!(p.value, Some(4.into()));
+    assert_eq!(p.chosen.unwrap().by, Actor::policy(stepmeld_core::engine::DEFINITION_RULE, "add"));
+    assert_eq!(rig.wf().workflow_definition.entry("add").unwrap().parameters["beat-seconds"], Value::from(4));
+    let no_such = rig.command(Command::SetOverride {
+        step: "add".into(),
+        parameter: "tempo".into(),
+        value: Some(1.into()),
+    });
+    assert!(matches!(no_such, Err(Error::Invalid(w)) if w.contains("does not have")));
+    rig.command(Command::RemoveStep { step: "double".into() }).unwrap();
+    let wf = rig.wf();
+    assert!(wf.step("double").is_err() && wf.workflow_definition.entry("double").is_none());
+
+    let kinds = rig.history_kinds();
+    for k in ["step-added", "bound", "unbound", "relabeled", "override-set", "step-removed"] {
+        assert!(kinds.iter().any(|x| x.starts_with(k)), "{k} in {kinds:?}");
+    }
+    let removed = store.history("wf-1").unwrap().into_iter().find(|e| e.kind == "step-removed").unwrap();
+    assert_eq!(removed.detail["entry"]["name"], "double");
+    assert!(removed.detail["record"].is_object(), "the record goes into the History, for an undo");
+}
+
+/// Bindings into one Input are alternatives in order; a Guard is set and
+/// cleared on one; both are edits a Workflow takes.
+#[test]
+fn alternatives_are_reordered_and_guarded() {
+    let store = Arc::new(MemoryStore::new());
+    report_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["typeset"]);
+    let rig = Rig::new(store.clone(), vec![local.clone()], "report", "wf-1");
+    let into_typeset = |wf: &Workflow| -> Vec<String> { wf.workflow_definition.bindings.iter().filter(|b| b.to == PortRef::new("typeset", "text")).map(|b| b.from.to_string()).collect() };
+    assert_eq!(into_typeset(&rig.wf()), ["revise.text", "draft.text"]);
+    let i = rig
+        .wf()
+        .workflow_definition
+        .bindings
+        .iter()
+        .position(|b| b.from == PortRef::new("draft", "text") && b.to == PortRef::new("typeset", "text"))
+        .unwrap();
+    rig.driver.command("wf-1", &Command::MoveBinding { index: i, earlier: true, within: None }, &max(), &now(2)).unwrap();
+    assert_eq!(into_typeset(&rig.wf()), ["draft.text", "revise.text"]);
+    let first = rig.driver.command("wf-1", &Command::MoveBinding { index: i - 1, earlier: true, within: None }, &max(), &now(3));
+    assert!(matches!(first, Err(Error::Refused(w)) if w.contains("already tried first")));
+    let guard = Guard::Status {
+        step: "review".into(),
+        is: "succeeded".into(),
+    };
+    // on revise's wire into typeset (a guard on draft's wire into review
+    // would make review depend on itself, which is refused)
+    rig.driver
+        .command(
+            "wf-1",
+            &Command::SetGuard {
+                index: i,
+                guard: Some(guard.clone()),
+                within: None,
+            },
+            &max(),
+            &now(4),
+        )
+        .unwrap();
+    assert_eq!(rig.wf().workflow_definition.bindings[i].guard, Some(guard));
+    let bad = rig.driver.command(
+        "wf-1",
+        &Command::SetGuard {
+            index: i,
+            guard: Some(Guard::Status {
+                step: "nobody".into(),
+                is: "succeeded".into(),
+            }),
+            within: None,
+        },
+        &max(),
+        &now(5),
+    );
+    assert!(matches!(bad, Err(Error::Invalid(w)) if w.contains("nobody")));
+}
+
+/// Inside a nested step's definition, the parent's copy is edited by
+/// path until that step starts; from then on its child is its own.
+#[test]
+fn a_nested_definition_is_edited_by_path_until_it_starts() {
+    let store = Arc::new(MemoryStore::new());
+    store.put_step(&verb("typeset", &[("notes", "notes")], &[], &[("document", "document")])).unwrap();
+    store.put_step(&verb("package", &[("document", "document")], &[], &[("bundle", "bundle")])).unwrap();
+    store.put_step(&verb("announce", &[("bundle", "bundle")], &[], &[])).unwrap();
+    let mut child = WorkflowDefinition::new("publish-document", 1);
+    child.steps = vec![entry("package", "package")];
+    store.put_workflow_definition(&child).unwrap();
+    let mut parent = WorkflowDefinition::new("release", 1);
+    parent.steps = vec![entry("typeset", "typeset"), entry("publish", "publish-document")];
+    parent.bindings = vec![bind("typeset.document", "publish.package.document")];
+    store.put_workflow_definition(&parent).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["typeset", "package", "announce"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "release", "parent-1");
+
+    rig.command(Command::AddStep {
+        name: "publish/announce".into(),
+        uses: Ref::new("announce", 1),
+        label: None,
+    })
+    .unwrap();
+    rig.command(Command::Bind {
+        from: PortRef::new("publish/package", "bundle"),
+        to: PortRef::new("publish/announce", "bundle"),
+        guard: None,
+    })
+    .unwrap();
+    let inner = rig.wf().workflow_definition.entry("publish").unwrap().definition.clone().unwrap();
+    assert_eq!(inner.steps.len(), 2);
+    assert_eq!(inner.bindings[0].to, PortRef::new("announce", "bundle"));
+    assert!(rig.wf().step("publish/announce").is_err(), "no record until the child exists");
+    let across = rig.command(Command::Bind {
+        from: PortRef::new("typeset", "document"),
+        to: PortRef::new("publish/announce", "bundle"),
+        guard: None,
+    });
+    assert!(matches!(across, Err(Error::Refused(w)) if w.contains("same WorkflowDefinition")));
+
+    // started: the child is made from the edited copy, and the path is closed
+    rig.command(set("typeset", "notes", "notes-1".into())).unwrap();
+    rig.tick();
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
+    rig.tick();
+    let child_id = rig.wf().step("publish").unwrap().latest().unwrap().handle.clone().unwrap();
+    let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
+    assert_eq!(child_wf.workflow_definition.steps.len(), 2);
+    let closed = rig.command(Command::RemoveStep { step: "publish/announce".into() });
+    assert!(matches!(&closed, Err(Error::Refused(w)) if w.contains(&child_id)), "{closed:?}");
+}
+
+/// A Workflow's definition saved to a Library: its steps and Bindings
+/// as they stand, and of its tuning what is kept; `Saved` re-points
+/// what it was made from.
+#[test]
+fn a_workflows_definition_is_saved_with_what_is_kept() {
+    use stepmeld_core::edit::{definition_of, Keep};
+    let store = Arc::new(MemoryStore::new());
+    add_library(&store);
+    store.put_step(&verb("double", &[("x", "integer")], &[], &[("y", "integer")])).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["add", "double"]);
+    let cloud = performer("cloud", Locality::Cloud, &["add", "double"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone(), cloud.clone()], "add-two", "wf-1");
+    rig.command(Command::AddStep {
+        name: "double".into(),
+        uses: Ref::new("double", 1),
+        label: None,
+    })
+    .unwrap();
+    rig.command(Command::Bind {
+        from: PortRef::new("add", "sum"),
+        to: PortRef::new("double", "x"),
+        guard: None,
+    })
+    .unwrap();
+    rig.command(param("add", "beat-seconds", 3.into())).unwrap();
+    rig.command(Command::SetPolicy {
+        step: "double".into(),
+        policy: Policy {
+            placement: PlacementPolicy {
+                performer: Some("cloud".into()),
+                locality: Some(Locality::Cloud),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let lib = store.library().unwrap();
+    let wf = rig.wf();
+
+    let bare = definition_of(&wf, &lib, "add-and-double", 1, Some("Add, then double"), &Keep::default());
+    assert_eq!((bare.name.as_str(), bare.version, bare.label.as_deref()), ("add-and-double", 1, Some("Add, then double")));
+    assert_eq!(bare.steps.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["add", "double"]);
+    assert_eq!(bare.bindings.len(), 1);
+    assert!(bare.entry("add").unwrap().parameters.is_empty(), "a person's value is not kept unless asked");
+    assert!(bare.entry("double").unwrap().policy.is_none());
+
+    let tuned = definition_of(
+        &wf,
+        &lib,
+        "add-and-double",
+        1,
+        None,
+        &Keep {
+            values: true,
+            policies: true,
+            placements_by_name: false,
+        },
+    );
+    assert_eq!(tuned.entry("add").unwrap().parameters["beat-seconds"], Value::from(3));
+    let policy = tuned.entry("double").unwrap().policy.clone().unwrap();
+    assert_eq!((policy.placement.performer, policy.placement.locality), (None, Some(Locality::Cloud)), "the locality stays, the machine's name goes");
+    lib.check_workflow(&tuned).unwrap();
+    store.put_workflow_definition(&tuned).unwrap();
+
+    rig.command(Command::Saved { definition: tuned.reference() }).unwrap();
+    assert_eq!(rig.wf().from, Some(Ref::new("add-and-double", 1)));
+    assert!(rig.history_kinds().iter().any(|k| k == "saved"));
+    // and a Workflow made from it starts as this one was tuned
+    rig.driver.create(&tuned.reference(), "wf-2", None, &max(), &now(9)).unwrap();
+    let (wf2, _) = store.get("wf-2").unwrap().unwrap();
+    assert_eq!(wf2.step("add").unwrap().parameters["beat-seconds"].value, Some(3.into()));
+    assert_eq!(wf2.step("double").unwrap().policy.placement.locality, Some(Locality::Cloud));
+}
