@@ -1,7 +1,7 @@
 //! The pure core: Commands and observations in, a changed Workflow and
 //! History entries out. No clock (time is passed in), no I/O.
 
-use crate::definition::{DoneBy, Locality, OutputDefinition, Policy, Ref, WorkflowDefinition, DECISION};
+use crate::definition::{DoneBy, Guard, Locality, OutputDefinition, Policy, PortRef, Ref, StepEntry, WorkflowDefinition, DECISION};
 use crate::history::Entry;
 use crate::library::Library;
 use crate::workflow::{Actor, Gate, Input, Outcome, Output, Parameter, PerformerFace, Placement, Progress, Run, RunState, Stamp, Step, StepStatus, Unplaced, Waiting, Workflow, WORKFLOW};
@@ -62,6 +62,72 @@ pub enum Command {
         step: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    // ---- the Workflow's own definition (`edit`) ----
+    /// A step added: a use of `uses` under `name`. A name with a slash
+    /// (`publish/extra`) is inside the nested definition that step
+    /// carries, until it starts.
+    AddStep {
+        name: String,
+        uses: Ref,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    /// A step and every Binding to or from it removed; its record goes
+    /// with it. Refused while its Run is live.
+    RemoveStep {
+        step: String,
+    },
+    /// A Binding from an Output to an Input, tried after those already
+    /// into that Input. Refused into an Input holding a value set by
+    /// hand.
+    Bind {
+        from: PortRef,
+        to: PortRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        guard: Option<Guard>,
+    },
+    /// A Binding removed, by its index in the definition (`within`: the
+    /// nested step whose definition holds it).
+    Unbind {
+        index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        within: Option<String>,
+    },
+    /// A Binding tried one place earlier or later among those into the
+    /// same Input.
+    MoveBinding {
+        index: usize,
+        earlier: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        within: Option<String>,
+    },
+    /// A Binding's Guard set, or cleared.
+    SetGuard {
+        index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        guard: Option<Guard>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        within: Option<String>,
+    },
+    /// A step's label in the definition; none clears it.
+    Relabel {
+        step: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    /// The value a step's use starts from for one Parameter, in the
+    /// definition; none drops it. A Step not chosen by a person follows.
+    SetOverride {
+        step: String,
+        parameter: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<Value>,
+    },
+    /// The Workflow's definition was saved to a Library under this name
+    /// and version: `from` now names it.
+    Saved {
+        definition: Ref,
     },
 }
 
@@ -148,72 +214,12 @@ fn stamp(at: &str, by: &Actor) -> Stamp {
 /// `started`: whether the Workflow has its go from the moment it exists
 /// (a nested one does; a root one waits for `Command::StartWorkflow`).
 pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&str>, by: &Actor, now: &str, started: bool) -> Result<(Workflow, Vec<Entry>), Error> {
+    // whole on its own: every nested definition copied in
+    let def = &lib.inlined(def);
     lib.check_workflow(def)?;
     let mut steps = BTreeMap::new();
     for entry in &def.steps {
-        let sdef = lib.step(&entry.step).ok_or_else(|| Error::Invalid(format!("{} is not in the library", entry.step)))?;
-        let inputs = sdef
-            .inputs
-            .iter()
-            .map(|i| {
-                (
-                    i.name.clone(),
-                    Input {
-                        tag: i.tag.clone(),
-                        required: i.required,
-                        bound: def.bindings_into(&entry.name, &i.name).next().is_some(),
-                        value: None,
-                    },
-                )
-            })
-            .collect();
-        let parameters = sdef
-            .parameters
-            .iter()
-            .map(|p| {
-                (
-                    p.name.clone(),
-                    Parameter {
-                        tag: p.tag.clone(),
-                        required: p.required,
-                        value: p.default.clone(),
-                        chosen: None,
-                    },
-                )
-            })
-            .collect();
-        let outputs = sdef
-            .outputs
-            .iter()
-            .map(|o| {
-                (
-                    o.name.clone(),
-                    Output {
-                        tag: o.tag.clone(),
-                        options: o.options.clone(),
-                        value: None,
-                    },
-                )
-            })
-            .collect();
-        steps.insert(
-            entry.name.clone(),
-            Step {
-                definition: entry.step.clone(),
-                done_by: sdef.done_by,
-                label: entry.label.clone().or(sdef.label.clone()),
-                inputs,
-                parameters,
-                outputs,
-                policy: sdef.policy.clone(),
-                go: None,
-                confirmed: None,
-                placement: None,
-                skipped: None,
-                offered: Vec::new(),
-                runs: Vec::new(),
-            },
-        );
+        steps.insert(entry.name.clone(), step_record(lib, def, entry, now)?);
     }
     let wf = Workflow {
         contract: WORKFLOW.to_string(),
@@ -233,12 +239,88 @@ pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&
     Ok((wf, entries))
 }
 
+/// A Step as a Workflow of `def` starts with for one entry: its slots
+/// empty, Inputs told whether a Binding feeds them, Parameters at the
+/// entry's values or the verb's defaults, the entry's Policy or the
+/// verb's.
+pub fn step_record(lib: &Library, def: &WorkflowDefinition, entry: &StepEntry, now: &str) -> Result<Step, Error> {
+    let sdef = lib.verb(entry).ok_or_else(|| Error::Invalid(format!("{} is not in the library", entry.step)))?;
+    let inputs = sdef
+        .inputs
+        .iter()
+        .map(|i| {
+            (
+                i.name.clone(),
+                Input {
+                    tag: i.tag.clone(),
+                    required: i.required,
+                    bound: def.bindings_into(&entry.name, &i.name).next().is_some(),
+                    value: None,
+                },
+            )
+        })
+        .collect();
+    // the entry's own values stand in for the verb's defaults, chosen
+    // by the definition so a reader can tell them from a person's
+    let parameters = sdef
+        .parameters
+        .iter()
+        .map(|p| {
+            let (value, chosen) = match entry.parameters.get(&p.name) {
+                Some(v) => (Some(v.clone()), Some(stamp(now, &Actor::policy(DEFINITION_RULE, &entry.name)))),
+                None => (p.default.clone(), None),
+            };
+            (
+                p.name.clone(),
+                Parameter {
+                    tag: p.tag.clone(),
+                    required: p.required,
+                    value,
+                    chosen,
+                },
+            )
+        })
+        .collect();
+    let outputs = sdef
+        .outputs
+        .iter()
+        .map(|o| {
+            (
+                o.name.clone(),
+                Output {
+                    tag: o.tag.clone(),
+                    options: o.options.clone(),
+                    value: None,
+                },
+            )
+        })
+        .collect();
+    Ok(Step {
+        definition: entry.step.clone(),
+        done_by: sdef.done_by,
+        label: entry.label.clone().or(sdef.label.clone()),
+        inputs,
+        parameters,
+        outputs,
+        policy: entry.policy.clone().unwrap_or_else(|| sdef.policy.clone()),
+        go: None,
+        confirmed: None,
+        placement: None,
+        skipped: None,
+        offered: Vec::new(),
+        runs: Vec::new(),
+    })
+}
+
 fn refused(words: String) -> Error {
     Error::Refused(words)
 }
 
 /// Apply a Command. The Workflow is changed only when Ok.
 pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &str) -> Result<Vec<Entry>, Error> {
+    if let Some(entries) = crate::edit::apply(lib, wf, cmd, by, now)? {
+        return Ok(entries);
+    }
     let id = wf.id.clone();
     let entry = |kind: &str, step: &str| Entry::new(now, by, &id, kind).step(step);
     let not_running = |wf: &Workflow, step: &str| -> Result<(), Error> {
@@ -267,11 +349,19 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
                             p.value = Some(v.clone());
                             p.chosen = Some(stamp(now, by));
                         }
-                        None => {
-                            let sdef = lib.step(&s.definition).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
-                            p.value = sdef.parameters.iter().find(|d| &d.name == name).and_then(|d| d.default.clone());
-                            p.chosen = None;
-                        }
+                        // back to what the definition says: the entry's
+                        // own value where it has one, else the verb's default
+                        None => match def.entry(step).and_then(|e| e.parameters.get(name)) {
+                            Some(v) => {
+                                p.value = Some(v.clone());
+                                p.chosen = Some(stamp(now, &Actor::policy(DEFINITION_RULE, step)));
+                            }
+                            None => {
+                                let sdef = lib.verb_in(def, step).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
+                                p.value = sdef.parameters.iter().find(|d| &d.name == name).and_then(|d| d.default.clone());
+                                p.chosen = None;
+                            }
+                        },
                     }
                     vec![entry("set", step).detail(json!({"parameter": name, "value": value}))]
                 }
@@ -397,6 +487,16 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
             }
             entries
         }
+        // the Workflow's own definition: handled above by `edit`
+        Command::AddStep { .. }
+        | Command::RemoveStep { .. }
+        | Command::Bind { .. }
+        | Command::Unbind { .. }
+        | Command::MoveBinding { .. }
+        | Command::SetGuard { .. }
+        | Command::Relabel { .. }
+        | Command::SetOverride { .. }
+        | Command::Saved { .. } => unreachable!("a structural Command is applied by edit::apply"),
     };
     wf.propagate(def);
     Ok(out)
@@ -442,7 +542,7 @@ pub fn note_placements(def: &WorkflowDefinition, wf: &mut Workflow, performers: 
         if !waiting || step.placement.is_some() {
             continue;
         }
-        let Some(face) = wf.placement_for(step, performers) else { continue };
+        let Some(face) = Workflow::placement_among(step, nested_in(def, &name), performers).ok() else { continue };
         let by = Actor::policy("placement", &name);
         let placement = Placement {
             performer: face.name.clone(),
@@ -469,7 +569,7 @@ pub fn note_offers(def: &WorkflowDefinition, wf: &mut Workflow, performers: &[Pe
         let waiting = matches!(wf.gate(def, &name, performers), Gate::Closed(StepStatus::Waiting(Waiting::Placement)));
         let step = &wf.steps[&name];
         let offered: Vec<String> = if waiting {
-            performers.iter().filter(|p| p.verbs.contains(&step.definition)).map(|p| p.name.clone()).collect()
+            Workflow::offering(step, nested_in(def, &name), performers).map(|p| p.name.clone()).collect()
         } else {
             Vec::new()
         };
@@ -520,9 +620,10 @@ pub fn mint(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, step: &s
         Gate::Closed(s) => return Err(refused(format!("step {step:?} is {}; its gate is not open", s.word()))),
     }
     let id = wf.id.clone();
+    let nested = nested_in(def, step);
     let s = wf.step_mut(step)?;
-    let face = wf_placement(s, performers)?;
-    let sdef = lib.step(&s.definition).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
+    let face = wf_placement(s, nested, performers)?;
+    let sdef = lib.verb_in(def, step).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
     let by = match s.go.take() {
         Some(go) => go.by,
         None => match s.latest().and_then(|r| r.outcome.as_ref()).map(|o| o.state) {
@@ -569,19 +670,31 @@ pub fn mint(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, step: &s
     Ok((request, vec![entry]))
 }
 
-fn wf_placement(step: &Step, performers: &[PerformerFace]) -> Result<PerformerFace, Error> {
-    Workflow::placement_among(step, performers).cloned().map_err(|why| match why {
-        Unplaced::Nobody => refused(format!("no performer offers {}", step.definition)),
+fn wf_placement(step: &Step, nested: bool, performers: &[PerformerFace]) -> Result<PerformerFace, Error> {
+    Workflow::placement_among(step, nested, performers).cloned().map_err(|why| match why {
+        Unplaced::Nobody => match step.policy.placement.locality {
+            Some(l) if step.policy.placement.performer.is_none() => refused(format!("no performer offers {} in {}", step.definition, l.as_str())),
+            _ => refused(format!("no performer offers {}", step.definition)),
+        },
         Unplaced::Several => refused(format!("several performers offer {} and none is chosen", step.definition)),
     })
 }
+
+/// Whether the step of that name is an occurrence of a nested
+/// WorkflowDefinition, carried inline.
+fn nested_in(def: &WorkflowDefinition, step: &str) -> bool {
+    def.entry(step).is_some_and(|e| e.definition.is_some())
+}
+
+/// The rule a Parameter value from the WorkflowDefinition is chosen by.
+pub const DEFINITION_RULE: &str = "workflow-definition";
 
 /// The request to start a minted Run again (after a crash between
 /// minting and starting).
 pub fn request_for(lib: &Library, wf: &Workflow, step: &str, run: &str) -> Result<StartRequest, Error> {
     let s = wf.step(step)?;
     let r = s.run(run).ok_or_else(|| refused(format!("no run {run:?}")))?;
-    let sdef = lib.step(&s.definition).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
+    let sdef = lib.verb_in(&wf.workflow_definition, step).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
     Ok(StartRequest {
         workflow: wf.id.clone(),
         step: step.to_string(),

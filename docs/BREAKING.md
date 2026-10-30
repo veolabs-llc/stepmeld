@@ -9,6 +9,55 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A Workflow's own definition is edited by Commands
+
+*Additive, `stepmeld-core` and the CLI.* `Command` gains `AddStep`,
+`RemoveStep`, `Bind`, `Unbind`, `MoveBinding`, `SetGuard`, `Relabel`,
+`SetOverride` and `Saved` (`stepmeld-core/src/edit.rs`): each edits the
+Workflow's own WorkflowDefinition, lands only if it then holds together,
+keeps the Step records in step (a step added gets its record as at
+creation; one removed takes its record into the History), and leaves a
+History entry holding the state before. A step inside a nested
+definition is addressed by path (`publish/extra`) until that step
+starts. `edit::definition_of` is the Workflow's definition as one to
+keep in a Library, with `Keep` saying which of its tuning goes along;
+`stepmeld definition <workflow> --name … --add` adds it. `stepmeld edit
+<workflow> …` issues the edits.
+
+**Who notices:** a `match` over `Command` that names every variant.
+`engine::step_record` is new (a Step as `create` builds it).
+
+**What to do:** add arms for the new variants, or a catch-all.
+
+## Step entries set their use apart, and nest inline
+
+*Contracts `stepmeld/workflow-definition.v1`, `stepmeld/workflow.v1`,
+`stepmeld/step-definition.v1`, changed in place; the library API.*
+**Before:** a step entry was a name, a verb by name and version and a
+label; a nested WorkflowDefinition was looked up in the Library when its
+child was made; a Policy's placement named a Performer or nobody; a
+definition needed a step. **Now:** an entry may carry `parameters`
+(values its use starts from instead of the verb's defaults, chosen by
+the definition, which a `set` to none comes back to), `policy` (the
+Step's rules in place of the verb's) and `definition` (the nested
+WorkflowDefinition it is an occurrence of, inline; `step` names it).
+`create` copies every nested definition in, so a Workflow is whole on
+its own, and the nested Performer makes a child from the parent's copy.
+A placement may name a `locality`: the driver chooses among the
+Performers offering the verb there. A definition may have no steps.
+
+**Who notices:** code building `StepEntry` by its fields
+(`StepEntry::new`); a `Performer` built from `PerformerFace` by its
+fields (`nests`, true for one that performs nested definitions);
+callers of `Workflow::placement_among` and `placement_for` (a `nested`
+flag, and a step name); a validator that refused a definition with no
+steps; a reader of Workflow documents, which now carry nested
+definitions inline.
+
+**What to do:** nothing for existing documents: every new field is
+optional, and Workflows made before run as they did. A Performer of
+your own that performs nested definitions says `nests: true`.
+
 ## A Workflow carries its own WorkflowDefinition
 
 *Contract `stepmeld/workflow.v1`, changed in place; `StateStore`; the

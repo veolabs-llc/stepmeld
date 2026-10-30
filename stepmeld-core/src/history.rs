@@ -22,7 +22,10 @@ pub struct Entry {
     /// `created`, `set`, `go`, `placed`, `confirmed`, `completed`,
     /// `run-minted`, `run-started`, `run-refused`, `progress`,
     /// `attention`, `run-ended`, `skipped`, `cancel-asked`, `canceled`,
-    /// `policy-set`.
+    /// `policy-set`; on the Workflow's own definition `step-added`,
+    /// `step-removed`, `bound`, `unbound`, `binding-moved`, `guard-set`,
+    /// `relabeled`, `override-set`, `saved`, each with the state before
+    /// in its detail; `adopted`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub detail: Value,

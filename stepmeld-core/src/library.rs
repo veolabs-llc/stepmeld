@@ -82,6 +82,41 @@ impl Library {
         self.workflows.get(r)
     }
 
+    /// The verb a step entry is an occurrence of: the face of the
+    /// WorkflowDefinition it carries inline, else what the Library holds
+    /// under its name and version.
+    pub fn verb(&self, entry: &StepEntry) -> Option<StepDefinition> {
+        match &entry.definition {
+            Some(inner) => Some(self.face_of(inner)),
+            None => self.step(&entry.step),
+        }
+    }
+
+    /// `verb`, for the step of that name in a WorkflowDefinition.
+    pub fn verb_in(&self, w: &WorkflowDefinition, step: &str) -> Option<StepDefinition> {
+        w.entry(step).and_then(|e| self.verb(e))
+    }
+
+    /// The definition with every nested WorkflowDefinition it names by
+    /// name and version alone copied in, all the way down: what a
+    /// Workflow is made from, so it is whole on its own. One the
+    /// Library does not hold is left as named, for `check_workflow` to
+    /// refuse.
+    pub fn inlined(&self, w: &WorkflowDefinition) -> WorkflowDefinition {
+        let mut out = w.clone();
+        for entry in &mut out.steps {
+            if entry.definition.is_none() {
+                if let Some(inner) = self.workflows.get(&entry.step) {
+                    entry.definition = Some(inner.clone());
+                }
+            }
+            if let Some(inner) = entry.definition.take() {
+                entry.definition = Some(self.inlined(&inner));
+            }
+        }
+        out
+    }
+
     pub fn steps(&self) -> impl Iterator<Item = &StepDefinition> {
         self.steps.values()
     }
@@ -99,7 +134,7 @@ impl Library {
         face.label = w.label.clone();
         face.description = w.description.clone();
         for entry in &w.steps {
-            let Some(def) = self.step(&entry.step) else { continue };
+            let Some(def) = self.verb(entry) else { continue };
             for i in &def.inputs {
                 if w.bindings_into(&entry.name, &i.name).next().is_none() {
                     face.inputs.push(InputDefinition {
@@ -132,19 +167,21 @@ impl Library {
         face
     }
 
-    /// Names unique and undotted, every entry's verb known, every
-    /// Binding between ports that exist with equal tags, every Guard
-    /// over a step and Decision that exist, no cycles.
+    /// Names unique and undotted, every entry's verb known (a nested
+    /// definition carried inline checked the same way, under the name
+    /// and version the entry gives it), every Parameter value named one
+    /// the verb has, every Binding between ports that exist with equal
+    /// tags, every Guard over a step and Decision that exist, no
+    /// cycles. A definition with no steps holds together: a Workflow
+    /// made from it is empty until steps are added to it.
     pub fn check_workflow(&self, w: &WorkflowDefinition) -> Result<(), Error> {
         let invalid = |m: String| Error::Invalid(format!("WorkflowDefinition {}: {m}", w.reference()));
         if w.contract != crate::definition::WORKFLOW_DEFINITION {
             return Err(invalid(format!("contract is {:?}", w.contract)));
         }
-        if w.steps.is_empty() {
-            return Err(invalid("no steps".into()));
-        }
         let mut defs: BTreeMap<&str, StepDefinition> = BTreeMap::new();
-        for StepEntry { name, step, .. } in &w.steps {
+        for entry in &w.steps {
+            let (name, step) = (&entry.name, &entry.step);
             if name.is_empty() || name.contains('.') {
                 return Err(invalid(format!("step name {name:?} is empty or contains a dot")));
             }
@@ -154,7 +191,21 @@ impl Library {
             if step == &w.reference() {
                 return Err(invalid(format!("step {name:?} is the recipe itself")));
             }
-            let def = self.step(step).ok_or_else(|| invalid(format!("step {name:?} refers to {step}, which is not in the library")))?;
+            let def = match &entry.definition {
+                Some(inner) => {
+                    if inner.reference() != *step {
+                        return Err(invalid(format!("step {name:?} carries {} but names {step}", inner.reference())));
+                    }
+                    self.check_workflow(inner)?;
+                    self.face_of(inner)
+                }
+                None => self.step(step).ok_or_else(|| invalid(format!("step {name:?} refers to {step}, which is not in the library")))?,
+            };
+            for p in entry.parameters.keys() {
+                if !def.parameters.iter().any(|d| &d.name == p) {
+                    return Err(invalid(format!("step {name:?} sets parameter {p:?}, which {step} does not have")));
+                }
+            }
             defs.insert(name, def);
         }
         fn port(r: &crate::definition::PortRef) -> Result<(&str, &str), String> {
@@ -239,15 +290,7 @@ mod tests {
 
     fn workflow(name: &str, uses: &[&str]) -> WorkflowDefinition {
         let mut w = WorkflowDefinition::new(name, 1);
-        w.steps = uses
-            .iter()
-            .enumerate()
-            .map(|(i, u)| StepEntry {
-                name: format!("s{i}"),
-                step: Ref::new(u, 1),
-                label: None,
-            })
-            .collect();
+        w.steps = uses.iter().enumerate().map(|(i, u)| StepEntry::new(&format!("s{i}"), Ref::new(u, 1))).collect();
         w
     }
 

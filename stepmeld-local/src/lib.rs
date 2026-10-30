@@ -450,6 +450,7 @@ impl Performer for LocalPerformer {
     fn describe(&self) -> PerformerFace {
         PerformerFace {
             pool: false,
+            nests: false,
             name: self.name.clone(),
             locality: self.locality,
             // what it can run is its programs, by name; which

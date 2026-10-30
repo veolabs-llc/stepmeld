@@ -46,7 +46,6 @@
         },
         "steps": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "type": "object",
             "required": [
@@ -64,6 +63,18 @@
               },
               "label": {
                 "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "description": "Parameter values this use starts from instead of the verb's defaults, by name."
+              },
+              "policy": {
+                "$ref": "#/$defs/policy",
+                "description": "The Step's rules, in place of the verb's."
+              },
+              "definition": {
+                "$ref": "#/$defs/workflow_definition",
+                "description": "The nested WorkflowDefinition this use is an occurrence of, carried inline; `step` names it."
               }
             }
           }
@@ -249,7 +260,7 @@
           ]
         },
         "on_stale": { "enum": ["wait", "rerun"] },
-        "placement": { "type": "object", "additionalProperties": false, "properties": { "performer": { "type": "string" }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } } } }
+        "placement": { "type": "object", "additionalProperties": false, "properties": { "performer": { "type": "string" }, "locality": { "$ref": "#/$defs/locality", "description": "Where the driver's choice is made, when no Performer is named." }, "confirm": { "type": "array", "items": { "$ref": "#/$defs/locality" } } } }
       }
     },
     "step": {

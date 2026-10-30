@@ -392,11 +392,7 @@ pub mod conformance {
         }];
         store.put_step(&verb).unwrap();
         let mut recipe = WorkflowDefinition::new("conformance-recipe", 1);
-        recipe.steps = vec![crate::definition::StepEntry {
-            name: "a".into(),
-            step: verb.reference(),
-            label: None,
-        }];
+        recipe.steps = vec![crate::definition::StepEntry::new("a", verb.reference())];
         store.put_workflow_definition(&recipe).unwrap();
         assert!(store.library().unwrap().workflow(&recipe.reference()).is_some());
         assert!(

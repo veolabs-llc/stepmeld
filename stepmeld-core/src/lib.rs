@@ -11,6 +11,7 @@
 pub mod contracts;
 pub mod definition;
 pub mod driver;
+pub mod edit;
 pub mod engine;
 pub mod history;
 pub mod library;

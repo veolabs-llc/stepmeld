@@ -46,11 +46,7 @@ fn library(store: &MemoryStore) {
     });
     store.put_step(&add).unwrap();
     let mut w = WorkflowDefinition::new("add-two", 1);
-    w.steps = vec![StepEntry {
-        name: "add".into(),
-        step: Ref::new("add", 1),
-        label: None,
-    }];
+    w.steps = vec![StepEntry::new("add", Ref::new("add", 1))];
     store.put_workflow_definition(&w).unwrap();
 }
 
@@ -59,6 +55,7 @@ fn library(store: &MemoryStore) {
 fn worker(store: &Arc<MemoryStore>, name: &str, host: &str, cloud: bool) -> (Worker, Arc<MemoryPerformer>) {
     let mechanism = Arc::new(MemoryPerformer::new(PerformerFace {
         pool: false,
+        nests: false,
         name: format!("{name}-programs"),
         locality: Locality::ThisMachine,
         verbs: vec![Ref::new("add", 1)],
@@ -273,6 +270,7 @@ fn locality_comes_from_the_worker() {
                 placement: PlacementPolicy {
                     performer: Some("queue".into()),
                     confirm: vec![Locality::Cloud],
+                    locality: None,
                 },
                 ..Default::default()
             },
@@ -565,6 +563,7 @@ fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
             locality: Locality::Cloud,
             verbs: vec![Ref::new("add", 1)],
             pool: false,
+            nests: false,
         })
         .with_portable_handles(),
     );
@@ -699,6 +698,7 @@ fn sized_worker(store: &Arc<MemoryStore>, name: &str, gib: f64) -> (Worker, Arc<
     let mechanism = Arc::new(
         MemoryPerformer::new(PerformerFace {
             pool: false,
+            nests: false,
             name: name.into(),
             locality: Locality::ThisMachine,
             verbs: vec![Ref::new("add", 1)],
@@ -785,6 +785,7 @@ fn needs_that_cannot_be_computed_refuse_the_order_in_words() {
     library(&store);
     let mechanism = Arc::new(MemoryPerformer::new(PerformerFace {
         pool: false,
+        nests: false,
         name: "desk".into(),
         locality: Locality::ThisMachine,
         verbs: vec![Ref::new("add", 1)],

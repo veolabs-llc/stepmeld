@@ -63,7 +63,7 @@ recipes; never any values) and what exists once a workflow is minted
 |---|---|
 | **Library** | The WorkflowDefinitions and StepDefinitions available for composing and running. Running never writes to it. |
 | **StepDefinition** | A verb: its InputDefinitions, ParameterDefinitions and OutputDefinitions, and the program that does its work, by name. Which command runs that program is each Worker's to say (`docs/ORCHESTRATOR-WORKER.md` §4); the engine never runs it itself. |
-| **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Identified by name and version; putting one under a name and version already held replaces it in place (every store, and `stepmeld library add`, do), and Workflows made from it keep their own copies. It declares no inputs or outputs of its own (§5.3). |
+| **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), and what that use sets apart from the verb (Parameter values in place of its defaults, a Policy of its own, a nested WorkflowDefinition carried inline), plus Bindings. May have no steps. Identified by name and version; putting one under a name and version already held replaces it in place (every store, and `stepmeld library add`, do), and Workflows made from it keep their own copies. It declares no inputs or outputs of its own (§5.3). |
 | **Binding** | A connection from one named step's Output to another named step's Input, optionally guarded. The only structure in a recipe; there is no step order. |
 | **InputDefinition** | A name, a tag, whether required. |
 | **ParameterDefinition** | The same, plus a default, and optionally a group: a name for presentation only (a UI shows the ungrouped first and folds each group away), never read by the engine. |
@@ -99,7 +99,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **Outcome** | How a Run ended: succeeded, failed, canceled or lost, with a class, a reason, a Summary and, on success, the Outputs. Refused is a start that never ran. "Could not be asked" is never an Outcome. |
 | **Summary** | The Performer's account of what it did: a headline and opaque details. |
 | **Actor** | Who is responsible for a decision: a person, an agent, or a Policy (which names the recipe version it came from). On every record. Max: the label may yet change. |
-| **Command** | What an Actor issues: create, start-workflow, set, start (a first start, a retake or a rerun), place, confirm (a placement the Policy asks about), set-policy, skip, cancel, complete. With Performer reports, the engine's only input. |
+| **Command** | What an Actor issues: create, start-workflow, set, start (a first start, a retake or a rerun), place, confirm (a placement the Policy asks about), set-policy, skip, cancel, complete; and, on the Workflow's own definition, add-step, remove-step, bind, unbind, move-binding, set-guard, relabel, set-override, saved (`stepmeld-core/src/edit.rs`: each lands only if the definition then holds together, keeps the Steps in step with it, and leaves a History entry that holds enough to undo it; inside a nested step's definition by path, until that step starts). With Performer reports, the engine's only input. |
 | **History** | The append-only record of Commands, Placements, progress and Outcomes, each with its Actor and time. Not "events": that word is kept for an external signal, should one be needed. |
 | **StateStore** | The engine's persistence: read, conditional write, append, list, and a lease per Workflow. SQLite first; a server later. |
 | **Orchestrator** | A role: advances Workflows (Gates, minting, placement, applying what comes back). Any machine with the shared store can play it (`docs/ORCHESTRATOR-WORKER.md`). |
@@ -257,8 +257,8 @@ conformance suite beside it.
    Guards are fixed forms over step statuses and Decisions. Policies
    are a menu: start automatically or on Command; on failure stop or
    retake up to N times for named
-   classes; on stale wait or rerun; placement fixed, chosen, or
-   confirmed before a locality. Anything the engine cannot judge from
+   classes; on stale wait or rerun; placement fixed, chosen, preferred
+   in a locality, or confirmed before one. Anything the engine cannot judge from
    what it holds becomes a Step whose Run is the judge: a Performer's
    check or a person's review producing a Decision. A callback would be
    an invisible second way to run domain code; a Decision Step is the
@@ -287,8 +287,9 @@ conformance suite beside it.
 Every WorkflowDefinition is offered as a StepDefinition with its derived
 face, names by path: `package.document`, `upload.release`. The nested-workflow
 Performer performs all such verbs: `start` issues `create` for a child
-Workflow from the Library's definition the verb names (Actor: the
-parent's Run), the handle is the child's id,
+Workflow from the parent's own copy of the nested definition (every
+Workflow is made with its nested definitions copied in, so it is whole
+on its own; Actor: the parent's Run), the handle is the child's id,
 `observe` reads the child's status and derives progress, `cancel`
 cancels the child, and the child's Outputs map back by path. A retake of
 the parent Step is a new child Workflow; the old one stays in the

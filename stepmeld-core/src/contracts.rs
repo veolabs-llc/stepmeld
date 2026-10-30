@@ -120,9 +120,25 @@ mod tests {
         };
         let workflow = schema("stepmeld/workflow.v1");
         let definition = schema("stepmeld/workflow-definition.v1");
-        assert_eq!(workflow["$defs"]["workflow_definition"], body(definition.clone()), "workflow.v1's workflow_definition is workflow-definition.v1");
+        // a nested definition refers to the definition's root; inside workflow.v1, to the copy
+        let inlined: Value = serde_json::from_str(&serde_json::to_string(&body(definition.clone())).unwrap().replace("\"$ref\":\"#\"", "\"$ref\":\"#/$defs/workflow_definition\"")).unwrap();
+        assert_eq!(workflow["$defs"]["workflow_definition"], inlined, "workflow.v1's workflow_definition is workflow-definition.v1");
         for def in ["ref", "portref", "guard"] {
             assert_eq!(workflow["$defs"][def], definition["$defs"][def], "workflow.v1's {def} is workflow-definition.v1's");
+        }
+        // a Step's Policy is the verb's shape wherever it stands; the
+        // verb's schema alone annotates the defaults it carries
+        fn without_defaults(v: &Value) -> Value {
+            match v {
+                Value::Object(m) => Value::Object(m.iter().filter(|(k, _)| k.as_str() != "default").map(|(k, v)| (k.clone(), without_defaults(v))).collect()),
+                Value::Array(a) => Value::Array(a.iter().map(without_defaults).collect()),
+                v => v.clone(),
+            }
+        }
+        let verb = schema("stepmeld/step-definition.v1");
+        for def in ["policy", "locality"] {
+            assert_eq!(definition["$defs"][def], verb["$defs"][def], "workflow-definition.v1's {def} is step-definition.v1's");
+            assert_eq!(workflow["$defs"][def], without_defaults(&verb["$defs"][def]), "workflow.v1's {def} is step-definition.v1's");
         }
     }
 
