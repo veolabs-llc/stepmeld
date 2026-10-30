@@ -218,7 +218,8 @@ pub fn create(lib: &Library, def: &WorkflowDefinition, id: &str, label: Option<&
     let wf = Workflow {
         contract: WORKFLOW.to_string(),
         id: id.to_string(),
-        definition: def.reference(),
+        workflow_definition: def.clone(),
+        from: Some(def.reference()),
         label: label.map(str::to_string),
         created: stamp(now, by),
         steps,

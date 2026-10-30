@@ -196,7 +196,7 @@ impl Rig {
     }
 
     fn def(&self) -> WorkflowDefinition {
-        self.store.library().unwrap().workflow(&self.wf().definition).unwrap().clone()
+        self.wf().workflow_definition
     }
 
     fn status(&self, step: &str) -> StepStatus {
@@ -774,9 +774,8 @@ fn drivers_that_share_a_store_each_run_their_own() {
     here.command("wf-s", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
     here.command("wf-s", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     let status = |_: &Driver| {
-        let lib = store.library().unwrap();
         let wf = store.get("wf-s").unwrap().unwrap().0;
-        wf.step_status(lib.workflow(&wf.definition).unwrap(), "add")
+        wf.step_status(&wf.workflow_definition, "add")
     };
     // both offer it: nobody starts anything until it is placed
     here.tick_all(&now(2), &now(9)).unwrap();
@@ -818,10 +817,9 @@ fn drivers_that_share_a_store_each_run_their_own() {
     alone.command("wf-t", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
     alone.command("wf-t", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     alone.tick_all(&now(2), &now(9)).unwrap();
-    let lib = store.library().unwrap();
     let wf = store.get("wf-t").unwrap().unwrap().0;
     assert!(wf.steps["add"].runs.is_empty(), "nobody offers it: nothing is minted");
-    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert_eq!(wf.gate(&wf.workflow_definition, "add", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
 }
 
 fn alone_faces(d: &Driver) -> Vec<PerformerFace> {
@@ -840,9 +838,8 @@ fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
     driver.command("wf-r", &set("add", "a", 2.into()), &max(), &now(1)).unwrap();
     driver.command("wf-r", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     driver.tick_all(&now(2), &now(9)).unwrap();
-    let lib = store.library().unwrap();
     let wf = store.get("wf-r").unwrap().unwrap().0;
-    let def = lib.workflow(&wf.definition).unwrap().clone();
+    let def = wf.workflow_definition.clone();
     assert_eq!(wf.step_status(&def, "add"), StepStatus::Waiting(Waiting::Start));
     assert_eq!(wf.status(&def), WorkflowStatus::Waiting);
     assert!(local.started().is_empty(), "nothing is minted before the go");
@@ -1068,4 +1065,56 @@ fn definitions_are_checked() {
         label: None,
     });
     assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("decision")));
+}
+
+/// A Workflow carries its own copy of its WorkflowDefinition: the
+/// Library's may change or go without reaching it. A document from
+/// before, naming the Library's by name and version, is not read; it
+/// is adopted, the Library's definition copied onto it.
+#[test]
+fn a_workflow_carries_its_own_definition() {
+    let store = Arc::new(MemoryStore::new());
+    add_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-two", "wf-1");
+    let before = rig.wf();
+    assert_eq!(before.from, Some(Ref::new("add-two", 1)));
+    assert_eq!(before.workflow_definition, *store.library().unwrap().workflow(&Ref::new("add-two", 1)).unwrap());
+
+    // the Library's definition goes: the Workflow still runs by its own
+    store.remove_definition(&Ref::new("add-two", 1)).unwrap();
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
+    let wf = rig.tick();
+    assert_eq!(wf.step_status(&wf.workflow_definition, "add"), StepStatus::Running);
+
+    // a document from before is refused by this build, and adopted
+    let lib = {
+        let mut lib = stepmeld_core::library::Library::new();
+        for s in store.library().unwrap().steps() {
+            lib.add_step(s.clone()).unwrap();
+        }
+        lib.add_workflow(before.workflow_definition.clone()).unwrap();
+        lib
+    };
+    let mut old = serde_json::to_value(&before).unwrap();
+    let map = old.as_object_mut().unwrap();
+    map.remove("workflow_definition");
+    map.remove("from");
+    map.insert("definition".into(), serde_json::json!({"name": "add-two", "version": 1}));
+    let refusal = serde_json::from_value::<Workflow>(old.clone()).unwrap_err().to_string();
+    assert!(refusal.contains("workflow_definition"), "{refusal}");
+    assert_eq!(Workflow::adopt(&old, &lib).unwrap(), before, "adopted: the Library's definition copied on, `from` set");
+    let unknown = {
+        let mut doc = old.clone();
+        doc["definition"]["name"] = "nope".into();
+        doc
+    };
+    assert!(matches!(Workflow::adopt(&unknown, &lib), Err(Error::Refused(w)) if w.contains("not in the library")));
+    let already = serde_json::to_value(&before).unwrap();
+    assert!(matches!(Workflow::adopt(&already, &lib), Err(Error::Refused(w)) if w.contains("already carries")));
+    // through the driver, one already in shape is refused the same way, and nothing is written
+    let history = store.history("wf-1").unwrap().len();
+    assert!(matches!(rig.driver.adopt("wf-1", &max(), &now(9)), Err(Error::Refused(w)) if w.contains("already carries")));
+    assert_eq!(store.history("wf-1").unwrap().len(), history);
 }

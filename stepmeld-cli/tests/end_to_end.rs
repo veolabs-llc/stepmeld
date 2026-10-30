@@ -227,12 +227,22 @@ fn library_remove_and_what_it_leaves_unused() {
     assert!(!ok && out.contains("used by WorkflowDefinition workflowdef_hello v1"), "{out}");
     let (ok, out) = stepmeld(d, &["library", "remove", "nothing-by-this-name"]);
     assert!(!ok && out.contains("has no StepDefinition or WorkflowDefinition"), "{out}");
-    // a Workflow from it holds it in place
+    // a Workflow from it carries its own copy, so the WorkflowDefinition
+    // may go; the StepDefinitions its Steps are occurrences of may not
     let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-1"]);
     assert!(ok, "{out}");
-    let (ok, out) = stepmeld(d, &["library", "remove", "workflowdef_hello"]);
+    let (ok, out) = stepmeld_answering(d, &["library", "remove", "workflowdef_hello"], "y\n");
+    assert!(
+        ok && out.contains("removed WorkflowDefinition workflowdef_hello v1") && out.contains("stepdef_add v1 is used by Workflow wf-1; kept") && !out.contains("removed StepDefinition"),
+        "{out}"
+    );
+    let (ok, out) = stepmeld(d, &["library", "remove", "stepdef_add"]);
     assert!(!ok && out.contains("used by Workflow wf-1"), "{out}");
+    let (ok, out) = stepmeld(d, &["list"]);
+    assert!(ok && out.contains("wf-1") && out.contains("workflowdef_hello v1"), "{out}");
     let (ok, out) = stepmeld(d, &["remove", "wf-1"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["library", "add", "workflowdef_hello.json"]);
     assert!(ok, "{out}");
     // answered no: the WorkflowDefinition goes, its StepDefinitions stay
     let (ok, out) = stepmeld_answering(d, &["library", "remove", "workflowdef_hello"], "n\n");

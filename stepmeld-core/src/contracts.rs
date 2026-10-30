@@ -107,6 +107,25 @@ mod tests {
         assert_eq!(order["$defs"]["request"], body(schema("stepmeld/run-request.v1")), "an order's request is the run directory's");
     }
 
+    /// A Workflow carries its own WorkflowDefinition, in the shape of
+    /// workflow-definition.v1: the same body, the same guard forms.
+    #[test]
+    fn a_workflows_definition_is_the_definitions_shape() {
+        let schema = |name: &str| -> Value { serde_json::from_str(SCHEMAS.iter().find(|(n, _)| *n == name).unwrap().1).unwrap() };
+        let body = |mut v: Value| {
+            for k in ["$schema", "$id", "title", "$defs"] {
+                v.as_object_mut().unwrap().remove(k);
+            }
+            v
+        };
+        let workflow = schema("stepmeld/workflow.v1");
+        let definition = schema("stepmeld/workflow-definition.v1");
+        assert_eq!(workflow["$defs"]["workflow_definition"], body(definition.clone()), "workflow.v1's workflow_definition is workflow-definition.v1");
+        for def in ["ref", "portref", "guard"] {
+            assert_eq!(workflow["$defs"][def], definition["$defs"][def], "workflow.v1's {def} is workflow-definition.v1's");
+        }
+    }
+
     /// Every golden fixture validates against the contract its
     /// directory is named after; a `.refused.json` fixture does not.
     #[test]

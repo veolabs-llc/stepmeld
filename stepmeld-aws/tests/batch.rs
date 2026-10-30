@@ -325,10 +325,9 @@ fn a_cloud_worker_takes_over_a_batch_job_and_sees_it_through() {
     let second = launcher("queue-2");
     second.tick(&at(2)).unwrap();
     orchestrate(2);
-    let lib = store.library().unwrap();
     let status = |s: &MemoryStore| {
         let wf = s.get("book-1").unwrap().unwrap().0;
-        wf.step_status(lib.workflow(&wf.definition).unwrap(), "typeset")
+        wf.step_status(&wf.workflow_definition, "typeset")
     };
     assert_eq!(status(&store), StepStatus::Running, "not before the first one's claim lapses");
     orchestrate(4);

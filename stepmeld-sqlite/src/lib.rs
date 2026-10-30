@@ -160,6 +160,15 @@ impl StateStore for SqliteStore {
         }
     }
 
+    fn document(&self, id: &str) -> Result<Option<(serde_json::Value, String)>, Error> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(i64, String)> = conn.query_row("SELECT version, doc FROM workflows WHERE id = ?1", params![id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(db)?;
+        match row {
+            None => Ok(None),
+            Some((version, text)) => Ok(Some((doc(&text, "a workflow")?, version.to_string()))),
+        }
+    }
+
     fn put(&self, wf: &Workflow, expected: Option<&str>) -> Result<String, Error> {
         let mut conn = self.conn.lock().unwrap();
         let tx = write(&mut conn)?;

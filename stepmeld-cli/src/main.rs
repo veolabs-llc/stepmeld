@@ -142,6 +142,8 @@ enum Cmd {
     },
     /// Forget a finished Workflow and the children its Runs made (cancel a live one first).
     Remove { workflow: String },
+    /// Bring a Workflow made before each carried its own WorkflowDefinition up to date: the Library's definition it names is copied onto it. With no Workflow named, every one that needs it.
+    Adopt { workflow: Option<String> },
     /// Orchestrate: advance every Workflow once; with --watch, keep going until nothing is running.
     Tick {
         #[arg(long)]
@@ -492,11 +494,10 @@ fn run(cli: Cli) -> Result<(), Error> {
             println!("created workflow {}", wf.id);
         }
         Cmd::List => {
-            let lib = store.library()?;
             for id in store.list()? {
                 let (wf, _) = store.get(&id)?.unwrap();
-                let status = lib.workflow(&wf.definition).map(|d| format!("{:?}", wf.status(d)).to_lowercase()).unwrap_or_else(|| "(WorkflowDefinition missing)".into());
-                println!("{:<40} {:<24} {}", wf.id, wf.definition.to_string(), status);
+                let status = format!("{:?}", wf.status(&wf.workflow_definition)).to_lowercase();
+                println!("{:<40} {:<24} {}", wf.id, origin(&wf), status);
             }
         }
         Cmd::Show { workflow } => {
@@ -505,7 +506,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                 println!("{}", serde_json::to_string_pretty(&wf).unwrap());
             } else {
                 let faces: Vec<_> = driver.performers.iter().map(|p| p.describe()).collect();
-                show(store.as_ref(), &wf, &faces)?;
+                show(&wf, &faces)?;
             }
         }
         Cmd::Set { workflow, step, input, parameter, value: v } => {
@@ -586,15 +587,36 @@ fn run(cli: Cli) -> Result<(), Error> {
             let gone = driver.remove(workflow, &now, &until())?;
             println!("removed {}", gone.join(", "));
         }
+        Cmd::Adopt { workflow } => {
+            let ids = match workflow {
+                Some(id) => vec![id.clone()],
+                None => store.list()?,
+            };
+            let mut adopted = 0;
+            for id in ids {
+                match driver.adopt(&id, &by, &now) {
+                    Ok(wf) => {
+                        adopted += 1;
+                        println!("adopted {} (from {})", wf.id, origin(&wf));
+                    }
+                    // asked for by name: refused in words; a sweep passes the ones already in shape
+                    Err(e) if workflow.is_some() => return Err(e),
+                    Err(Error::Refused(w)) if w.contains("already carries") => {}
+                    Err(e) => println!("{id}: {e}"),
+                }
+            }
+            if workflow.is_none() {
+                println!("{adopted} adopted");
+            }
+        }
         Cmd::Tick { watch, every } => {
             // what was last said of each Workflow and Step; a line is
             // printed only when that changes. Workflows already finished
             // are taken as said, so they stay quiet unless they move.
             let faces = |d: &Driver| d.performers.iter().map(|p| p.describe()).collect::<Vec<_>>();
             let mut said: BTreeMap<(String, String), String> = BTreeMap::new();
-            let lib = store.library()?;
             for id in store.list()? {
-                if let Some(now) = snapshot(store.as_ref(), &lib, &faces(&driver), &id)? {
+                if let Some(now) = snapshot(store.as_ref(), &faces(&driver), &id)? {
                     if matches!(now.0.as_str(), "succeeded" | "failed" | "canceled") {
                         said.insert((id.clone(), String::new()), now.0.clone());
                         for (step, line) in now.1 {
@@ -612,10 +634,9 @@ fn run(cli: Cli) -> Result<(), Error> {
                 // read again each tick
                 let driver = self::driver(&cli)?.1;
                 let statuses = driver.tick_moved(&iso(now_secs()), &until(), &mut seen)?;
-                let lib = store.library()?;
                 let mut busy = false;
                 for id in statuses.keys() {
-                    let Some((word, steps)) = snapshot(store.as_ref(), &lib, &faces(&driver), id)? else { continue };
+                    let Some((word, steps)) = snapshot(store.as_ref(), &faces(&driver), id)? else { continue };
                     for (step, line) in steps {
                         if said.get(&(id.clone(), step.clone())) != Some(&line) {
                             println!("{id:<16} {step:<16} {line}");
@@ -685,10 +706,19 @@ fn who(a: &Actor) -> String {
     }
 }
 
-fn show(store: &dyn SharedStore, wf: &Workflow, faces: &[stepmeld_core::workflow::PerformerFace]) -> Result<(), Error> {
-    let lib = store.library()?;
-    let def = lib.workflow(&wf.definition).ok_or_else(|| Error::Refused(format!("{} is not in the library", wf.definition)))?;
-    println!("{}  ({}, {})", wf.id, wf.definition, format!("{:?}", wf.status(def)).to_lowercase());
+/// What a Workflow was made from, for a listing: the Library's
+/// WorkflowDefinition by name and version, or its own name when it was
+/// made from nothing.
+fn origin(wf: &Workflow) -> String {
+    match &wf.from {
+        Some(r) => r.to_string(),
+        None => format!("{} (its own)", wf.workflow_definition.name),
+    }
+}
+
+fn show(wf: &Workflow, faces: &[stepmeld_core::workflow::PerformerFace]) -> Result<(), Error> {
+    let def = &wf.workflow_definition;
+    println!("{}  ({}, {})", wf.id, origin(wf), format!("{:?}", wf.status(def)).to_lowercase());
     for (name, step) in &wf.steps {
         let status = match wf.gate(def, name, faces) {
             stepmeld_core::workflow::Gate::Closed(s @ StepStatus::Waiting(_)) => s,
@@ -845,20 +875,29 @@ fn library(cli: &Cli, store: &dyn SharedStore, what: &Option<LibraryCmd>) -> Res
                 let names: Vec<String> = users.iter().map(|r| r.to_string()).collect();
                 return Err(Error::Refused(format!("{kind} {target} is used by WorkflowDefinition {}; remove that first", names.join(", "))));
             }
-            let mut in_use = Vec::new();
+            // a Workflow carries its own copy of its WorkflowDefinition,
+            // but its Steps are occurrences of the Library's StepDefinitions
+            let mut used_by: BTreeMap<Ref, Vec<String>> = BTreeMap::new();
             for id in store.list()? {
                 if let Some((wf, _)) = store.get(&id)? {
-                    if wf.definition == target || wf.steps.values().any(|s| s.definition == target) {
-                        in_use.push(id);
+                    for s in wf.steps.values() {
+                        used_by.entry(s.definition.clone()).or_default().push(id.clone());
                     }
                 }
             }
-            if !in_use.is_empty() {
+            if let Some(in_use) = used_by.get(&target) {
                 return Err(Error::Refused(format!("{kind} {target} is used by Workflow {}; remove those first (`stepmeld remove <workflow>`)", in_use.join(", "))));
             }
-            let orphans = Library::orphaned_by(&steps, &workflows, &target);
+            let mut orphans = Library::orphaned_by(&steps, &workflows, &target);
             store.remove_definition(&target)?;
             println!("removed {kind} {target}");
+            orphans.retain(|r| match used_by.get(r) {
+                Some(ids) => {
+                    println!("StepDefinition {r} is used by Workflow {}; kept", ids.join(", "));
+                    false
+                }
+                None => true,
+            });
             if !orphans.is_empty() {
                 let names: Vec<String> = orphans.iter().map(|r| r.to_string()).collect();
                 println!("no other WorkflowDefinition uses StepDefinition {}", names.join(", "));
@@ -914,9 +953,9 @@ type Snapshot = (String, Vec<(String, String)>);
 /// against the Workers that exist: the Workflow's status, then each
 /// Step in its WorkflowDefinition's order as "status  detail" (what it
 /// waits for, how far it is, its headline, why it failed).
-fn snapshot(store: &dyn SharedStore, lib: &Library, faces: &[stepmeld_core::workflow::PerformerFace], id: &str) -> Result<Option<Snapshot>, Error> {
+fn snapshot(store: &dyn SharedStore, faces: &[stepmeld_core::workflow::PerformerFace], id: &str) -> Result<Option<Snapshot>, Error> {
     let Some((wf, _)) = store.get(id)? else { return Ok(None) };
-    let Some(def) = lib.workflow(&wf.definition) else { return Ok(None) };
+    let def = &wf.workflow_definition;
     let status = wf.status(def);
     let mut steps = Vec::new();
     let mut any_open = false;

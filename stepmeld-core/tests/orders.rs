@@ -95,9 +95,8 @@ fn begin(d: &Driver, id: &str) {
 }
 
 fn status(store: &MemoryStore, id: &str) -> StepStatus {
-    let lib = store.library().unwrap();
     let wf = store.get(id).unwrap().unwrap().0;
-    wf.step_status(lib.workflow(&wf.definition).unwrap(), "add")
+    wf.step_status(&wf.workflow_definition, "add")
 }
 
 #[test]
@@ -110,9 +109,8 @@ fn an_order_is_run_by_its_worker_and_reported_back() {
     begin(&before, "hello-1");
     before.tick_all(&now(1), &now(9)).unwrap();
     let wf = store.get("hello-1").unwrap().unwrap().0;
-    let lib = store.library().unwrap();
     let faces: Vec<PerformerFace> = before.performers.iter().map(|p| p.describe()).collect();
-    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert_eq!(wf.gate(&wf.workflow_definition, "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
     assert!(wf.steps["add"].runs.is_empty());
 
     // the Worker publishes itself; an Orchestrator built now places the Run on it
@@ -406,9 +404,8 @@ fn an_away_worker_is_not_placed_on() {
     o.tick_all(&now(4), &now(9)).unwrap();
     assert!(store.get("away-1").unwrap().unwrap().0.steps["add"].runs.is_empty());
     let wf = store.get("away-1").unwrap().unwrap().0;
-    let lib = store.library().unwrap();
     let faces: Vec<PerformerFace> = o.performers.iter().map(|p| p.describe()).collect();
-    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert_eq!(wf.gate(&wf.workflow_definition, "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
     assert!(!store.workers().unwrap()[0].away(&now(3)), "three beats unheard is not yet away");
 }
 
@@ -501,8 +498,7 @@ fn a_worker_offers_what_it_has_the_capabilities_for() {
     o.tick_all(&now(1), &now(9)).unwrap();
     let wf = store.get("cap-1").unwrap().unwrap().0;
     let faces: Vec<PerformerFace> = o.performers.iter().map(|p| p.describe()).collect();
-    let lib = store.library().unwrap();
-    assert_eq!(wf.gate(lib.workflow(&wf.definition).unwrap(), "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)), "no Worker offers cuda");
+    assert_eq!(wf.gate(&wf.workflow_definition, "add", &faces), Gate::Closed(StepStatus::Waiting(Waiting::Performer)), "no Worker offers cuda");
 
     let (gpu, mechanism) = worker(&store, "gpu", "h", false);
     let gpu = gpu.with_capabilities(vec!["cuda".into(), "docker".into()]);

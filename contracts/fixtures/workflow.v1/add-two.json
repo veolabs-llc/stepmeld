@@ -7,7 +7,7 @@
       "kind": "person"
     }
   },
-  "definition": {
+  "from": {
     "name": "add-two",
     "version": 1
   },
@@ -132,5 +132,21 @@
         }
       ]
     }
+  },
+  "workflow_definition": {
+    "bindings": [],
+    "contract": "stepmeld/workflow-definition.v1",
+    "label": "Add two integers",
+    "name": "add-two",
+    "steps": [
+      {
+        "name": "add",
+        "step": {
+          "name": "add",
+          "version": 1
+        }
+      }
+    ],
+    "version": 1
   }
 }
