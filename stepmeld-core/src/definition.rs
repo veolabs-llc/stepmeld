@@ -86,6 +86,14 @@ pub struct ParameterDefinition {
     /// group away under its name. The engine never reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The words a closed Parameter's Value may be (`exhaustive`,
+    /// `sequential`), for presentation: a user interface offers them as
+    /// a pick list, complete, and nothing else. The verb's program is
+    /// what holds a Value to them; the engine never reads a Value, and
+    /// checks only that the declaration agrees with itself (a default
+    /// among its options).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -272,6 +280,21 @@ impl StepDefinition {
             let seen = if is_output { &mut produced } else { &mut given };
             if !seen.insert(name) {
                 return Err(invalid(format!("port name {name:?} is used twice")));
+            }
+        }
+        for p in &self.parameters {
+            let Some(opts) = &p.options else { continue };
+            if opts.is_empty() {
+                return Err(invalid(format!("parameter {:?} lists no options", p.name)));
+            }
+            if opts.iter().collect::<BTreeSet<_>>().len() != opts.len() {
+                return Err(invalid(format!("parameter {:?} lists an option twice", p.name)));
+            }
+            if let Some(dflt) = &p.default {
+                let word = dflt.as_str().filter(|w| opts.iter().any(|o| o == w));
+                if word.is_none() {
+                    return Err(invalid(format!("parameter {:?} defaults to {dflt} which is not one of its options {opts:?}", p.name)));
+                }
             }
         }
         for o in &self.outputs {

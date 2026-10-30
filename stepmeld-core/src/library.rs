@@ -153,6 +153,7 @@ impl Library {
                     default: p.default.clone(),
                     label: p.label.clone(),
                     group: p.group.clone(),
+                    options: p.options.clone(),
                 });
             }
             for o in &def.outputs {
