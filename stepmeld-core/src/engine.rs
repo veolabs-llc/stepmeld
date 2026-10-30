@@ -317,7 +317,7 @@ fn refused(words: String) -> Error {
 }
 
 /// Apply a Command. The Workflow is changed only when Ok.
-pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &str) -> Result<Vec<Entry>, Error> {
+pub fn apply(lib: &Library, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &str) -> Result<Vec<Entry>, Error> {
     if let Some(entries) = crate::edit::apply(lib, wf, cmd, by, now)? {
         return Ok(entries);
     }
@@ -332,6 +332,11 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
     let out = match cmd {
         Command::Set { step, input, parameter, value } => {
             not_running(wf, step)?;
+            // what a parameter unset goes back to, read before the Step is borrowed
+            let unset = match (parameter, value) {
+                (Some(name), None) => Some(parameter_from_definition(lib, wf, step, name, now)?),
+                _ => None,
+            };
             let s = wf.step_mut(step)?;
             match (input, parameter) {
                 (Some(name), None) => {
@@ -349,19 +354,11 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
                             p.value = Some(v.clone());
                             p.chosen = Some(stamp(now, by));
                         }
-                        // back to what the definition says: the entry's
-                        // own value where it has one, else the verb's default
-                        None => match def.entry(step).and_then(|e| e.parameters.get(name)) {
-                            Some(v) => {
-                                p.value = Some(v.clone());
-                                p.chosen = Some(stamp(now, &Actor::policy(DEFINITION_RULE, step)));
-                            }
-                            None => {
-                                let sdef = lib.verb_in(def, step).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
-                                p.value = sdef.parameters.iter().find(|d| &d.name == name).and_then(|d| d.default.clone());
-                                p.chosen = None;
-                            }
-                        },
+                        None => {
+                            let Some((v, chosen)) = unset else { unreachable!("read above for a parameter unset") };
+                            p.value = v;
+                            p.chosen = chosen;
+                        }
                     }
                     vec![entry("set", step).detail(json!({"parameter": name, "value": value}))]
                 }
@@ -370,7 +367,7 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
         }
         Command::Start { step } => {
             not_running(wf, step)?;
-            if wf.step_status(def, step) == StepStatus::Skipped {
+            if wf.step_status(step) == StepStatus::Skipped {
                 return Err(refused(format!("step {step:?} is skipped, which is final")));
             }
             let s = wf.step_mut(step)?;
@@ -382,7 +379,7 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
         }
         Command::Complete { step, outputs } => {
             not_running(wf, step)?;
-            let status = wf.step_status(def, step);
+            let status = wf.step_status(step);
             let wf_id = wf.id.clone();
             let s = wf.step_mut(step)?;
             if s.done_by != DoneBy::Person {
@@ -498,8 +495,20 @@ pub fn apply(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, cmd: &C
         | Command::SetOverride { .. }
         | Command::Saved { .. } => unreachable!("a structural Command is applied by edit::apply"),
     };
-    wf.propagate(def);
+    wf.propagate();
     Ok(out)
+}
+
+/// What a parameter goes back to when unset: the entry's own value,
+/// chosen by the definition's rule, else the verb's default, unchosen.
+fn parameter_from_definition(lib: &Library, wf: &Workflow, step: &str, name: &str, now: &str) -> Result<(Option<Value>, Option<Stamp>), Error> {
+    let def = &wf.workflow_definition;
+    if let Some(v) = def.entry(step).and_then(|e| e.parameters.get(name)) {
+        return Ok((Some(v.clone()), Some(stamp(now, &Actor::policy(DEFINITION_RULE, step)))));
+    }
+    let named = &wf.step(step)?.definition;
+    let sdef = lib.verb_in(def, step).ok_or_else(|| Error::Invalid(format!("{named} is not in the library")))?;
+    Ok((sdef.parameters.iter().find(|d| d.name == name).and_then(|d| d.default.clone()), None))
 }
 
 fn actor_word(a: &Actor) -> String {
@@ -533,16 +542,18 @@ fn check_outputs(declared: &BTreeMap<String, Output>, given: &BTreeMap<String, V
 /// Note, on each Step waiting for a confirmation, which Performer it
 /// would go to, so a reader with only the document sees the same
 /// status the driver does.
-pub fn note_placements(def: &WorkflowDefinition, wf: &mut Workflow, performers: &[PerformerFace], now: &str) -> Vec<Entry> {
+pub fn note_placements(wf: &mut Workflow, performers: &[PerformerFace], now: &str) -> Vec<Entry> {
     let mut entries = Vec::new();
     let names: Vec<String> = wf.steps.keys().cloned().collect();
     for name in names {
-        let waiting = matches!(wf.gate(def, &name, performers), Gate::Closed(StepStatus::Waiting(Waiting::Confirmation { .. })));
+        let waiting = matches!(wf.gate(&name, performers), Gate::Closed(StepStatus::Waiting(Waiting::Confirmation { .. })));
         let step = &wf.steps[&name];
         if !waiting || step.placement.is_some() {
             continue;
         }
-        let Some(face) = Workflow::placement_among(step, nested_in(def, &name), performers).ok() else { continue };
+        let Some(face) = Workflow::placement_among(step, nested_in(&wf.workflow_definition, &name), performers).ok() else {
+            continue;
+        };
         let by = Actor::policy("placement", &name);
         let placement = Placement {
             performer: face.name.clone(),
@@ -562,14 +573,14 @@ pub fn note_placements(def: &WorkflowDefinition, wf: &mut Workflow, performers: 
 /// Note, on each Step waiting for a placement, the Performers offering
 /// its verb, and clear the note where the wait is over. Whether the
 /// document changed. No History: nobody acted.
-pub fn note_offers(def: &WorkflowDefinition, wf: &mut Workflow, performers: &[PerformerFace]) -> bool {
+pub fn note_offers(wf: &mut Workflow, performers: &[PerformerFace]) -> bool {
     let mut changed = false;
     let names: Vec<String> = wf.steps.keys().cloned().collect();
     for name in names {
-        let waiting = matches!(wf.gate(def, &name, performers), Gate::Closed(StepStatus::Waiting(Waiting::Placement)));
+        let waiting = matches!(wf.gate(&name, performers), Gate::Closed(StepStatus::Waiting(Waiting::Placement)));
         let step = &wf.steps[&name];
         let offered: Vec<String> = if waiting {
-            Workflow::offering(step, nested_in(def, &name), performers).map(|p| p.name.clone()).collect()
+            Workflow::offering(step, nested_in(&wf.workflow_definition, &name), performers).map(|p| p.name.clone()).collect()
         } else {
             Vec::new()
         };
@@ -582,7 +593,7 @@ pub fn note_offers(def: &WorkflowDefinition, wf: &mut Workflow, performers: &[Pe
 }
 
 /// What to do now, in step order.
-pub fn plan(def: &WorkflowDefinition, wf: &Workflow, performers: &[PerformerFace]) -> Vec<Effect> {
+pub fn plan(wf: &Workflow, performers: &[PerformerFace]) -> Vec<Effect> {
     let mut out = Vec::new();
     for (name, step) in &wf.steps {
         if let Some(run) = step.latest().filter(|r| r.live()) {
@@ -604,7 +615,7 @@ pub fn plan(def: &WorkflowDefinition, wf: &Workflow, performers: &[PerformerFace
             }
             continue;
         }
-        if wf.gate(def, name, performers) == Gate::Open {
+        if wf.gate(name, performers) == Gate::Open {
             out.push(Effect::Mint { step: name.clone() });
         }
     }
@@ -614,16 +625,17 @@ pub fn plan(def: &WorkflowDefinition, wf: &Workflow, performers: &[PerformerFace
 /// Mint a Run for a Step whose Gate is open: its Values as resolved
 /// now, its placement, who gave the go. The request to hand the
 /// Performer comes back with it.
-pub fn mint(lib: &Library, def: &WorkflowDefinition, wf: &mut Workflow, step: &str, performers: &[PerformerFace], now: &str) -> Result<(StartRequest, Vec<Entry>), Error> {
-    match wf.gate(def, step, performers) {
+pub fn mint(lib: &Library, wf: &mut Workflow, step: &str, performers: &[PerformerFace], now: &str) -> Result<(StartRequest, Vec<Entry>), Error> {
+    match wf.gate(step, performers) {
         Gate::Open => {}
         Gate::Closed(s) => return Err(refused(format!("step {step:?} is {}; its gate is not open", s.word()))),
     }
     let id = wf.id.clone();
-    let nested = nested_in(def, step);
+    let nested = nested_in(&wf.workflow_definition, step);
+    let named = &wf.step(step)?.definition;
+    let sdef = lib.verb_in(&wf.workflow_definition, step).ok_or_else(|| Error::Invalid(format!("{named} is not in the library")))?;
     let s = wf.step_mut(step)?;
     let face = wf_placement(s, nested, performers)?;
-    let sdef = lib.verb_in(def, step).ok_or_else(|| Error::Invalid(format!("{} is not in the library", s.definition)))?;
     let by = match s.go.take() {
         Some(go) => go.by,
         None => match s.latest().and_then(|r| r.outcome.as_ref()).map(|o| o.state) {
@@ -719,18 +731,18 @@ pub fn started(wf: &mut Workflow, step: &str, run: &str, handle: &str, now: &str
 
 /// The Performer refused to start: the Run ends failed, class
 /// `refused`, in the Performer's words. Nothing ran.
-pub fn refused_start(def: &WorkflowDefinition, wf: &mut Workflow, step: &str, run: &str, words: &str, now: &str) -> Result<Vec<Entry>, Error> {
+pub fn refused_start(wf: &mut Workflow, step: &str, run: &str, words: &str, now: &str) -> Result<Vec<Entry>, Error> {
     let mut outcome = Outcome::failed("refused", words);
     outcome.summary = Some(crate::workflow::Summary {
         headline: format!("refused: {words}"),
         details: None,
     });
-    observed(def, wf, step, run, &Observation::Ended { outcome }, now)
+    observed(wf, step, run, &Observation::Ended { outcome }, now)
 }
 
 /// What a Performer said when asked. Ending a Run that has ended is
 /// not an error; unreachable changes nothing.
-pub fn observed(def: &WorkflowDefinition, wf: &mut Workflow, step: &str, run: &str, obs: &Observation, now: &str) -> Result<Vec<Entry>, Error> {
+pub fn observed(wf: &mut Workflow, step: &str, run: &str, obs: &Observation, now: &str) -> Result<Vec<Entry>, Error> {
     let id = wf.id.clone();
     let declared: BTreeMap<String, Output> = wf.step(step)?.outputs.clone();
     let s = wf.step_mut(step)?;
@@ -779,6 +791,6 @@ pub fn observed(def: &WorkflowDefinition, wf: &mut Workflow, step: &str, run: &s
             vec![entry("run-ended").detail(serde_json::to_value(&outcome).unwrap_or(Value::Null))]
         }
     };
-    wf.propagate(def);
+    wf.propagate();
     Ok(out)
 }

@@ -542,14 +542,14 @@ impl Workflow {
     // ---- derived facts ----
 
     /// Whether `step` has ended that way, as a Guard sees it.
-    fn settled(&self, def: &WorkflowDefinition, step: &str) -> Option<StepStatus> {
-        let status = self.step_status(def, step);
+    fn settled(&self, step: &str) -> Option<StepStatus> {
+        let status = self.step_status(step);
         matches!(status, StepStatus::Succeeded | StepStatus::Stale | StepStatus::Failed | StepStatus::Skipped | StepStatus::Canceled).then_some(status)
     }
 
-    pub fn guard(&self, def: &WorkflowDefinition, g: &Guard) -> Tri {
+    pub fn guard(&self, g: &Guard) -> Tri {
         match g {
-            Guard::Decision { step, output, is } => match self.settled(def, step) {
+            Guard::Decision { step, output, is } => match self.settled(step) {
                 Some(StepStatus::Succeeded | StepStatus::Stale) => match self.steps.get(step).and_then(|s| s.outputs.get(output)).and_then(|o| o.value.as_ref()) {
                     Some(v) => {
                         if v.as_str() == Some(is) {
@@ -563,7 +563,7 @@ impl Workflow {
                 Some(_) => Tri::False,
                 None => Tri::Unknown,
             },
-            Guard::Status { step, is } => match self.settled(def, step) {
+            Guard::Status { step, is } => match self.settled(step) {
                 Some(status) => {
                     let word = match status {
                         StepStatus::Stale => "succeeded",
@@ -577,7 +577,7 @@ impl Workflow {
                 }
                 None => Tri::Unknown,
             },
-            Guard::Present { step, output } => match self.settled(def, step) {
+            Guard::Present { step, output } => match self.settled(step) {
                 Some(StepStatus::Succeeded | StepStatus::Stale) => {
                     if self.steps.get(step).and_then(|s| s.outputs.get(output)).is_some_and(|o| o.value.is_some()) {
                         Tri::True
@@ -588,33 +588,34 @@ impl Workflow {
                 Some(_) => Tri::False,
                 None => Tri::Unknown,
             },
-            Guard::All(gs) => Tri::all(gs.iter().map(|g| self.guard(def, g))),
-            Guard::Any(gs) => Tri::any(gs.iter().map(|g| self.guard(def, g))),
-            Guard::Not(g) => self.guard(def, g).not(),
+            Guard::All(gs) => Tri::all(gs.iter().map(|g| self.guard(g))),
+            Guard::Any(gs) => Tri::any(gs.iter().map(|g| self.guard(g))),
+            Guard::Not(g) => self.guard(g).not(),
         }
     }
 
     /// Whether a Binding will carry a Value: its Guard holds and its
     /// source has Outputs, or will. A source that succeeded once keeps
     /// its Outputs while it is retaken.
-    fn binding_alive(&self, def: &WorkflowDefinition, b: &crate::definition::Binding) -> Tri {
+    fn binding_alive(&self, b: &crate::definition::Binding) -> Tri {
         let Some((src, _)) = b.from.split() else { return Tri::False };
-        let source = match self.settled(def, src) {
+        let source = match self.settled(src) {
             Some(StepStatus::Skipped) => Tri::False,
             Some(StepStatus::Succeeded | StepStatus::Stale) => Tri::True,
             _ if self.steps.get(src).is_some_and(|s| s.current().is_some()) => Tri::True,
             _ => Tri::Unknown,
         };
-        let guard = b.guard.as_ref().map_or(Tri::True, |g| self.guard(def, g));
+        let guard = b.guard.as_ref().map_or(Tri::True, |g| self.guard(g));
         Tri::all([source, guard].into_iter())
     }
 
     /// What a bound Input gets from its Bindings, taken in order: the
     /// first alive one wins; one that cannot be told yet holds the
     /// answer; none alive at all means the Input will never be fed.
-    fn feed(&self, def: &WorkflowDefinition, step: &str, input: &str) -> Feed {
+    fn feed(&self, step: &str, input: &str) -> Feed {
+        let def = &self.workflow_definition;
         for b in def.bindings_into(step, input) {
-            match self.binding_alive(def, b) {
+            match self.binding_alive(b) {
                 Tri::Unknown => return Feed::Undecided,
                 Tri::False => continue,
                 Tri::True => {
@@ -630,12 +631,13 @@ impl Workflow {
     }
 
     /// Carry Outputs into the Inputs bound to them, everywhere.
-    pub fn propagate(&mut self, def: &WorkflowDefinition) {
+    pub fn propagate(&mut self) {
+        let def = &self.workflow_definition;
         let mut changes = Vec::new();
         for (name, step) in &self.steps {
             for input in step.inputs.keys() {
                 if def.bindings_into(name, input).next().is_some() {
-                    let value = match self.feed(def, name, input) {
+                    let value = match self.feed(name, input) {
                         Feed::Value(v) => Some(v),
                         _ => None,
                     };
@@ -652,8 +654,8 @@ impl Workflow {
     }
 
     /// Status for display: the Gate's answer, or where the Step stands.
-    pub fn step_status(&self, def: &WorkflowDefinition, name: &str) -> StepStatus {
-        match self.gate(def, name, &[]) {
+    pub fn step_status(&self, name: &str) -> StepStatus {
+        match self.gate(name, &[]) {
             Gate::Open => StepStatus::Ready,
             Gate::Closed(s) => s,
         }
@@ -661,7 +663,8 @@ impl Workflow {
 
     /// The Gate, with the Performers on offer for placement. With none
     /// given, placement is not checked (status only).
-    pub fn gate(&self, def: &WorkflowDefinition, name: &str, performers: &[PerformerFace]) -> Gate {
+    pub fn gate(&self, name: &str, performers: &[PerformerFace]) -> Gate {
+        let def = &self.workflow_definition;
         let Some(step) = self.steps.get(name) else { return Gate::Closed(StepStatus::NotReady) };
         use Gate::Closed;
         // a skip is final: it was refused while a Run was live or after
@@ -697,7 +700,7 @@ impl Workflow {
                 }
                 continue;
             }
-            match self.feed(def, name, iname) {
+            match self.feed(name, iname) {
                 Feed::Never if input.required => return Closed(StepStatus::Skipped),
                 // an optional Input a Binding may still carry waits for its
                 // source too: starting without it would take the Value the
@@ -810,11 +813,11 @@ impl Workflow {
         }
     }
 
-    pub fn status(&self, def: &WorkflowDefinition) -> WorkflowStatus {
+    pub fn status(&self) -> WorkflowStatus {
         if self.canceled.is_some() {
             return WorkflowStatus::Canceled;
         }
-        let statuses: Vec<StepStatus> = self.steps.keys().map(|n| self.step_status(def, n)).collect();
+        let statuses: Vec<StepStatus> = self.steps.keys().map(|n| self.step_status(n)).collect();
         if statuses.iter().all(StepStatus::is_done) {
             return WorkflowStatus::Succeeded;
         }
@@ -835,7 +838,7 @@ impl Workflow {
     }
 
     /// Every Step's status, for a reader.
-    pub fn statuses(&self, def: &WorkflowDefinition) -> BTreeMap<String, StepStatus> {
-        self.steps.keys().map(|n| (n.clone(), self.step_status(def, n))).collect()
+    pub fn statuses(&self) -> BTreeMap<String, StepStatus> {
+        self.steps.keys().map(|n| (n.clone(), self.step_status(n))).collect()
     }
 }

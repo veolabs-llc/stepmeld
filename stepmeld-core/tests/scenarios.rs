@@ -193,16 +193,12 @@ impl Rig {
         }
     }
 
-    fn def(&self) -> WorkflowDefinition {
-        self.wf().workflow_definition
-    }
-
     fn status(&self, step: &str) -> StepStatus {
-        self.wf().step_status(&self.def(), step)
+        self.wf().step_status(step)
     }
 
     fn workflow_status(&self) -> WorkflowStatus {
-        self.wf().status(&self.def())
+        self.wf().status()
     }
 
     fn handle(&self, p: &MemoryPerformer, step: &str) -> String {
@@ -253,7 +249,7 @@ fn one_step_workflow_runs_when_its_inputs_are_given() {
     rig.command(set("add", "b", 3.into())).unwrap();
     assert_eq!(rig.status("add"), StepStatus::Ready);
     let wf = rig.tick();
-    assert_eq!(wf.step_status(&rig.def(), "add"), StepStatus::Running);
+    assert_eq!(wf.step_status("add"), StepStatus::Running);
     let req = &local.started()[0];
     assert_eq!(req.parameters["beat-seconds"], Value::from(1), "the default is in effect");
     assert_eq!((&req.inputs["a"], &req.inputs["b"]), (&Value::from(2), &Value::from(3)));
@@ -277,7 +273,7 @@ fn one_step_workflow_runs_when_its_inputs_are_given() {
     outcome.summary = Some(Summary { headline: "2 + 3 = 5".into(), details: None });
     local.finish(&h, outcome);
     let wf = rig.tick();
-    assert_eq!(wf.step_status(&rig.def(), "add"), StepStatus::Succeeded);
+    assert_eq!(wf.step_status("add"), StepStatus::Succeeded);
     assert_eq!(wf.step("add").unwrap().outputs["sum"].value, Some(Value::from(5)));
     assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
     assert_eq!(rig.history_kinds(), ["created", "started", "set@add", "set@add", "run-minted@add", "run-started@add", "progress@add", "run-ended@add"]);
@@ -619,7 +615,7 @@ fn scenario_c_publish_as_a_nested_workflow() {
         }
     );
     assert_eq!(child_wf.step("package").unwrap().inputs["document"].value, Some("doc-1".into()));
-    assert_eq!(child_wf.step_status(&child, "package"), StepStatus::Running);
+    assert_eq!(child_wf.step_status("package"), StepStatus::Running);
     assert_eq!(rig.status("publish"), StepStatus::Running);
     let progress = rig.wf().step("publish").unwrap().latest().unwrap().progress.clone().unwrap();
     assert_eq!((progress.done, progress.total), (Some(0), Some(3)));
@@ -629,8 +625,8 @@ fn scenario_c_publish_as_a_nested_workflow() {
     local.finish(&local.handle_of(&package_run).unwrap(), Outcome::succeeded(outs(&[("bundle", "bundle-1".into())])));
     rig.tick();
     let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
-    assert_eq!(child_wf.step_status(&child, "upload"), StepStatus::Running);
-    assert_eq!(child_wf.step_status(&child, "announce"), StepStatus::Running);
+    assert_eq!(child_wf.step_status("upload"), StepStatus::Running);
+    assert_eq!(child_wf.step_status("announce"), StepStatus::Running);
     let upload_run = child_wf.step("upload").unwrap().latest().unwrap().id.clone();
     let announce_run = child_wf.step("announce").unwrap().latest().unwrap().id.clone();
     local.finish(&local.handle_of(&announce_run).unwrap(), Outcome::succeeded(BTreeMap::new()));
@@ -773,7 +769,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     here.command("wf-s", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     let status = |_: &Driver| {
         let wf = store.get("wf-s").unwrap().unwrap().0;
-        wf.step_status(&wf.workflow_definition, "add")
+        wf.step_status("add")
     };
     // both offer it: nobody starts anything until it is placed
     here.tick_all(&now(2), &now(9)).unwrap();
@@ -817,7 +813,7 @@ fn drivers_that_share_a_store_each_run_their_own() {
     alone.tick_all(&now(2), &now(9)).unwrap();
     let wf = store.get("wf-t").unwrap().unwrap().0;
     assert!(wf.steps["add"].runs.is_empty(), "nobody offers it: nothing is minted");
-    assert_eq!(wf.gate(&wf.workflow_definition, "add", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert_eq!(wf.gate("add", &alone_faces(&alone)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
 }
 
 fn alone_faces(d: &Driver) -> Vec<PerformerFace> {
@@ -837,9 +833,8 @@ fn a_root_workflow_waits_for_its_start_and_a_nested_one_does_not() {
     driver.command("wf-r", &set("add", "b", 3.into()), &max(), &now(1)).unwrap();
     driver.tick_all(&now(2), &now(9)).unwrap();
     let wf = store.get("wf-r").unwrap().unwrap().0;
-    let def = wf.workflow_definition.clone();
-    assert_eq!(wf.step_status(&def, "add"), StepStatus::Waiting(Waiting::Start));
-    assert_eq!(wf.status(&def), WorkflowStatus::Waiting);
+    assert_eq!(wf.step_status("add"), StepStatus::Waiting(Waiting::Start));
+    assert_eq!(wf.status(), WorkflowStatus::Waiting);
     assert!(local.started().is_empty(), "nothing is minted before the go");
     stepmeld_core::contracts::validate(&serde_json::to_value(&wf).unwrap(), "stepmeld/workflow.v1").unwrap();
     driver.command("wf-r", &Command::StartWorkflow, &max(), &now(3)).unwrap();
@@ -1102,7 +1097,7 @@ fn a_workflow_carries_its_own_definition() {
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     let wf = rig.tick();
-    assert_eq!(wf.step_status(&wf.workflow_definition, "add"), StepStatus::Running);
+    assert_eq!(wf.step_status("add"), StepStatus::Running);
 
     // a document from before is refused by this build, and adopted
     let lib = {
@@ -1204,7 +1199,7 @@ fn a_policy_prefers_a_locality() {
     rig.command(set("add", "a", 2.into())).unwrap();
     rig.command(set("add", "b", 3.into())).unwrap();
     let wf = rig.tick();
-    assert_eq!(wf.gate(&wf.workflow_definition, "add", &alone_faces(&rig.driver)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert_eq!(wf.gate("add", &alone_faces(&rig.driver)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
     assert!(wf.step("add").unwrap().runs.is_empty());
     // a Performer named in the Policy is taken wherever it is
     rig.command(Command::SetPolicy {
@@ -1277,7 +1272,7 @@ fn a_child_is_made_from_the_parents_copy() {
     let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
     assert_eq!(child_wf.workflow_definition, child);
     assert_eq!(child_wf.from, Some(child.reference()));
-    assert_eq!(child_wf.step_status(&child_wf.workflow_definition, "package"), StepStatus::Running);
+    assert_eq!(child_wf.step_status("package"), StepStatus::Running);
 }
 
 /// A Workflow's own definition is edited by Commands: a step added and
@@ -1339,7 +1334,7 @@ fn a_workflow_is_edited_while_it_runs() {
     local.finish(&rig.handle(&local, "add"), Outcome::succeeded(outs(&[("sum", 5.into())])));
     let wf = rig.tick();
     assert_eq!(wf.step("double").unwrap().inputs["x"].value, Some(5.into()));
-    assert_eq!(wf.step_status(&wf.workflow_definition, "double"), StepStatus::Running);
+    assert_eq!(wf.step_status("double"), StepStatus::Running);
     assert_eq!(local.started().last().unwrap().inputs["x"], Value::from(5));
     local.finish(&rig.handle(&local, "double"), Outcome::succeeded(outs(&[("y", 10.into())])));
     rig.tick();
@@ -1349,7 +1344,7 @@ fn a_workflow_is_edited_while_it_runs() {
     let wf = rig.wf();
     let x = &wf.step("double").unwrap().inputs["x"];
     assert!(!x.bound && x.value.is_none());
-    assert_eq!(wf.step_status(&wf.workflow_definition, "double"), StepStatus::Waiting(Waiting::Input { name: "x".into() }));
+    assert_eq!(wf.step_status("double"), StepStatus::Waiting(Waiting::Input { name: "x".into() }));
     // a value set by hand keeps a wire out until it is cleared
     rig.command(set("double", "x", 7.into())).unwrap();
     assert_eq!(rig.status("double"), StepStatus::Stale);
