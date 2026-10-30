@@ -1,7 +1,7 @@
 //! The loop at the edge: read, plan, act on Performers, apply, write.
 //! Everything the core does not do.
 
-use crate::definition::{Ref, WorkflowDefinition};
+use crate::definition::Ref;
 use crate::engine::{self, Command, Effect, Observation, StartRequest};
 use crate::history::Entry;
 use crate::performer::Performer;
@@ -76,11 +76,6 @@ impl Driver {
         self.performers.iter().find(|p| p.describe().name == name)
     }
 
-    /// The Workflow's own WorkflowDefinition, as the engine takes it.
-    fn definition(&self, wf: &Workflow) -> WorkflowDefinition {
-        wf.workflow_definition.clone()
-    }
-
     /// Bring a Workflow made before each carried its own
     /// WorkflowDefinition to this shape ([`Workflow::adopt`]), written
     /// over the version read and noted in its History. One already in
@@ -110,8 +105,7 @@ impl Driver {
     pub fn command(&self, id: &str, cmd: &Command, by: &Actor, now: &str) -> Result<Workflow, Error> {
         let lib = self.store.library()?;
         let (mut wf, version) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
-        let def = self.definition(&wf);
-        let entries = engine::apply(&lib, &def, &mut wf, cmd, by, now)?;
+        let entries = engine::apply(&lib, &mut wf, cmd, by, now)?;
         self.store.put(&wf, Some(&version))?;
         self.store.append(&entries)?;
         Ok(wf)
@@ -126,8 +120,7 @@ impl Driver {
     /// them.
     pub fn remove(&self, id: &str, now: &str, lease_until: &str) -> Result<Vec<String>, Error> {
         let (wf, _) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
-        let def = self.definition(&wf);
-        if matches!(wf.status(&def), WorkflowStatus::Running) {
+        if matches!(wf.status(), WorkflowStatus::Running) {
             return Err(Error::Refused(format!("{id} has a Run still live: cancel it first, and tick")));
         }
         if !self.store.lease(id, &self.holder, now, lease_until)? {
@@ -161,24 +154,23 @@ impl Driver {
         let mut rounds = 0;
         loop {
             let (mut wf, version) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
-            let def = self.definition(&wf);
-            let effects = engine::plan(&def, &wf, &faces);
-            let mut entries: Vec<Entry> = engine::note_placements(&def, &mut wf, &faces, now);
-            let noted = engine::note_offers(&def, &mut wf, &faces);
+            let effects = engine::plan(&wf, &faces);
+            let mut entries: Vec<Entry> = engine::note_placements(&mut wf, &faces, now);
+            let noted = engine::note_offers(&mut wf, &faces);
             let mut moved = false;
             for effect in effects {
                 match effect {
                     Effect::Mint { step } => {
-                        let (request, minted) = engine::mint(&lib, &def, &mut wf, &step, &faces, now)?;
+                        let (request, minted) = engine::mint(&lib, &mut wf, &step, &faces, now)?;
                         entries.extend(minted);
-                        entries.extend(self.start(&def, &mut wf, &request, now)?);
+                        entries.extend(self.start(&mut wf, &request, now)?);
                         moved = true;
                     }
                     Effect::Start { step, run } => {
                         let request = engine::request_for(&lib, &wf, &step, &run)?;
                         // a start that changed nothing (its Performer is
                         // another driver's, or unreachable) is not a move
-                        let started = self.start(&def, &mut wf, &request, now)?;
+                        let started = self.start(&mut wf, &request, now)?;
                         moved |= !started.is_empty();
                         entries.extend(started);
                     }
@@ -192,7 +184,7 @@ impl Driver {
                                 reason: format!("no performer {performer:?} in this driver"),
                             },
                         };
-                        let got = engine::observed(&def, &mut wf, &step, &run, &obs, now)?;
+                        let got = engine::observed(&mut wf, &step, &run, &obs, now)?;
                         moved |= !got.is_empty();
                         entries.extend(got);
                     }
@@ -200,7 +192,7 @@ impl Driver {
                         if let Some(p) = self.performer(&performer) {
                             p.cancel(&handle, &reason);
                             let obs = p.observe(&handle);
-                            let got = engine::observed(&def, &mut wf, &step, &run, &obs, now)?;
+                            let got = engine::observed(&mut wf, &step, &run, &obs, now)?;
                             moved |= !got.is_empty();
                             entries.extend(got);
                         }
@@ -218,18 +210,18 @@ impl Driver {
         }
     }
 
-    fn start(&self, def: &WorkflowDefinition, wf: &mut Workflow, request: &StartRequest, now: &str) -> Result<Vec<Entry>, Error> {
+    fn start(&self, wf: &mut Workflow, request: &StartRequest, now: &str) -> Result<Vec<Entry>, Error> {
         let performer = wf.step(&request.step)?.run(&request.run).map(|r| r.performer.clone()).ok_or_else(|| Error::Refused(format!("no run {}", request.run)))?;
         if self.is_elsewhere(&performer) {
             return Ok(Vec::new()); // minted here, started by the driver that has it
         }
         let Some(p) = self.performer(&performer) else {
-            return engine::refused_start(def, wf, &request.step, &request.run, &format!("no performer {performer:?} in this driver"), now);
+            return engine::refused_start(wf, &request.step, &request.run, &format!("no performer {performer:?} in this driver"), now);
         };
         match p.start(request) {
             Ok(handle) => engine::started(wf, &request.step, &request.run, &handle, now),
             Err(words) if words.starts_with("unreachable:") => Ok(Vec::new()),
-            Err(words) => engine::refused_start(def, wf, &request.step, &request.run, &words, now),
+            Err(words) => engine::refused_start(wf, &request.step, &request.run, &words, now),
         }
     }
 
@@ -265,7 +257,7 @@ impl Driver {
                 seen.statuses.insert(id.clone(), WorkflowStatus::Running);
                 continue; // another Orchestrator holds it
             };
-            let status = wf.status(&self.definition(&wf));
+            let status = wf.status();
             // the listing's word for it, not a read's: a store may list
             // a different stamp (a modified time) than it reads (an
             // ETag). What this tick wrote is ticked once more next time.
@@ -296,8 +288,7 @@ impl Driver {
             for id in fresh {
                 match self.tick(&id, now, lease_until)? {
                     Some(wf) => {
-                        let def = self.definition(&wf);
-                        out.insert(id, wf.status(&def));
+                        out.insert(id, wf.status());
                     }
                     None => {
                         out.insert(id, WorkflowStatus::Running);
@@ -389,7 +380,7 @@ impl Performer for Nested {
                     value: Some(value.clone()),
                 }
             };
-            entries.extend(engine::apply(&lib, def, &mut wf, &cmd, &by, now).map_err(|e| e.to_string())?);
+            entries.extend(engine::apply(&lib, &mut wf, &cmd, &by, now).map_err(|e| e.to_string())?);
         }
         self.store.put(&wf, None).map_err(|e| e.to_string())?;
         self.store.append(&entries).map_err(|e| e.to_string())?;
@@ -402,10 +393,9 @@ impl Performer for Nested {
             Ok(None) => return Observation::Absent,
             Err(e) => return Observation::Unreachable { reason: e.to_string() },
         };
-        let def = &wf.workflow_definition;
-        let statuses = wf.statuses(def);
+        let statuses = wf.statuses();
         let done = statuses.values().filter(|s| s.is_done()).count();
-        match wf.status(def) {
+        match wf.status() {
             WorkflowStatus::Succeeded => {
                 let mut outputs = BTreeMap::new();
                 for (name, step) in &wf.steps {
@@ -451,11 +441,9 @@ impl Performer for Nested {
     fn cancel(&self, handle: &str, reason: &str) {
         let Ok(lib) = self.store.library() else { return };
         let Ok(Some((mut wf, version))) = self.store.get(handle) else { return };
-        let def = wf.workflow_definition.clone();
         let by = Actor::policy("cancel-from-parent", "");
         if let Ok(entries) = engine::apply(
             &lib,
-            &def,
             &mut wf,
             &Command::Cancel {
                 step: None,

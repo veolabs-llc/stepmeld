@@ -93,7 +93,7 @@ fn rebind(wf: &mut Workflow) {
             i.bound = bound;
         }
     }
-    wf.propagate(&def);
+    wf.propagate();
 }
 
 /// Apply a structural Command; `None` when the Command is not one. The

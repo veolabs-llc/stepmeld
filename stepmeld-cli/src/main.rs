@@ -590,7 +590,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::List => {
             for id in store.list()? {
                 let (wf, _) = store.get(&id)?.unwrap();
-                let status = format!("{:?}", wf.status(&wf.workflow_definition)).to_lowercase();
+                let status = format!("{:?}", wf.status()).to_lowercase();
                 println!("{:<40} {:<24} {}", wf.id, origin(&wf), status);
             }
         }
@@ -898,12 +898,11 @@ fn origin(wf: &Workflow) -> String {
 }
 
 fn show(wf: &Workflow, faces: &[stepmeld_core::workflow::PerformerFace]) -> Result<(), Error> {
-    let def = &wf.workflow_definition;
-    println!("{}  ({}, {})", wf.id, origin(wf), format!("{:?}", wf.status(def)).to_lowercase());
+    println!("{}  ({}, {})", wf.id, origin(wf), format!("{:?}", wf.status()).to_lowercase());
     for (name, step) in &wf.steps {
-        let status = match wf.gate(def, name, faces) {
+        let status = match wf.gate(name, faces) {
             stepmeld_core::workflow::Gate::Closed(s @ StepStatus::Waiting(_)) => s,
-            _ => wf.step_status(def, name),
+            _ => wf.step_status(name),
         };
         let reason = reason(wf, name, &status);
         println!("  {:<16} {:<24} {:<10} {}", name, format!("({})", step.definition), status.word(), reason);
@@ -1137,16 +1136,16 @@ type Snapshot = (String, Vec<(String, String)>);
 fn snapshot(store: &dyn SharedStore, faces: &[stepmeld_core::workflow::PerformerFace], id: &str) -> Result<Option<Snapshot>, Error> {
     let Some((wf, _)) = store.get(id)? else { return Ok(None) };
     let def = &wf.workflow_definition;
-    let status = wf.status(def);
+    let status = wf.status();
     let mut steps = Vec::new();
     let mut any_open = false;
     for entry in &def.steps {
         let name = &entry.name;
-        let gate = wf.gate(def, name, faces);
+        let gate = wf.gate(name, faces);
         any_open |= gate == Gate::Open;
         let st = match gate {
             Gate::Closed(s @ StepStatus::Waiting(_)) => s,
-            _ => wf.step_status(def, name),
+            _ => wf.step_status(name),
         };
         let step = &wf.steps[name];
         let detail = match &st {

@@ -323,7 +323,7 @@ fn a_cloud_worker_takes_over_a_batch_job_and_sees_it_through() {
     orchestrate(2);
     let status = |s: &MemoryStore| {
         let wf = s.get("book-1").unwrap().unwrap().0;
-        wf.step_status(&wf.workflow_definition, "typeset")
+        wf.step_status("typeset")
     };
     assert_eq!(status(&store), StepStatus::Running, "not before the first one's claim lapses");
     orchestrate(4);
