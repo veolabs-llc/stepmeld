@@ -336,6 +336,7 @@ impl Performer for BatchPerformer {
             locality: Locality::Cloud,
             verbs: Vec::new(),
             pool: false,
+            nests: false,
         }
     }
 

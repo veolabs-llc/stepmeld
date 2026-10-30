@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stepmeld/workflow-definition.v1",
-  "title": "A recipe: named uses of verbs, and the Bindings between them. Versioned, immutable, holds no Values and declares no face of its own (it is derived).",
+  "title": "A WorkflowDefinition: named uses of verbs, each with what it sets apart from the verb (Parameter values, a Policy, a nested WorkflowDefinition inline), and the Bindings between them. Holds no Values of a Workflow's own and declares no face of its own (it is derived). May have no steps.",
   "type": "object",
   "required": ["contract", "name", "version", "steps"],
   "additionalProperties": false,
@@ -12,10 +12,17 @@
     "label": { "type": "string" },
     "description": { "type": "string" },
     "steps": {
-      "type": "array", "minItems": 1,
+      "type": "array",
       "items": {
         "type": "object", "required": ["name", "step"], "additionalProperties": false,
-        "properties": { "name": { "type": "string", "pattern": "^[^.\\s]+$" }, "step": { "$ref": "#/$defs/ref" }, "label": { "type": "string" } }
+        "properties": {
+          "name": { "type": "string", "pattern": "^[^.\\s]+$" },
+          "step": { "$ref": "#/$defs/ref" },
+          "label": { "type": "string" },
+          "parameters": { "type": "object", "description": "Parameter values this use starts from instead of the verb's defaults, by name." },
+          "policy": { "$ref": "#/$defs/policy", "description": "The Step's rules, in place of the verb's." },
+          "definition": { "$ref": "#", "description": "The nested WorkflowDefinition this use is an occurrence of, carried inline; `step` names it." }
+        }
       }
     },
     "bindings": {
@@ -27,6 +34,92 @@
     }
   },
   "$defs": {
+    "locality": {
+      "enum": [
+        "this-machine",
+        "local-network",
+        "cloud"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "enum": [
+            "automatic",
+            "manual"
+          ],
+          "default": "automatic"
+        },
+        "on_failure": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "do"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "const": "stop"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "do",
+                "max",
+                "classes"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "const": "retake"
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "classes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "on_stale": {
+          "enum": [
+            "wait",
+            "rerun"
+          ],
+          "default": "wait"
+        },
+        "placement": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "performer": {
+              "type": "string"
+            },
+            "locality": {
+              "$ref": "#/$defs/locality",
+              "description": "Where the driver's choice is made, when no Performer is named."
+            },
+            "confirm": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/locality"
+              }
+            }
+          }
+        }
+      }
+    },
     "ref": { "type": "object", "required": ["name", "version"], "additionalProperties": false, "properties": { "name": { "type": "string" }, "version": { "type": "integer", "minimum": 1 } } },
     "portref": { "type": "string", "pattern": "^[^.\\s]+\\.[^\\s]+$", "description": "step.port" },
     "guard": {

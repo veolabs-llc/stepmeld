@@ -143,6 +143,12 @@ pub struct PlacementPolicy {
     /// offering the verb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub performer: Option<String>,
+    /// Where the driver's choice is made: among the Performers offering
+    /// the verb in this locality only. Not read when a Performer is
+    /// named. A WorkflowDefinition can say "the cloud" with it and name
+    /// no machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locality: Option<Locality>,
     /// Localities a person must confirm before a Run starts there.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub confirm: Vec<Locality>,
@@ -328,14 +334,43 @@ pub enum Guard {
     Not(Box<Guard>),
 }
 
-/// One use of a verb in a recipe. Two entries for the same verb differ
-/// by name and nothing else.
+/// One use of a verb in a WorkflowDefinition: its name there, the verb
+/// by name and version, and what this use sets apart from the verb's
+/// own defaults: Parameter values, a Policy, and, for a verb that is a
+/// WorkflowDefinition, that definition carried inline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepEntry {
     pub name: String,
     pub step: Ref,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Parameter values this use starts from instead of the verb's
+    /// defaults, by Parameter name. A Workflow's Step takes them at
+    /// creation, and a `set` to none comes back to them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, Value>,
+    /// The Step's rules, in place of the verb's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<Policy>,
+    /// The nested WorkflowDefinition this use is an occurrence of,
+    /// carried here rather than looked up: `step` names it. A Workflow
+    /// made from a definition that nests by name alone gets the nested
+    /// definition copied in here, so the Workflow is whole on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<WorkflowDefinition>,
+}
+
+impl StepEntry {
+    pub fn new(name: &str, step: Ref) -> StepEntry {
+        StepEntry {
+            name: name.to_string(),
+            step,
+            label: None,
+            parameters: BTreeMap::new(),
+            policy: None,
+            definition: None,
+        }
+    }
 }
 
 /// From one step's Output to another step's Input. Several Bindings

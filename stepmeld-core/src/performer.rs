@@ -350,6 +350,7 @@ mod tests {
     fn the_memory_performer_conforms() {
         let p = MemoryPerformer::new(PerformerFace {
             pool: false,
+            nests: false,
             name: "mem".into(),
             locality: Locality::ThisMachine,
             verbs: vec![Ref::new("verb", 1)],
@@ -377,6 +378,7 @@ mod tests {
             locality: Locality::ThisMachine,
             verbs: vec![Ref::new("verb", 1)],
             pool: false,
+            nests: false,
         };
         let commands = std::sync::Arc::new(MemoryPerformer::new(face("commands")));
         let images = std::sync::Arc::new(MemoryPerformer::new(face("images")));

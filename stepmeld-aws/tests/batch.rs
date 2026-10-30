@@ -270,11 +270,7 @@ fn a_cloud_worker_takes_over_a_batch_job_and_sees_it_through() {
     });
     store.put_step(&typeset).unwrap();
     let mut wd = WorkflowDefinition::new("book", 1);
-    wd.steps.push(StepEntry {
-        name: "typeset".into(),
-        step: Ref::new("typeset", 1),
-        label: None,
-    });
+    wd.steps.push(StepEntry::new("typeset", Ref::new("typeset", 1)));
     store.put_workflow_definition(&wd).unwrap();
 
     let (jobs, folders) = (Arc::new(MemoryJobs::new()), Arc::new(MemoryObjects::new()));

@@ -545,11 +545,7 @@ mod tests {
         setup.put_step(&count).unwrap();
         let mut two = WorkflowDefinition::new("two", 1);
         for name in ["first", "second"] {
-            two.steps.push(StepEntry {
-                name: name.into(),
-                step: Ref::new("count", 1),
-                label: None,
-            });
+            two.steps.push(StepEntry::new(name, Ref::new("count", 1)));
         }
         two.bindings.push(Binding {
             from: PortRef::new("first", "n"),
@@ -582,6 +578,7 @@ mod tests {
                     locality: Locality::ThisMachine,
                     verbs: vec![Ref::new("count", 1)],
                     pool: false,
+                    nests: false,
                 }));
                 let w = Worker::new("bench", "h", false, vec!["count-program".into()], store, mechanism.clone()).with_slots(8);
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {

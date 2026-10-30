@@ -468,6 +468,10 @@ pub struct PerformerFace {
     /// chosen on its own; an Actor or a Policy names it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pool: bool,
+    /// Performs nested WorkflowDefinitions, whatever their names: the
+    /// nested-workflow Performer, which makes a child Workflow of each.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nests: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -743,7 +747,8 @@ impl Workflow {
             }
             step.placement.as_ref().map(|p| p.locality)
         } else {
-            match Self::placement_among(step, performers) {
+            let nested = def.entry(name).is_some_and(|e| e.definition.is_some());
+            match Self::placement_among(step, nested, performers) {
                 Ok(face) => Some(face.locality),
                 Err(Unplaced::Nobody) => return Closed(StepStatus::Waiting(Waiting::Performer)),
                 Err(Unplaced::Several) => return Closed(StepStatus::Waiting(Waiting::Placement)),
@@ -768,20 +773,35 @@ impl Workflow {
     /// With several offering it and none chosen there is no answer:
     /// "the first" is an accident of one driver's list, and drivers
     /// that share a store need not list alike.
-    pub fn placement_for<'a>(&self, step: &Step, performers: &'a [PerformerFace]) -> Option<&'a PerformerFace> {
-        Self::placement_among(step, performers).ok()
+    pub fn placement_for<'a>(&self, name: &str, performers: &'a [PerformerFace]) -> Option<&'a PerformerFace> {
+        let step = self.steps.get(name)?;
+        let nested = self.workflow_definition.entry(name).is_some_and(|e| e.definition.is_some());
+        Self::placement_among(step, nested, performers).ok()
     }
 
-    /// `placement_for`, saying why there is none.
-    pub fn placement_among<'a>(step: &Step, performers: &'a [PerformerFace]) -> Result<&'a PerformerFace, Unplaced> {
-        let offers = |p: &&PerformerFace| p.verbs.contains(&step.definition);
+    /// The Performers that could take a Run of `step`: those offering
+    /// its verb (any that nests, for a nested definition), in the
+    /// Policy's locality when it names one and no Performer.
+    pub fn offering<'a>(step: &Step, nested: bool, performers: &'a [PerformerFace]) -> impl Iterator<Item = &'a PerformerFace> + 'a {
+        let verb = step.definition.clone();
+        let wanted = match step.policy.placement.performer {
+            Some(_) => None,
+            None => step.policy.placement.locality,
+        };
+        performers.iter().filter(move |p| (p.verbs.contains(&verb) || (nested && p.nests)) && wanted.is_none_or(|l| p.locality == l))
+    }
+
+    /// `placement_for`, saying why there is none. `nested`: the step is
+    /// an occurrence of a nested WorkflowDefinition carried inline.
+    pub fn placement_among<'a>(step: &Step, nested: bool, performers: &'a [PerformerFace]) -> Result<&'a PerformerFace, Unplaced> {
+        let offers = |p: &&PerformerFace| p.verbs.contains(&step.definition) || (nested && p.nests);
         let named = step.placement.as_ref().map(|p| &p.performer).or(step.policy.placement.performer.as_ref());
         if let Some(named) = named {
             return performers.iter().find(|p| &p.name == named).filter(offers).ok_or(Unplaced::Nobody);
         }
         // a pool is taken only when named: with one Worker offering
         // the verb, that Worker is the placement, pool or no pool
-        let mut offering = performers.iter().filter(offers).filter(|p| !p.pool);
+        let mut offering = Self::offering(step, nested, performers).filter(|p| !p.pool);
         match (offering.next(), offering.next()) {
             (Some(only), None) => Ok(only),
             (None, _) => Err(Unplaced::Nobody),

@@ -341,6 +341,7 @@ impl Performer for Nested {
         let verbs = self.store.library().map(|l| l.workflows().map(|w| w.reference()).collect()).unwrap_or_default();
         PerformerFace {
             pool: false,
+            nests: true,
             name: "nested".into(),
             locality: crate::definition::Locality::ThisMachine,
             verbs,
@@ -353,7 +354,15 @@ impl Performer for Nested {
             return Ok(id);
         }
         let lib = self.store.library().map_err(|e| format!("unreachable: {e}"))?;
-        let def = lib.workflow(&request.definition).ok_or_else(|| format!("{} is not a recipe in the library", request.definition))?;
+        // the parent's own copy of the nested definition, so the child
+        // is what the parent says, whatever the Library holds now
+        let (parent, _) = self.store.get(&request.workflow).map_err(|e| format!("unreachable: {e}"))?.ok_or_else(|| format!("no workflow {:?}", request.workflow))?;
+        let def = parent
+            .workflow_definition
+            .entry(&request.step)
+            .and_then(|e| e.definition.clone())
+            .ok_or_else(|| format!("step {:?} of {} carries no WorkflowDefinition to make a child of", request.step, request.workflow))?;
+        let def = &def;
         let by = Actor::Run {
             workflow: request.workflow.clone(),
             step: request.step.clone(),

@@ -253,6 +253,10 @@
             "performer": {
               "type": "string"
             },
+            "locality": {
+              "$ref": "#/$defs/locality",
+              "description": "Where the driver's choice is made, when no Performer is named."
+            },
             "confirm": {
               "type": "array",
               "items": {

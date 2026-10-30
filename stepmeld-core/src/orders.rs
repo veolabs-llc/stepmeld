@@ -130,6 +130,7 @@ impl WorkerFace {
             locality,
             verbs,
             pool: false,
+            nests: false,
         }
     }
 }
@@ -368,6 +369,7 @@ impl OrderPerformer {
             locality,
             verbs,
             pool: true,
+            nests: false,
         };
         out.push(OrderPerformer::open(book.clone(), pool, clock, false, lib));
         Ok(out)

@@ -576,6 +576,7 @@ impl Kinds {
                 locality: if m.file.worker.cloud { Locality::Cloud } else { Locality::ThisMachine },
                 verbs: Vec::new(),
                 pool: false,
+                nests: false,
             };
             Arc::new(Router::new(face, built))
         };

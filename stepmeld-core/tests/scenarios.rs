@@ -71,11 +71,7 @@ fn person_verb(name: &str, inputs: &[(&str, &str)], outputs: &[(&str, &str)], de
 }
 
 fn entry(name: &str, def: &str) -> StepEntry {
-    StepEntry {
-        name: name.into(),
-        step: Ref::new(def, 1),
-        label: None,
-    }
+    StepEntry::new(name, Ref::new(def, 1))
 }
 
 fn bind(from: &str, to: &str) -> Binding {
@@ -89,6 +85,7 @@ fn bind(from: &str, to: &str) -> Binding {
 fn performer(name: &str, locality: Locality, verbs: &[&str]) -> Arc<MemoryPerformer> {
     Arc::new(MemoryPerformer::new(PerformerFace {
         pool: false,
+        nests: false,
         name: name.into(),
         locality,
         verbs: verbs.iter().map(|v| Ref::new(v, 1)).collect(),
@@ -1117,4 +1114,149 @@ fn a_workflow_carries_its_own_definition() {
     let history = store.history("wf-1").unwrap().len();
     assert!(matches!(rig.driver.adopt("wf-1", &max(), &now(9)), Err(Error::Refused(w)) if w.contains("already carries")));
     assert_eq!(store.history("wf-1").unwrap().len(), history);
+}
+
+/// A step entry may set apart what its use starts from: Parameter
+/// values in place of the verb's defaults, chosen by the definition so
+/// a reader can tell them from a person's, and a Policy of its own. A
+/// `set` to none comes back to the entry's value, not the verb's.
+#[test]
+fn a_step_entry_sets_its_own_parameters_and_policy() {
+    let store = Arc::new(MemoryStore::new());
+    add_library(&store);
+    let mut w = WorkflowDefinition::new("add-slowly", 1);
+    let mut e = entry("add", "add");
+    e.parameters.insert("beat-seconds".into(), Value::from(5));
+    e.policy = Some(Policy { start: Start::Manual, ..Default::default() });
+    w.steps = vec![e];
+    store.put_workflow_definition(&w).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-slowly", "wf-1");
+    let p = rig.wf().step("add").unwrap().parameters["beat-seconds"].clone();
+    assert_eq!(p.value, Some(Value::from(5)), "the entry's value, not the verb's default");
+    assert_eq!(p.chosen.unwrap().by, Actor::policy(stepmeld_core::engine::DEFINITION_RULE, "add"));
+    assert_eq!(rig.wf().step("add").unwrap().policy.start, Start::Manual);
+
+    // a person's choice, then back to the definition's
+    rig.command(param("add", "beat-seconds", Value::from(9))).unwrap();
+    assert_eq!(rig.wf().step("add").unwrap().parameters["beat-seconds"].chosen.as_ref().unwrap().by, max());
+    rig.command(param_default("add", "beat-seconds")).unwrap();
+    let p = rig.wf().step("add").unwrap().parameters["beat-seconds"].clone();
+    assert_eq!(p.value, Some(Value::from(5)));
+    assert_eq!(p.chosen.unwrap().by, Actor::policy(stepmeld_core::engine::DEFINITION_RULE, "add"));
+
+    // a value the verb does not have is refused when the definition is checked
+    let mut bad = w.clone();
+    bad.name = "add-badly".into();
+    bad.steps[0].parameters.insert("tempo".into(), Value::from(1));
+    let err = store.library().unwrap().check_workflow(&bad).unwrap_err().to_string();
+    assert!(err.contains("sets parameter \"tempo\", which add v1 does not have"), "{err}");
+}
+
+/// A Policy may say where the driver's choice is made: among the
+/// Performers offering the verb in one locality. With one there, that
+/// one is the placement; with none, the Step waits for a Performer.
+#[test]
+fn a_policy_prefers_a_locality() {
+    let store = Arc::new(MemoryStore::new());
+    add_library(&store);
+    let mut w = WorkflowDefinition::new("add-in-the-cloud", 1);
+    let mut e = entry("add", "add");
+    e.policy = Some(Policy {
+        placement: PlacementPolicy {
+            locality: Some(Locality::Cloud),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    w.steps = vec![e];
+    store.put_workflow_definition(&w).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["add"]);
+    let cloud = performer("cloud", Locality::Cloud, &["add"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone(), cloud.clone()], "add-in-the-cloud", "wf-1");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
+    let wf = rig.tick();
+    assert_eq!(wf.step("add").unwrap().latest().unwrap().performer, "cloud", "two offer it; the Policy's locality decides");
+    assert!(local.started().is_empty());
+
+    // nobody in that locality: the Step waits for a Performer; a tick starts nothing
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "add-in-the-cloud", "wf-2");
+    rig.command(set("add", "a", 2.into())).unwrap();
+    rig.command(set("add", "b", 3.into())).unwrap();
+    let wf = rig.tick();
+    assert_eq!(wf.gate(&wf.workflow_definition, "add", &alone_faces(&rig.driver)), Gate::Closed(StepStatus::Waiting(Waiting::Performer)));
+    assert!(wf.step("add").unwrap().runs.is_empty());
+    // a Performer named in the Policy is taken wherever it is
+    rig.command(Command::SetPolicy {
+        step: "add".into(),
+        policy: Policy {
+            placement: PlacementPolicy {
+                performer: Some("local".into()),
+                locality: Some(Locality::Cloud),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    let wf = rig.tick();
+    assert_eq!(wf.step("add").unwrap().latest().unwrap().performer, "local");
+}
+
+/// A WorkflowDefinition with no steps holds together; a Workflow made
+/// from it is empty, and succeeded as it stands, until steps are
+/// added to it.
+#[test]
+fn an_empty_definition_makes_an_empty_workflow() {
+    let store = Arc::new(MemoryStore::new());
+    store.put_workflow_definition(&WorkflowDefinition::new("nothing-yet", 1)).unwrap();
+    let rig = Rig::new(store.clone(), vec![], "nothing-yet", "wf-1");
+    assert!(rig.wf().steps.is_empty());
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
+}
+
+/// A Parameter put back to what the definition says.
+fn param_default(step: &str, parameter: &str) -> Command {
+    Command::Set {
+        step: step.into(),
+        input: None,
+        parameter: Some(parameter.into()),
+        value: None,
+    }
+}
+
+/// A Workflow is made with its nested definitions copied in, and its
+/// children are made from that copy: the Library's nested definition
+/// may go, and the parent still makes the child it says.
+#[test]
+fn a_child_is_made_from_the_parents_copy() {
+    let store = Arc::new(MemoryStore::new());
+    store.put_step(&verb("typeset", &[("notes", "notes")], &[], &[("document", "document")])).unwrap();
+    store.put_step(&verb("package", &[("document", "document")], &[], &[("bundle", "bundle")])).unwrap();
+    let mut child = WorkflowDefinition::new("publish-document", 1);
+    child.steps = vec![entry("package", "package")];
+    store.put_workflow_definition(&child).unwrap();
+    let mut parent = WorkflowDefinition::new("release", 1);
+    parent.steps = vec![entry("typeset", "typeset"), entry("publish", "publish-document")];
+    parent.bindings = vec![bind("typeset.document", "publish.package.document")];
+    store.put_workflow_definition(&parent).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["typeset", "package"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "release", "parent-1");
+    let publish = rig.wf().workflow_definition.entry("publish").unwrap().clone();
+    assert_eq!(publish.definition, Some(child.clone()), "the nested definition is copied in at creation");
+
+    // the Library lets go of both (the parent first: in the Library it
+    // nests the child by name); the Workflow has its own
+    store.remove_definition(&parent.reference()).unwrap();
+    store.remove_definition(&child.reference()).unwrap();
+    rig.command(set("typeset", "notes", "notes-1".into())).unwrap();
+    rig.tick();
+    local.finish(&rig.handle(&local, "typeset"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
+    rig.tick();
+    let child_id = rig.wf().step("publish").unwrap().latest().unwrap().handle.clone().expect("the child was made");
+    let (child_wf, _) = store.get(&child_id).unwrap().unwrap();
+    assert_eq!(child_wf.workflow_definition, child);
+    assert_eq!(child_wf.from, Some(child.reference()));
+    assert_eq!(child_wf.step_status(&child_wf.workflow_definition, "package"), StepStatus::Running);
 }
