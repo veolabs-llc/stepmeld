@@ -286,3 +286,42 @@ fn needs_are_computed_from_a_request() {
     let (ok, out) = stepmeld(d, &["--deployment", "other.toml", "needs", "."]);
     assert!(ok && out.contains("says nothing of program \"hello-program\"") && out.contains("base"), "{out}");
 }
+
+/// `stepmeld edit` changes a Workflow's own definition, and `stepmeld
+/// definition --add` keeps it in the Library as a definition of its own.
+#[test]
+fn a_workflow_is_edited_and_kept_as_a_definition() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let hello = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/hello");
+    for file in ["stepdef_add.json", "stepdef_multiply.json", "workflowdef_hello.json"] {
+        std::fs::copy(hello.join(file), d.join(file)).unwrap();
+    }
+    let (ok, out) = stepmeld(d, &["library", "add", "stepdef_add.json", "stepdef_multiply.json", "workflowdef_hello.json"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["create", "workflowdef_hello", "--id", "wf-1"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["edit", "wf-1", "add-step", "again", "--uses", "stepdef_multiply", "--label", "Once more"]);
+    assert!(ok && out.contains("added step again"), "{out}");
+    let (ok, out) = stepmeld(d, &["edit", "wf-1", "bind", "step_multiply.product", "again.value"]);
+    assert!(ok && out.contains("bound"), "{out}");
+    let (ok, out) = stepmeld(d, &["edit", "wf-1", "bind", "step_multiply.product", "again.factor", "--guard", r#"{"status": {"step": "nobody", "is": "succeeded"}}"#]);
+    assert!(!ok && out.contains("nobody"), "{out}");
+    let (ok, out) = stepmeld(d, &["edit", "wf-1", "override", "again", "--parameter", "beat-seconds", "--value", "2"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["show", "wf-1"]);
+    assert!(ok && out.contains("again") && out.contains("(stepdef_multiply v1)"), "{out}");
+    // kept as a definition: printed first, then added, and the Workflow says so
+    let (ok, out) = stepmeld(d, &["definition", "wf-1", "--name", "hello-thrice", "--values"]);
+    assert!(ok && out.contains("\"hello-thrice\"") && out.contains("\"again\"") && out.contains("\"beat-seconds\": 2"), "{out}");
+    let (ok, out) = stepmeld(d, &["definition", "wf-1", "--name", "hello-thrice", "--add"]);
+    assert!(ok && out.contains("added WorkflowDefinition hello-thrice v1"), "{out}");
+    let (ok, out) = stepmeld(d, &["library"]);
+    assert!(ok && out.contains("hello-thrice v1"), "{out}");
+    let (ok, out) = stepmeld(d, &["list"]);
+    assert!(ok && out.contains("hello-thrice v1"), "wf-1 was saved as it: {out}");
+    let (ok, out) = stepmeld(d, &["create", "hello-thrice", "--id", "wf-2"]);
+    assert!(ok, "{out}");
+    let (ok, out) = stepmeld(d, &["show", "wf-2"]);
+    assert!(ok && out.contains("again"), "{out}");
+}

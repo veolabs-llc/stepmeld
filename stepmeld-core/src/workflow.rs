@@ -524,7 +524,8 @@ impl Workflow {
             return Err(crate::Error::Protocol(format!("workflow {id} is not an object")));
         };
         map.remove("definition");
-        map.insert("workflow_definition".into(), serde_json::to_value(def).map_err(|e| crate::Error::Protocol(e.to_string()))?);
+        // whole on its own, as a Workflow made now would be
+        map.insert("workflow_definition".into(), serde_json::to_value(lib.inlined(def)).map_err(|e| crate::Error::Protocol(e.to_string()))?);
         map.insert("from".into(), serde_json::to_value(&reference).map_err(|e| crate::Error::Protocol(e.to_string()))?);
         serde_json::from_value(doc).map_err(|e| crate::Error::Protocol(format!("workflow {id} cannot be read once adopted: {e}")))
     }

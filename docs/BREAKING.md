@@ -9,6 +9,26 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A Workflow's own definition is edited by Commands
+
+*Additive, `stepmeld-core` and the CLI.* `Command` gains `AddStep`,
+`RemoveStep`, `Bind`, `Unbind`, `MoveBinding`, `SetGuard`, `Relabel`,
+`SetOverride` and `Saved` (`stepmeld-core/src/edit.rs`): each edits the
+Workflow's own WorkflowDefinition, lands only if it then holds together,
+keeps the Step records in step (a step added gets its record as at
+creation; one removed takes its record into the History), and leaves a
+History entry holding the state before. A step inside a nested
+definition is addressed by path (`publish/extra`) until that step
+starts. `edit::definition_of` is the Workflow's definition as one to
+keep in a Library, with `Keep` saying which of its tuning goes along;
+`stepmeld definition <workflow> --name … --add` adds it. `stepmeld edit
+<workflow> …` issues the edits.
+
+**Who notices:** a `match` over `Command` that names every variant.
+`engine::step_record` is new (a Step as `create` builds it).
+
+**What to do:** add arms for the new variants, or a catch-all.
+
 ## Step entries set their use apart, and nest inline
 
 *Contracts `stepmeld/workflow-definition.v1`, `stepmeld/workflow.v1`,
