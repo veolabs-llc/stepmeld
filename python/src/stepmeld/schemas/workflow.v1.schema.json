@@ -3,12 +3,13 @@
   "$id": "stepmeld/workflow.v1",
   "title": "One occurrence of a recipe: its Steps, their Values and Runs. Status is derived by a reader, never stored.",
   "type": "object",
-  "required": ["contract", "id", "definition", "created", "steps"],
+  "required": ["contract", "id", "workflow_definition", "created", "steps"],
   "additionalProperties": false,
   "properties": {
     "contract": { "const": "stepmeld/workflow.v1" },
     "id": { "type": "string", "minLength": 1 },
-    "definition": { "$ref": "#/$defs/ref" },
+    "workflow_definition": { "$ref": "#/$defs/workflow_definition", "description": "This Workflow's own WorkflowDefinition: a copy of the Library's at creation, this Workflow's alone since. The same shape as workflow-definition.v1." },
+    "from": { "$ref": "#/$defs/ref", "description": "The Library's WorkflowDefinition this one was made from, by name and version. Absent when made from nothing." },
     "label": { "type": "string" },
     "created": { "$ref": "#/$defs/stamp" },
     "steps": { "type": "object", "additionalProperties": { "$ref": "#/$defs/step" } },
@@ -16,6 +17,215 @@
     "canceled": { "$ref": "#/$defs/stamp" }
   },
   "$defs": {
+    "workflow_definition": {
+      "type": "object",
+      "required": [
+        "contract",
+        "name",
+        "version",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "stepmeld/workflow-definition.v1"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[^.\\s]+$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "step"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[^.\\s]+$"
+              },
+              "step": {
+                "$ref": "#/$defs/ref"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/portref"
+              },
+              "to": {
+                "$ref": "#/$defs/portref"
+              },
+              "guard": {
+                "$ref": "#/$defs/guard"
+              }
+            }
+          }
+        }
+      }
+    },
+    "portref": {
+      "type": "string",
+      "pattern": "^[^.\\s]+\\.[^\\s]+$",
+      "description": "step.port"
+    },
+    "guard": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "decision"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "type": "object",
+              "required": [
+                "step",
+                "output",
+                "is"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "step": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                },
+                "is": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "object",
+              "required": [
+                "step",
+                "is"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "step": {
+                  "type": "string"
+                },
+                "is": {
+                  "enum": [
+                    "succeeded",
+                    "failed",
+                    "skipped"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "present"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "present": {
+              "type": "object",
+              "required": [
+                "step",
+                "output"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "step": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "all"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/guard"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "any"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/guard"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "not"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/guard"
+            }
+          }
+        }
+      ]
+    },
     "ref": { "type": "object", "required": ["name", "version"], "additionalProperties": false, "properties": { "name": { "type": "string" }, "version": { "type": "integer", "minimum": 1 } } },
     "time": { "type": "string", "description": "RFC 3339, UTC, so that later sorts later." },
     "actor": {

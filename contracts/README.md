@@ -11,7 +11,7 @@ after each.
 |---|---|
 | `stepmeld/step-definition.v1` | data: a verb |
 | `stepmeld/workflow-definition.v1` | data: a recipe |
-| `stepmeld/workflow.v1` | data: one occurrence, with its Steps and Runs |
+| `stepmeld/workflow.v1` | data: one occurrence, with its own copy of the WorkflowDefinition, its Steps and Runs |
 | `stepmeld/history.v1` | data: one append-only record |
 | `stepmeld/run-request.v1` | the run directory: what a program is handed |
 | `stepmeld/run-progress.v1` | the run directory: how far a program is |

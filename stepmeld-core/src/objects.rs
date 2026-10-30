@@ -306,6 +306,10 @@ impl<O: Objects> StateStore for ObjectStore<O> {
         self.read(&format!("workflows/{id}.json"))
     }
 
+    fn document(&self, id: &str) -> Result<Option<(serde_json::Value, String)>, Error> {
+        self.read(&format!("workflows/{id}.json"))
+    }
+
     fn put(&self, wf: &Workflow, expected: Option<&str>) -> Result<String, Error> {
         let cond = expected.map_or(Cond::IfNoneMatch, Cond::IfMatch);
         match self.write(&format!("workflows/{}.json", wf.id), wf, cond)? {

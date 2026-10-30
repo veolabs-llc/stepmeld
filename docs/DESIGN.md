@@ -63,7 +63,7 @@ recipes; never any values) and what exists once a workflow is minted
 |---|---|
 | **Library** | The WorkflowDefinitions and StepDefinitions available for composing and running. Running never writes to it. |
 | **StepDefinition** | A verb: its InputDefinitions, ParameterDefinitions and OutputDefinitions, and the program that does its work, by name. Which command runs that program is each Worker's to say (`docs/ORCHESTRATOR-WORKER.md` §4); the engine never runs it itself. |
-| **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Identified by name and version; putting one under a name and version already held replaces it in place (every store, and `stepmeld library add`, do). It declares no inputs or outputs of its own (§5.3). |
+| **WorkflowDefinition** | A recipe: a set of named step entries, each a name and the StepDefinition it refers to (with version), plus Bindings. Identified by name and version; putting one under a name and version already held replaces it in place (every store, and `stepmeld library add`, do), and Workflows made from it keep their own copies. It declares no inputs or outputs of its own (§5.3). |
 | **Binding** | A connection from one named step's Output to another named step's Input, optionally guarded. The only structure in a recipe; there is no step order. |
 | **InputDefinition** | A name, a tag, whether required. |
 | **ParameterDefinition** | The same, plus a default, and optionally a group: a name for presentation only (a UI shows the ungrouped first and folds each group away), never read by the engine. |
@@ -79,7 +79,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 
 | Term | Meaning |
 |---|---|
-| **Workflow** | One occurrence of a WorkflowDefinition, with its Steps. The only place Values live. |
+| **Workflow** | One occurrence of a WorkflowDefinition, carrying its own copy of it (made at creation; the Library's may change or go without reaching it) and its Steps. The only place Values live. |
 | **Step** | One occurrence of a StepDefinition inside a Workflow, carrying the name the recipe gave it. |
 | **Input, Parameter, Output** | A Step's slots, each holding a Value or empty. |
 | **Value** | An opaque blob the engine never reads, usually a reference into a store. Compared for equality. |
@@ -287,7 +287,8 @@ conformance suite beside it.
 Every WorkflowDefinition is offered as a StepDefinition with its derived
 face, names by path: `package.document`, `upload.release`. The nested-workflow
 Performer performs all such verbs: `start` issues `create` for a child
-Workflow (Actor: the parent's Run), the handle is the child's id,
+Workflow from the Library's definition the verb names (Actor: the
+parent's Run), the handle is the child's id,
 `observe` reads the child's status and derives progress, `cancel`
 cancels the child, and the child's Outputs map back by path. A retake of
 the parent Step is a new child Workflow; the old one stays in the

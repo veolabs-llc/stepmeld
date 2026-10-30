@@ -1,5 +1,8 @@
-//! The Workflow side: one occurrence of a recipe, the only place Values
-//! live. Status is derived here, never stored.
+//! The Workflow side: one occurrence of a WorkflowDefinition, the only
+//! place Values live. Status is derived here, never stored. A Workflow
+//! carries its own copy of the WorkflowDefinition, made when it was
+//! created: the Library's may change afterwards, or be edited on this
+//! Workflow alone, and neither reaches the other.
 
 use crate::definition::{DoneBy, Guard, Locality, OnFailure, OnStale, Policy, Ref, Start, WorkflowDefinition};
 use crate::Value;
@@ -471,7 +474,14 @@ pub struct PerformerFace {
 pub struct Workflow {
     pub contract: String,
     pub id: String,
-    pub definition: Ref,
+    /// This Workflow's own WorkflowDefinition: the steps its `steps`
+    /// are occurrences of, and the Bindings between them. A copy of
+    /// the Library's at creation, this Workflow's alone since.
+    pub workflow_definition: WorkflowDefinition,
+    /// The Library's WorkflowDefinition this one was made from, by
+    /// name and version; none when it was made from nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<Ref>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub created: Stamp,
@@ -488,6 +498,33 @@ pub struct Workflow {
 }
 
 impl Workflow {
+    /// A Workflow document from before each carried its own
+    /// WorkflowDefinition (`definition` named the Library's by name and
+    /// version), brought to this shape: the Library's definition of that
+    /// name and version copied in, `from` set to it. A document already
+    /// in this shape, or one naming a definition the Library does not
+    /// hold, is refused in words.
+    pub fn adopt(doc: &serde_json::Value, lib: &crate::library::Library) -> Result<Workflow, crate::Error> {
+        let refused = |w: String| crate::Error::Refused(w);
+        let id = doc.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        if doc.get("workflow_definition").is_some() {
+            return Err(refused(format!("workflow {id} already carries its WorkflowDefinition")));
+        }
+        let reference: Ref = match doc.get("definition") {
+            Some(r) => serde_json::from_value(r.clone()).map_err(|e| crate::Error::Protocol(format!("workflow {id}: definition cannot be read: {e}")))?,
+            None => return Err(refused(format!("workflow {id} names no definition to adopt"))),
+        };
+        let def = lib.workflow(&reference).ok_or_else(|| refused(format!("workflow {id} was made from {reference}, which is not in the library")))?;
+        let mut doc = doc.clone();
+        let Some(map) = doc.as_object_mut() else {
+            return Err(crate::Error::Protocol(format!("workflow {id} is not an object")));
+        };
+        map.remove("definition");
+        map.insert("workflow_definition".into(), serde_json::to_value(def).map_err(|e| crate::Error::Protocol(e.to_string()))?);
+        map.insert("from".into(), serde_json::to_value(&reference).map_err(|e| crate::Error::Protocol(e.to_string()))?);
+        serde_json::from_value(doc).map_err(|e| crate::Error::Protocol(format!("workflow {id} cannot be read once adopted: {e}")))
+    }
+
     pub fn step(&self, name: &str) -> Result<&Step, crate::Error> {
         self.steps.get(name).ok_or_else(|| crate::Error::Refused(format!("no step {name:?} in workflow {}", self.id)))
     }

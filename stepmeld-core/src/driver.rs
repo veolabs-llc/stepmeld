@@ -4,7 +4,6 @@
 use crate::definition::{Ref, WorkflowDefinition};
 use crate::engine::{self, Command, Effect, Observation, StartRequest};
 use crate::history::Entry;
-use crate::library::Library;
 use crate::performer::Performer;
 use crate::store::StateStore;
 use crate::workflow::{Actor, PerformerFace, Workflow, WorkflowStatus};
@@ -77,8 +76,22 @@ impl Driver {
         self.performers.iter().find(|p| p.describe().name == name)
     }
 
-    fn definition(&self, lib: &Library, wf: &Workflow) -> Result<WorkflowDefinition, Error> {
-        lib.workflow(&wf.definition).cloned().ok_or_else(|| Error::Invalid(format!("{} is not in the library", wf.definition)))
+    /// The Workflow's own WorkflowDefinition, as the engine takes it.
+    fn definition(&self, wf: &Workflow) -> WorkflowDefinition {
+        wf.workflow_definition.clone()
+    }
+
+    /// Bring a Workflow made before each carried its own
+    /// WorkflowDefinition to this shape ([`Workflow::adopt`]), written
+    /// over the version read and noted in its History. One already in
+    /// this shape is refused in words.
+    pub fn adopt(&self, id: &str, by: &Actor, now: &str) -> Result<Workflow, Error> {
+        let lib = self.store.library()?;
+        let (doc, version) = self.store.document(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
+        let wf = Workflow::adopt(&doc, &lib)?;
+        self.store.put(&wf, Some(&version))?;
+        self.store.append(&[Entry::new(now, by, id, "adopted").detail(serde_json::json!({"definition": wf.from}))])?;
+        Ok(wf)
     }
 
     /// A root Workflow, created without its go: no Step runs until
@@ -97,7 +110,7 @@ impl Driver {
     pub fn command(&self, id: &str, cmd: &Command, by: &Actor, now: &str) -> Result<Workflow, Error> {
         let lib = self.store.library()?;
         let (mut wf, version) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
-        let def = self.definition(&lib, &wf)?;
+        let def = self.definition(&wf);
         let entries = engine::apply(&lib, &def, &mut wf, cmd, by, now)?;
         self.store.put(&wf, Some(&version))?;
         self.store.append(&entries)?;
@@ -112,9 +125,8 @@ impl Driver {
     /// the Performers' side stay where they are: the engine never owned
     /// them.
     pub fn remove(&self, id: &str, now: &str, lease_until: &str) -> Result<Vec<String>, Error> {
-        let lib = self.store.library()?;
         let (wf, _) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
-        let def = self.definition(&lib, &wf)?;
+        let def = self.definition(&wf);
         if matches!(wf.status(&def), WorkflowStatus::Running) {
             return Err(Error::Refused(format!("{id} has a Run still live: cancel it first, and tick")));
         }
@@ -149,7 +161,7 @@ impl Driver {
         let mut rounds = 0;
         loop {
             let (mut wf, version) = self.store.get(id)?.ok_or_else(|| Error::Refused(format!("no workflow {id:?}")))?;
-            let def = self.definition(&lib, &wf)?;
+            let def = self.definition(&wf);
             let effects = engine::plan(&def, &wf, &faces);
             let mut entries: Vec<Entry> = engine::note_placements(&def, &mut wf, &faces, now);
             let noted = engine::note_offers(&def, &mut wf, &faces);
@@ -231,7 +243,6 @@ impl Driver {
     /// listing. Every Workflow's status, as last seen (docs/PLACEMENT.md
     /// §10, phase 5).
     pub fn tick_moved(&self, now: &str, lease_until: &str, seen: &mut Seen) -> Result<BTreeMap<String, WorkflowStatus>, Error> {
-        let lib = self.store.library()?;
         let offers: Vec<(String, Vec<Ref>)> = self.faces().into_iter().map(|f| (f.name, f.verbs)).collect();
         if offers != seen.offers {
             seen.settled.clear();
@@ -254,7 +265,7 @@ impl Driver {
                 seen.statuses.insert(id.clone(), WorkflowStatus::Running);
                 continue; // another Orchestrator holds it
             };
-            let status = wf.status(&self.definition(&lib, &wf)?);
+            let status = wf.status(&self.definition(&wf));
             // the listing's word for it, not a read's: a store may list
             // a different stamp (a modified time) than it reads (an
             // ETag). What this tick wrote is ticked once more next time.
@@ -275,7 +286,6 @@ impl Driver {
     /// what its child did this tick; a child created along the way is
     /// ticked too, so a parent and its new child advance in one call.
     pub fn tick_all(&self, now: &str, lease_until: &str) -> Result<BTreeMap<String, WorkflowStatus>, Error> {
-        let lib = self.store.library()?;
         let mut out = BTreeMap::new();
         loop {
             let mut fresh: Vec<String> = self.store.list()?.into_iter().filter(|id| !out.contains_key(id)).collect();
@@ -286,7 +296,7 @@ impl Driver {
             for id in fresh {
                 match self.tick(&id, now, lease_until)? {
                     Some(wf) => {
-                        let def = self.definition(&lib, &wf)?;
+                        let def = self.definition(&wf);
                         out.insert(id, wf.status(&def));
                     }
                     None => {
@@ -378,20 +388,12 @@ impl Performer for Nested {
     }
 
     fn observe(&self, handle: &str) -> Observation {
-        let lib = match self.store.library() {
-            Ok(l) => l,
-            Err(e) => return Observation::Unreachable { reason: e.to_string() },
-        };
         let (wf, _) = match self.store.get(handle) {
             Ok(Some(w)) => w,
             Ok(None) => return Observation::Absent,
             Err(e) => return Observation::Unreachable { reason: e.to_string() },
         };
-        let Some(def) = lib.workflow(&wf.definition) else {
-            return Observation::Unreachable {
-                reason: format!("{} is not in the library", wf.definition),
-            };
-        };
+        let def = &wf.workflow_definition;
         let statuses = wf.statuses(def);
         let done = statuses.values().filter(|s| s.is_done()).count();
         match wf.status(def) {
@@ -440,7 +442,7 @@ impl Performer for Nested {
     fn cancel(&self, handle: &str, reason: &str) {
         let Ok(lib) = self.store.library() else { return };
         let Ok(Some((mut wf, version))) = self.store.get(handle) else { return };
-        let Some(def) = lib.workflow(&wf.definition).cloned() else { return };
+        let def = wf.workflow_definition.clone();
         let by = Actor::policy("cancel-from-parent", "");
         if let Ok(entries) = engine::apply(
             &lib,

@@ -9,6 +9,34 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A Workflow carries its own WorkflowDefinition
+
+*Contract `stepmeld/workflow.v1`, changed in place; `StateStore`; the
+CLI.* **Before:** a Workflow named its WorkflowDefinition by name and
+version (`definition`), and every reader looked it up in the Library on
+every read, so a change to the Library's definition reached every
+Workflow made from it. **Now:** the document carries
+`workflow_definition`, its own copy made at creation, and `from`, the
+Library's name and version it was made from (absent when made from
+nothing). `definition` is gone, so a build from before refuses the new
+document rather than reading it, and this build refuses a document
+from before. The Library's WorkflowDefinition may change or go without
+reaching a Workflow; its StepDefinitions may not go while a Workflow's
+Steps are occurrences of them (`library remove` keeps them, and says
+so).
+
+**Who notices:** anything that reads a Workflow document
+(`wf.definition` is now `wf.workflow_definition`, with `wf.from` beside
+it); a store holding Workflows made before this build; a `StateStore`
+of your own (one new required method, `document`: the Workflow's
+document as held, for a reader that cannot read it).
+
+**What to do:** `stepmeld adopt` (one Workflow, or every one that
+needs it) copies the Library's definition each names onto it and notes
+it in the History; run it before `tick`. In code, `Workflow::adopt(doc,
+&lib)` and `Driver::adopt`. Drop any Library lookup of a Workflow's
+definition and read the document's.
+
 ## Removing a Workflow takes its orders and their logs
 
 *Behaviour, every `StateStore` that keeps orders (memory, SQLite, the

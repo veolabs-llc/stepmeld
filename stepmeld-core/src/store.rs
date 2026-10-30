@@ -39,6 +39,9 @@ pub trait StateStore: Send + Sync {
     // ---- Workflows ----
     /// A Workflow and the version it was read at.
     fn get(&self, id: &str) -> Result<Option<(Workflow, String)>, Error>;
+    /// The Workflow's document as held, read by nobody: what
+    /// [`Workflow::adopt`] takes when `get` cannot read it.
+    fn document(&self, id: &str) -> Result<Option<(serde_json::Value, String)>, Error>;
     /// Write over `expected` (None: create once). A condition that did
     /// not hold is [`Error::Refused`] with "changed underneath" or
     /// "already exists" in it. The version now held.
@@ -142,6 +145,10 @@ impl StateStore for MemoryStore {
 
     fn get(&self, id: &str) -> Result<Option<(Workflow, String)>, Error> {
         Ok(self.inner.lock().unwrap().workflows.get(id).map(|(w, v)| (w.clone(), v.to_string())))
+    }
+
+    fn document(&self, id: &str) -> Result<Option<(serde_json::Value, String)>, Error> {
+        self.get(id)?.map(|(w, v)| serde_json::to_value(&w).map(|d| (d, v)).map_err(|e| Error::Protocol(e.to_string()))).transpose()
     }
 
     fn put(&self, wf: &Workflow, expected: Option<&str>) -> Result<String, Error> {
@@ -321,7 +328,8 @@ pub mod conformance {
         Workflow {
             contract: crate::workflow::WORKFLOW.into(),
             id: id.into(),
-            definition: Ref::new("r", 1),
+            workflow_definition: WorkflowDefinition::new("r", 1),
+            from: Some(Ref::new("r", 1)),
             label: None,
             created: Stamp {
                 at: "2026-10-06T00:00:00Z".into(),
@@ -340,6 +348,9 @@ pub mod conformance {
         assert!(matches!(store.put(&workflow(id), None), Err(Error::Refused(w)) if w.contains("already exists")), "create once");
         let (_, read) = store.get(id).unwrap().unwrap();
         assert_eq!(read, v1, "get hands back the version put");
+        let (doc, read) = store.document(id).unwrap().unwrap();
+        assert_eq!(read, v1, "document hands back the version put");
+        assert_eq!(doc["id"], id, "document is the Workflow as held");
         let listed = store.listing().unwrap().get(id).cloned();
         assert!(listed.is_some(), "the listing names each Workflow");
         let v2 = store.put(&workflow(id), Some(&v1)).unwrap();

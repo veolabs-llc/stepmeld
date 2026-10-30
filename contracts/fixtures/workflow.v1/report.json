@@ -7,7 +7,7 @@
       "kind": "person"
     }
   },
-  "definition": {
+  "from": {
     "name": "report",
     "version": 1
   },
@@ -472,5 +472,91 @@
         }
       ]
     }
+  },
+  "workflow_definition": {
+    "bindings": [
+      {
+        "from": "notes.notes",
+        "to": "draft.notes"
+      },
+      {
+        "from": "notes.notes",
+        "to": "typeset.notes"
+      },
+      {
+        "from": "draft.text",
+        "to": "review.text"
+      },
+      {
+        "from": "draft.text",
+        "guard": {
+          "decision": {
+            "is": "revise",
+            "output": "decision",
+            "step": "review"
+          }
+        },
+        "to": "revise.text"
+      },
+      {
+        "from": "revise.text",
+        "to": "typeset.text"
+      },
+      {
+        "from": "draft.text",
+        "to": "typeset.text"
+      },
+      {
+        "from": "typeset.document",
+        "to": "publish.document"
+      }
+    ],
+    "contract": "stepmeld/workflow-definition.v1",
+    "name": "report",
+    "steps": [
+      {
+        "name": "notes",
+        "step": {
+          "name": "gather-notes",
+          "version": 1
+        }
+      },
+      {
+        "name": "draft",
+        "step": {
+          "name": "draft",
+          "version": 1
+        }
+      },
+      {
+        "name": "review",
+        "step": {
+          "name": "review-draft",
+          "version": 1
+        }
+      },
+      {
+        "name": "revise",
+        "step": {
+          "name": "revise",
+          "version": 1
+        }
+      },
+      {
+        "name": "typeset",
+        "step": {
+          "name": "typeset",
+          "version": 1
+        }
+      },
+      {
+        "name": "publish",
+        "step": {
+          "name": "publish",
+          "version": 1
+        }
+      }
+    ],
+    "version": 1
   }
 }
