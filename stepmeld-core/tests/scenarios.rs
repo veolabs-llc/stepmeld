@@ -41,6 +41,7 @@ fn verb(name: &str, inputs: &[(&str, &str)], params: &[(&str, &str, Option<Value
             default: dflt.clone(),
             label: None,
             group: None,
+            options: None,
         })
         .collect();
     d.outputs = outputs
@@ -1062,6 +1063,24 @@ fn definitions_are_checked() {
         label: None,
     });
     assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("decision")));
+    // a Parameter's options agree with themselves: some, no repeats, the default among them
+    d.outputs.clear();
+    d.parameters.push(ParameterDefinition {
+        name: "matcher".into(),
+        tag: "string".into(),
+        required: true,
+        default: Some(serde_json::json!("auto")),
+        label: None,
+        group: None,
+        options: Some(vec![]),
+    });
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("no options")));
+    d.parameters[0].options = Some(vec!["auto".into(), "exhaustive".into(), "auto".into()]);
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("twice")));
+    d.parameters[0].options = Some(vec!["exhaustive".into(), "sequential".into()]);
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("not one of its options")));
+    d.parameters[0].options = Some(vec!["auto".into(), "exhaustive".into()]);
+    store.put_step(&d).unwrap();
 }
 
 /// A Workflow carries its own copy of its WorkflowDefinition: the
