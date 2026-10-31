@@ -534,8 +534,8 @@ fn run(cli: Cli) -> Result<(), Error> {
                 Some(WorkerCmd::Set { name, runs, cloud, slots, capabilities }) => {
                     let w = &mut m.file.worker;
                     if let Some(n) = name {
-                        if n == stepmeld_core::orders::ANY {
-                            return Err(Error::Refused(format!("{n:?} names the pool of every Worker; choose another name")));
+                        if n == stepmeld_core::orders::ANY || n == stepmeld_core::orders::CLOUD {
+                            return Err(Error::Refused(format!("{n:?} names a pool of Workers; choose another name")));
                         }
                         w.name = Some(n.clone());
                     }

@@ -244,9 +244,9 @@ fn a_mechanism_that_refuses_ends_the_run_in_its_words() {
     assert_eq!((outcome.class.as_deref(), outcome.reason.as_deref()), (Some("refused"), Some("no program for add on this machine")));
 }
 
-/// A cloud Worker is `cloud` from everywhere, so a confirm-before-cloud
-/// policy holds the step for a person, and two Workers offering the
-/// verb make the placement somebody's to choose.
+/// The cloud is `cloud` from everywhere, so a confirm-before-cloud
+/// policy holds the step for a person, and a Worker here and the cloud
+/// both offering the verb make the placement somebody's to choose.
 #[test]
 fn locality_comes_from_the_worker() {
     let store = Arc::new(MemoryStore::new());
@@ -257,7 +257,7 @@ fn locality_comes_from_the_worker() {
     cloud.tick(&now(0)).unwrap();
     let o = orchestrator(&store, "h");
     let faces: BTreeMap<String, Locality> = o.performers.iter().map(|p| (p.describe().name, p.describe().locality)).collect();
-    assert_eq!(faces.get("queue"), Some(&Locality::Cloud));
+    assert_eq!((faces.get("cloud"), faces.get("queue")), (Some(&Locality::Cloud), None), "the cloud Worker is reached as the pool `cloud`");
     assert_eq!(faces.get("desk"), Some(&Locality::ThisMachine));
     begin(&o, "hello-6");
     o.tick_all(&now(1), &now(9)).unwrap();
@@ -268,7 +268,7 @@ fn locality_comes_from_the_worker() {
             step: "add".into(),
             policy: Policy {
                 placement: PlacementPolicy {
-                    performer: Some("queue".into()),
+                    performer: Some("cloud".into()),
                     confirm: vec![Locality::Cloud],
                     locality: None,
                 },
@@ -550,14 +550,11 @@ fn any_worker_takes_an_open_order() {
     assert_eq!(status(&store, "any-1"), StepStatus::Succeeded);
 }
 
-/// A cloud Worker's orders are open to every cloud Worker. When the one
-/// that launched the work stops renewing, another takes the claim over
-/// and goes on observing the same job: nothing is lost.
-#[test]
-fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
-    let store = Arc::new(MemoryStore::new());
-    library(&store);
-    let cloud = Arc::new(
+/// The cloud's Workers are one placement, the pool `cloud`: a cloud
+/// Worker's own name is not one. The Step goes to the pool unasked
+/// when nothing else offers its verb, as to a lone Worker.
+fn cloud_mechanism() -> Arc<MemoryPerformer> {
+    Arc::new(
         MemoryPerformer::new(PerformerFace {
             name: "batch".into(),
             locality: Locality::Cloud,
@@ -566,26 +563,30 @@ fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
             nests: false,
         })
         .with_portable_handles(),
-    );
+    )
+}
+
+/// A cloud Worker's orders are open to every cloud Worker. When the one
+/// that launched the work stops renewing, another takes the claim over
+/// and goes on observing the same job: nothing is lost.
+#[test]
+fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let cloud = cloud_mechanism();
     let launcher = |name: &str, host: &str| Worker::new(name, host, true, vec!["add-program".into()], store.clone(), cloud.clone()).with_lease(120, 60);
     let first = launcher("queue-1", "laptop");
     first.tick(&now(0)).unwrap();
     let (clock, t) = settable(1);
     let o = orchestrator_with(&store, "laptop", clock.clone());
+    let faces: Vec<PerformerFace> = o.performers.iter().map(|p| p.describe()).collect();
+    assert!(faces.iter().all(|f| f.name != "queue-1"), "a cloud Worker is not a placement by name: {faces:?}");
+    let pool = faces.iter().find(|f| f.name == "cloud").expect("the pool `cloud`");
+    assert!(pool.pool && pool.locality == Locality::Cloud && pool.verbs == [Ref::new("add", 1)]);
     begin(&o, "cloud-1");
-    o.command(
-        "cloud-1",
-        &Command::Place {
-            step: "add".into(),
-            performer: "queue-1".into(),
-            locality: Locality::Cloud,
-        },
-        &person(),
-        &now(1),
-    )
-    .unwrap();
     o.tick_all(&now(1), &now(9)).unwrap();
     let run = latest(&store, "cloud-1");
+    assert_eq!((run.performer.as_str(), run.locality), ("cloud", Some(Locality::Cloud)), "the pool alone offers the verb, so it is the placement");
     assert!(store.order(&run.id).unwrap().unwrap().open.unwrap().cloud, "a cloud order is open");
     first.tick(&now(1)).unwrap();
     let handle = store.order(&run.id).unwrap().unwrap().claim.unwrap().handle.unwrap();
@@ -606,6 +607,55 @@ fn a_cloud_job_is_taken_over_when_its_worker_goes_away() {
     second.tick(&now(5)).unwrap();
     o.tick_all(&now(5), &now(9)).unwrap();
     assert_eq!(status(&store, "cloud-1"), StepStatus::Succeeded);
+}
+
+/// With a Worker here and the cloud both offering a verb, a person
+/// chooses; chosen, the pool `cloud` places one open cloud order, which
+/// a cloud Worker takes and the Worker here leaves alone. Two cloud
+/// Workers are still that one placement.
+#[test]
+fn the_cloud_is_one_placement_beside_the_workers_here() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (bench, mb) = worker(&store, "bench", "desk", false);
+    let cloud = cloud_mechanism();
+    let launcher = |name: &str, host: &str| Worker::new(name, host, true, vec!["add-program".into()], store.clone(), cloud.clone());
+    let (q1, q2) = (launcher("queue-1", "desk"), launcher("queue-2", "laptop"));
+    for w in [&bench, &q1, &q2] {
+        w.tick(&now(0)).unwrap();
+    }
+    let o = orchestrator(&store, "desk");
+    let names: Vec<String> = o.performers.iter().map(|p| p.describe().name).collect();
+    assert_eq!(names, ["nested", "bench", "any", "cloud"], "one pool for both cloud Workers, after the Workers here and `any`");
+    begin(&o, "cloud-2");
+    o.tick_all(&now(1), &now(9)).unwrap();
+    assert_eq!(status(&store, "cloud-2"), StepStatus::Waiting(Waiting::Placement), "a Worker here and the cloud: a person chooses");
+    o.command(
+        "cloud-2",
+        &Command::Place {
+            step: "add".into(),
+            performer: "cloud".into(),
+            locality: Locality::Cloud,
+        },
+        &person(),
+        &now(1),
+    )
+    .unwrap();
+    o.tick_all(&now(1), &now(9)).unwrap();
+    let run = latest(&store, "cloud-2");
+    let order = store.order(&run.id).unwrap().unwrap();
+    assert_eq!((order.worker.clone(), order.open.clone().map(|o| o.cloud)), (None, Some(true)), "one open cloud order");
+    bench.tick(&now(2)).unwrap();
+    assert!(store.order(&run.id).unwrap().unwrap().claim.is_none() && mb.started().is_empty(), "the Worker here leaves a cloud order alone");
+    q2.tick(&now(2)).unwrap();
+    q1.tick(&now(2)).unwrap();
+    assert_eq!(store.order(&run.id).unwrap().unwrap().claim.unwrap().worker, "queue-2", "the first cloud Worker to look launches it");
+    assert_eq!(cloud.started().len(), 1);
+    let handle = cloud.handle_of(&run.id).unwrap();
+    cloud.finish(&handle, Outcome::succeeded(BTreeMap::from([("sum".to_string(), Value::from(5))])));
+    q2.tick(&now(3)).unwrap();
+    o.tick_all(&now(4), &now(9)).unwrap();
+    assert_eq!(status(&store, "cloud-2"), StepStatus::Succeeded);
 }
 
 /// A Run's log is kept beside its order and grows by appending, so

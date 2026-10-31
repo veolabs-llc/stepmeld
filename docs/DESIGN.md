@@ -359,8 +359,9 @@ never meet a Binding. Authors meet Bindings, but the recipe format may
 infer the obvious ones (one Input below one Output of the same tag) as
 sugar compiled to explicit Bindings before anything runs. Defaults cover
 the rest: start automatically, place on the one Worker that offers the
-step (where several do, a person chooses one or the pool `any`;
-`docs/PLACEMENT.md` §11), stop on failure. Review is a person's Step
+step (where several do, a person chooses one, or a pool: `any` of
+the Workers here, or `cloud`; `docs/PLACEMENT.md` §5, §11), stop on
+failure. Review is a person's Step
 producing a Decision, not a Policy.
 A simple recipe is a list of verbs.
 
