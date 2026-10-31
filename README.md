@@ -402,11 +402,13 @@ stepmeld start hello-cloud
 stepmeld tick --watch
 ```
 
-Each Step's order is open to any cloud Worker; `queue` claims it,
-submits a job with `STEPMELD_RUN` naming the Run's folder in S3, and
-watches it. A second cloud Worker on another machine (`--name
-queue-2`) would take over a job whose launcher went away, and go on
-watching the same job. A Step's `needs` (`memory_gib`, `vcpus`,
+The cloud is one placement, the pool `cloud`, which the Step takes on
+its own here since nothing else offers its verb. Each Step's order is
+open to any cloud Worker; `queue` claims it, submits a job with
+`STEPMELD_RUN` naming the Run's folder in S3, and watches it. A second
+cloud Worker on another machine (`--name queue-2`) is the same
+placement: it would take over a job whose launcher went away, and go
+on watching the same job. A Step's `needs` (`memory_gib`, `vcpus`,
 `capacity`) pick the queue and the size, from `ladder` when the program
 gives one; a deployment may also size each request by formulas over its
 Inputs and Parameters (`[programs.<name>.needs]`), and `stepmeld needs

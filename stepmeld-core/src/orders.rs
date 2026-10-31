@@ -38,6 +38,11 @@ pub const AWAY_AFTER: u64 = 3;
 /// The pool of every Worker that is not a cloud Worker: "next
 /// available". No Worker may take this name.
 pub const ANY: &str = "any";
+/// The pool of every cloud Worker: the one placement the cloud has. A
+/// cloud order is open to every cloud Worker whichever launched it
+/// (docs/PLACEMENT.md §5), so a cloud Worker is never a placement by
+/// its own name. No Worker may take this name either.
+pub const CLOUD: &str = "cloud";
 
 fn one() -> u32 {
     1
@@ -339,39 +344,45 @@ impl OrderPerformer {
         }
     }
 
-    /// One Performer per published Worker, as seen from `here`, then
-    /// the pool [`ANY`]. A Worker offers what the Library says its
-    /// programs and capabilities let it take; one that is away offers
-    /// nothing, so nothing new is placed on it, while what it holds is
-    /// still observed. A cloud Worker's orders are open to every cloud
-    /// Worker, so another can take over its work. The pool offers what
-    /// any Worker that is here and not a cloud Worker offers; the first
-    /// free to take an order takes it.
+    /// One Performer per published Worker that is not a cloud Worker,
+    /// as seen from `here`, then the pools: [`ANY`], and [`CLOUD`] when
+    /// a cloud Worker has published itself. A Worker offers what the
+    /// Library says its programs and capabilities let it take; one that
+    /// is away offers nothing, so nothing new is placed on it, while
+    /// what it holds is still observed. The pool `any` offers what any
+    /// Worker that is here and not a cloud Worker offers; the first
+    /// free to take an order takes it. The cloud Workers are one
+    /// placement, the pool `cloud`, which offers what any of them that
+    /// is not away offers: a cloud order is open to every cloud Worker,
+    /// so whichever is free launches it and another takes over
+    /// observing when the launcher goes away. A cloud Worker's own name
+    /// never said more than that, so it is not a placement.
     pub fn for_workers(book: Arc<dyn OrderBook>, lib: &Library, here: &str, clock: Clock) -> Result<Vec<OrderPerformer>, Error> {
         let now = clock();
-        let workers: Vec<WorkerFace> = book.workers()?.into_iter().filter(|w| w.name != ANY).collect();
-        let mut out: Vec<OrderPerformer> = workers
-            .iter()
-            .map(|w| {
-                let face = w.performer_face(here, lib, &now);
-                if w.cloud {
-                    OrderPerformer::open(book.clone(), face, clock.clone(), true, lib)
-                } else {
-                    OrderPerformer::new(book.clone(), face, clock.clone())
-                }
-            })
-            .collect();
+        let workers: Vec<WorkerFace> = book.workers()?.into_iter().filter(|w| w.name != ANY && w.name != CLOUD).collect();
+        let mut out: Vec<OrderPerformer> = workers.iter().filter(|w| !w.cloud).map(|w| OrderPerformer::new(book.clone(), w.performer_face(here, lib, &now), clock.clone())).collect();
+        let offered_by = |members: &[&WorkerFace]| -> Vec<Ref> { lib.steps().filter(|s| members.iter().any(|w| w.offers(s))).map(|s| s.reference()).collect() };
         let local: Vec<&WorkerFace> = workers.iter().filter(|w| !w.cloud && !w.away(&now)).collect();
-        let verbs: Vec<Ref> = lib.steps().filter(|s| local.iter().any(|w| w.offers(s))).map(|s| s.reference()).collect();
         let locality = if local.iter().all(|w| w.host == here) { Locality::ThisMachine } else { Locality::LocalNetwork };
         let pool = PerformerFace {
             name: ANY.into(),
             locality,
-            verbs,
+            verbs: offered_by(&local),
             pool: true,
             nests: false,
         };
-        out.push(OrderPerformer::open(book.clone(), pool, clock, false, lib));
+        out.push(OrderPerformer::open(book.clone(), pool, clock.clone(), false, lib));
+        if workers.iter().any(|w| w.cloud) {
+            let cloud: Vec<&WorkerFace> = workers.iter().filter(|w| w.cloud && !w.away(&now)).collect();
+            let pool = PerformerFace {
+                name: CLOUD.into(),
+                locality: Locality::Cloud,
+                verbs: offered_by(&cloud),
+                pool: true,
+                nests: false,
+            };
+            out.push(OrderPerformer::open(book, pool, clock, true, lib));
+        }
         Ok(out)
     }
 }

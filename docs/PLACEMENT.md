@@ -89,7 +89,18 @@ dispatch into stepmeld (Max, 2026-10-20); this is the rest of it.
   must have (its program and every word its StepDefinition `requires`,
   and a locality if the placement says one); any Worker that has it may
   take it. "Next available" is an open order. A cloud order is always
-  open.
+  open, to every cloud Worker: so the cloud Workers are one placement,
+  the pool `cloud`, beside the pool `any` of the Workers that are not
+  (2026-10-31). A cloud Worker's own name was never more than "any
+  cloud Worker" (whichever is free launches, and another takes over
+  observing, the lapsed-lease table below), so it is not offered as a
+  placement, and the
+  record of where a Run ran is honest: `cloud`, and the job's handle.
+  A pool that stands for Workers listed beside it (`any`) is taken
+  only when a person or a Policy names it; `cloud`, whose Workers are
+  not listed, counts as one Worker would: a verb only the cloud offers
+  goes there unasked, and one a Worker here and the cloud both offer
+  waits for a choice.
 - **A Worker claims an order** with a conditional write and holds it
   under a lease it renews while the work goes on. The claim records the
   Performer's handle. The lease's length and renewal start where the

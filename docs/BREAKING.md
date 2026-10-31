@@ -9,6 +9,36 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## The cloud Workers are one placement, the pool `cloud`
+
+*Behaviour change, `stepmeld-core` (`OrderPerformer::for_workers`,
+`Workflow::placement_among`) and the CLI.*
+
+**Before:** every published Worker was a placement by name, a cloud
+Worker included, though an order placed on a cloud Worker was open to
+every cloud Worker and the name recorded on the Run was whichever one
+a person happened to pick. With one Worker offering a verb the Step
+went to it unasked; a pool was taken only when named. **Now:** a cloud
+Worker is not a placement by its own name. The cloud Workers that have
+published themselves are one placement, the pool `cloud` (locality
+`cloud`, offering what any of them not away offers), beside `any`. A
+pool with no Worker listed beside it in its locality counts as a
+Worker would, so a verb only the cloud offers still places itself as
+it did on a lone cloud Worker, and one a Worker here and the cloud
+both offer still waits for a choice; `any` stands beside the Workers
+it pools, so it is still never chosen unasked. `stepmeld worker set
+--name cloud` is refused as `any` is.
+
+**Who notices:** a Workflow whose Step is placed on a cloud Worker by
+name, or whose Policy names one: that Performer no longer exists, so
+the Step waits for a Performer. A UI or script that listed cloud
+Workers as placements, or placed on one by name.
+
+**What to do:** place on `cloud` (`stepmeld place <wf> --step <s>
+--worker cloud`; a Policy's `placement.performer` the same). Move an
+Orchestrator and its Workers together with no Run live, as every
+order-shape change asks (PLACEMENT.md §10, phase 6).
+
 ## A Workflow's own definition is edited by Commands
 
 *Additive, `stepmeld-core` and the CLI.* `Command` gains `AddStep`,

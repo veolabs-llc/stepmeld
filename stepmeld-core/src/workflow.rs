@@ -803,13 +803,19 @@ impl Workflow {
         if let Some(named) = named {
             return performers.iter().find(|p| &p.name == named).filter(offers).ok_or(Unplaced::Nobody);
         }
-        // a pool is taken only when named: with one Worker offering
-        // the verb, that Worker is the placement, pool or no pool
-        let mut offering = Self::offering(step, nested, performers).filter(|p| !p.pool);
-        match (offering.next(), offering.next()) {
-            (Some(only), None) => Ok(only),
-            (None, _) => Err(Unplaced::Nobody),
-            (Some(_), Some(_)) => Err(Unplaced::Several),
+        // with one Worker offering the verb, that Worker is the
+        // placement. A pool stands for the Workers listed beside it in
+        // its locality, so it is taken only when named; one with no
+        // Worker listed there (the cloud's Workers are only ever their
+        // pool) is the one way to that locality and counts as a Worker
+        // would
+        let offering: Vec<&PerformerFace> = Self::offering(step, nested, performers).collect();
+        let stands_in = |p: &&PerformerFace| p.pool && offering.iter().any(|w| !w.pool && w.locality == p.locality);
+        let candidates: Vec<&PerformerFace> = offering.iter().copied().filter(|p| !stands_in(p)).collect();
+        match candidates.as_slice() {
+            [only] => Ok(only),
+            [] => Err(Unplaced::Nobody),
+            _ => Err(Unplaced::Several),
         }
     }
 

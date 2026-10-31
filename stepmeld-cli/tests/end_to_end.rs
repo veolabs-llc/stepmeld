@@ -164,7 +164,7 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     // both Workers have hello-program, so step_multiply is placed by hand too
     let (ok, out) = stepmeld(d, &["place", "wf-2", "--step", "step_multiply", "--worker", "local"]);
     assert!(ok, "{out}");
-    let (ok, out) = stepmeld(d, &["policy", "wf-2", "--step", "step_add", "--to", r#"{"placement":{"performer":"batch","confirm":["cloud"]}}"#]);
+    let (ok, out) = stepmeld(d, &["policy", "wf-2", "--step", "step_add", "--to", r#"{"placement":{"performer":"cloud","confirm":["cloud"]}}"#]);
     assert!(ok, "{out}");
     let (ok, out) = stepmeld(d, &["tick"]);
     assert!(ok && out.contains("waiting for the cloud placement to be confirmed"), "{out}");
@@ -174,7 +174,7 @@ echo '{"state":"succeeded","outputs":{"'"$out"'":'"$r"'},"summary":{"headline":"
     assert!(ok && out.contains("42 x 10 = 420") && !out.contains("wf-1"), "a finished Workflow stays quiet: {out}");
     let (ok, out) = stepmeld(d, &["show", "wf-2"]);
     assert!(
-        ok && out.contains("run 1 on batch by policy start-automatically: succeeded: 40 + 2 = 42") && out.contains("run 1 on local by policy start-automatically: succeeded: 42 x 10 = 420"),
+        ok && out.contains("run 1 on cloud by policy start-automatically: succeeded: 40 + 2 = 42") && out.contains("run 1 on local by policy start-automatically: succeeded: 42 x 10 = 420"),
         "{out}"
     );
 
