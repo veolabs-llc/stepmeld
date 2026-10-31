@@ -100,7 +100,11 @@ dispatch into stepmeld (Max, 2026-10-20); this is the rest of it.
   only when a person or a Policy names it; `cloud`, whose Workers are
   not listed, counts as one Worker would: a verb only the cloud offers
   goes there unasked, and one a Worker here and the cloud both offer
-  waits for a choice.
+  waits for a choice. A Step whose placement record names a cloud
+  Worker (every cloud placement made before) is on `cloud`: a
+  placement recorded in a locality whose one way in is a pool with no
+  Worker listed is that pool, whatever name it used; a Step placed on a
+  machine that is gone still waits for a person.
 - **A Worker claims an order** with a conditional write and holds it
   under a lease it renews while the work goes on. The claim records the
   Performer's handle. The lease's length and renewal start where the

@@ -658,6 +658,54 @@ fn the_cloud_is_one_placement_beside_the_workers_here() {
     assert_eq!(status(&store, "cloud-2"), StepStatus::Succeeded);
 }
 
+/// A Step placed on a cloud Worker by name, as every placement on the
+/// cloud was before the cloud became one placement, is placed on the
+/// cloud: the record says where a person put it, and the cloud's one way
+/// in is its pool. The Run is the pool's. A Step placed on a machine
+/// that is gone still waits for a person, and a reader given the
+/// Performers sees what the Gate sees.
+#[test]
+fn a_cloud_worker_placed_by_name_is_the_cloud() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (bench, _) = worker(&store, "bench", "desk", false);
+    let cloud = cloud_mechanism();
+    let q1 = Worker::new("queue-1", "desk", true, vec!["add-program".into()], store.clone(), cloud.clone());
+    for w in [&bench, &q1] {
+        w.tick(&now(0)).unwrap();
+    }
+    let o = orchestrator(&store, "desk");
+    let faces: Vec<PerformerFace> = o.performers.iter().map(|p| p.describe()).collect();
+    let place = |id: &str, performer: &str, locality: Locality| {
+        begin(&o, id);
+        o.command(
+            id,
+            &Command::Place {
+                step: "add".into(),
+                performer: performer.into(),
+                locality,
+            },
+            &person(),
+            &now(1),
+        )
+        .unwrap();
+    };
+    place("old-cloud", "queue-1", Locality::Cloud);
+    place("gone-box", "gone-box", Locality::ThisMachine);
+    let before = store.get("gone-box").unwrap().unwrap().0;
+    assert_eq!(before.step_status("add"), StepStatus::Ready, "without the Performers a reader cannot tell");
+    assert_eq!(before.statuses_among(&faces)["add"], StepStatus::Waiting(Waiting::Performer), "with them it sees what the Gate sees");
+    o.tick_all(&now(2), &now(9)).unwrap();
+    let run = latest(&store, "old-cloud");
+    assert_eq!((run.performer.as_str(), run.locality), ("cloud", Some(Locality::Cloud)), "the Run is the pool's");
+    assert!(store.order(&run.id).unwrap().unwrap().open.unwrap().cloud, "one open cloud order");
+    q1.tick(&now(3)).unwrap();
+    assert_eq!(cloud.started().len(), 1, "a cloud Worker launched it");
+    let gone = store.get("gone-box").unwrap().unwrap().0;
+    assert!(gone.steps["add"].latest().is_none(), "a Step on a machine that is gone is not moved unasked");
+    assert_eq!(gone.statuses_among(&faces)["add"], StepStatus::Waiting(Waiting::Performer));
+}
+
 /// A Run's log is kept beside its order and grows by appending, so
 /// any Orchestrator reads it, and a Worker restarted mid-Run carries on
 /// from what the store holds without writing a line twice.

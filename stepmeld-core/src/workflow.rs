@@ -801,7 +801,7 @@ impl Workflow {
         let offers = |p: &&PerformerFace| p.verbs.contains(&step.definition) || (nested && p.nests);
         let named = step.placement.as_ref().map(|p| &p.performer).or(step.policy.placement.performer.as_ref());
         if let Some(named) = named {
-            return performers.iter().find(|p| &p.name == named).filter(offers).ok_or(Unplaced::Nobody);
+            return performers.iter().find(|p| &p.name == named).or_else(|| Self::pool_of_record(step, named, performers)).filter(offers).ok_or(Unplaced::Nobody);
         }
         // with one Worker offering the verb, that Worker is the
         // placement. A pool stands for the Workers listed beside it in
@@ -816,6 +816,27 @@ impl Workflow {
             [only] => Ok(only),
             [] => Err(Unplaced::Nobody),
             _ => Err(Unplaced::Several),
+        }
+    }
+
+    /// A placement recorded on a Performer no longer offered by its
+    /// own name, in a locality whose one way in is a pool with no Worker
+    /// listed beside it (the cloud, docs/PLACEMENT.md §5): that pool.
+    /// The record says where a person put the Step; the name it used for
+    /// that place is history (a cloud Worker by name, before the cloud
+    /// was one placement). A Worker of a locality that lists its Workers
+    /// (`any` beside them) is not stood in for: a Step placed on a
+    /// machine that is gone waits for a person rather than going
+    /// elsewhere unasked. A Policy names no locality with its Performer,
+    /// so this reads placements only.
+    fn pool_of_record<'a>(step: &Step, named: &str, performers: &'a [PerformerFace]) -> Option<&'a PerformerFace> {
+        let locality = step.placement.as_ref().filter(|p| p.performer == named)?.locality;
+        if performers.iter().any(|p| !p.pool && p.locality == locality) {
+            return None;
+        }
+        match performers.iter().filter(|p| p.pool && p.locality == locality).collect::<Vec<_>>().as_slice() {
+            [only] => Some(only),
+            _ => None,
         }
     }
 
@@ -846,5 +867,22 @@ impl Workflow {
     /// Every Step's status, for a reader.
     pub fn statuses(&self) -> BTreeMap<String, StepStatus> {
         self.steps.keys().map(|n| (n.clone(), self.step_status(n))).collect()
+    }
+
+    /// Every Step's status as a driver offering `performers` sees it:
+    /// placement is checked too, so a Step whose go is given but which
+    /// no Performer on offer can take reads `Waiting(Performer)`, not
+    /// `Ready`. For a reader that knows the Performers.
+    pub fn statuses_among(&self, performers: &[PerformerFace]) -> BTreeMap<String, StepStatus> {
+        self.steps
+            .keys()
+            .map(|n| {
+                let s = match self.gate(n, performers) {
+                    Gate::Open => StepStatus::Ready,
+                    Gate::Closed(s) => s,
+                };
+                (n.clone(), s)
+            })
+            .collect()
     }
 }

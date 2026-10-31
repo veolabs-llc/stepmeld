@@ -9,6 +9,31 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A placement recorded on a cloud Worker is the cloud
+
+*Behaviour change, `stepmeld-core` (`Workflow::placement_among`), and
+an addition (`Workflow::statuses_among`).*
+
+**Before:** a Step placed on a cloud Worker by name before the cloud
+became one placement (below) waited for a Performer: its go given, the
+reader's status `Ready` (status alone does not check placement) while
+no Run was ever minted. **Now:** a placement recorded in a locality
+whose one way in is a pool with no Worker listed beside it is that
+pool, whatever Performer it named, so such a Step runs on `cloud` and
+its Run says so. A placement on a Worker of a locality that lists its
+Workers (a machine that is gone) still waits for a person.
+`statuses_among(performers)` is each Step's status with placement
+checked, as the Gate sees it, over `Driver::faces()` (now public).
+
+**Who notices:** a Workflow placed on a cloud Worker by name: it runs
+rather than waiting. A Policy naming a cloud Worker still waits (a
+Policy names no locality beside its Performer); place it on `cloud`.
+
+**What to do:** nothing for placements. A reader that shows a
+Workflow's status and knows the Performers on offer reads
+`statuses_among` instead of `statuses`, so a Step no Performer can take
+reads `Waiting(Performer)` rather than `Ready`.
+
 ## The cloud Workers are one placement, the pool `cloud`
 
 *Behaviour change, `stepmeld-core` (`OrderPerformer::for_workers`,
@@ -29,9 +54,9 @@ both offer still waits for a choice; `any` stands beside the Workers
 it pools, so it is still never chosen unasked. `stepmeld worker set
 --name cloud` is refused as `any` is.
 
-**Who notices:** a Workflow whose Step is placed on a cloud Worker by
-name, or whose Policy names one: that Performer no longer exists, so
-the Step waits for a Performer. A UI or script that listed cloud
+**Who notices:** a Workflow whose Policy names a cloud Worker: that
+Performer no longer exists, so the Step waits for a Performer (a Step
+placed on one by name is on `cloud` since the change above). A UI or script that listed cloud
 Workers as placements, or placed on one by name.
 
 **What to do:** place on `cloud` (`stepmeld place <wf> --step <s>
