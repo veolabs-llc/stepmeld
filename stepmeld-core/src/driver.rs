@@ -56,8 +56,9 @@ impl Driver {
     }
 
     /// Every Performer a Step may be placed on: this driver's, then the
-    /// ones elsewhere.
-    fn faces(&self) -> Vec<PerformerFace> {
+    /// ones elsewhere. What its Gate judges over, so a reader showing
+    /// status passes these to `Workflow::statuses_among`.
+    pub fn faces(&self) -> Vec<PerformerFace> {
         let mut faces: Vec<PerformerFace> = self.performers.iter().map(|p| p.describe()).collect();
         for face in &self.elsewhere {
             if !faces.iter().any(|f| f.name == face.name) {
