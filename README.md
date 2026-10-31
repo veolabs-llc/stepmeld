@@ -28,7 +28,12 @@ do the work; a UI reads documents and never gets called.
   is shared, how each program runs (a command, and the kinds plugins
   add), secrets by name; the kinds a deployment may name.
 - `stepmeld-local`: a Performer that runs the programs on this
-  machine (files-in-a-directory protocol; any language).
+  machine (files-in-a-directory protocol; any language), as a command
+  or as a Docker image; it finds Docker and the machine's GPUs.
+- `stepmeld-aws`: the AWS provider, a plugin the core never imports:
+  the shared store in S3, a Performer that runs programs as AWS Batch
+  jobs, secrets from Secrets Manager, registry sign-in, and
+  `stepmeld-run`, the entrypoint a Batch image runs its program under.
 - `stepmeld-verb`: the program side of that protocol, for a program
   written in Rust (the Python twin is `python/`'s `stepmeld.verb`).
 - `stepmeld-cli`: the `stepmeld` command: `tick` orchestrates, `work`
@@ -204,10 +209,18 @@ Then, still in `walkthrough/`:
 - `stepmeld log hello-1 --step step_multiply` prints that Step's
   program output, and `stepmeld history hello-1` every event in order;
 - `stepmeld library` lists the StepDefinitions and WorkflowDefinitions,
-  and `stepmeld library remove workflowdef_hello` takes one out (once
-  no Workflow uses it), asking whether to remove the StepDefinitions no
-  other WorkflowDefinition uses (`--with-orphans` or `--keep-orphans`
-  answers in advance);
+  and `stepmeld library remove workflowdef_hello` takes one out, asking
+  whether to remove the StepDefinitions no other WorkflowDefinition uses
+  (`--with-orphans` or `--keep-orphans` answers in advance). `hello-1`
+  is not touched: a Workflow carries its own copy of the
+  WorkflowDefinition it was made from, so only a StepDefinition its
+  Steps still use is kept;
+- `stepmeld edit hello-1 …` changes that copy (`add-step`,
+  `remove-step`, `bind`, `unbind`, `guard`, `relabel`, `override`: the
+  value a Step's Parameter starts from), each edit recorded in the
+  History; `stepmeld definition hello-1 --name workflowdef_hello_2
+  --add` keeps the copy in the Library as a WorkflowDefinition of its
+  own;
 - without a Worker, `tick` says what it waits for: `step_add: no Worker
   offers it`;
 - each Run's files (`request.json`, `progress.json`, `outcome.json`,
@@ -395,7 +408,9 @@ watches it. A second cloud Worker on another machine (`--name
 queue-2`) would take over a job whose launcher went away, and go on
 watching the same job. A Step's `needs` (`memory_gib`, `vcpus`,
 `capacity`) pick the queue and the size, from `ladder` when the program
-gives one; a Policy with `confirm = ["cloud"]` holds each Step for a
+gives one; a deployment may also size each request by formulas over its
+Inputs and Parameters (`[programs.<name>.needs]`), and `stepmeld needs
+<run-folder>` prints what one Run's request comes to; a Policy with `confirm = ["cloud"]` holds each Step for a
 person before it is launched.
 
 
