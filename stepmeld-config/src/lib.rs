@@ -57,6 +57,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use stepmeld_core::definition::Locality;
+use stepmeld_core::objects::Objects;
 use stepmeld_core::orders::{OrderBook, Sizing, Worker};
 use stepmeld_core::performer::{Performer, Router};
 use stepmeld_core::store::SharedStore;
@@ -379,6 +380,9 @@ impl Machine {
 pub type StoreKind = fn(&Deployment, &Table) -> Result<Arc<dyn SharedStore>, Error>;
 /// Reads a kind of secret's value from its settings.
 pub type SecretKind = fn(&Deployment, &Table) -> Result<String, Error>;
+/// Reaches the object store a URL of some scheme names (its bucket, the
+/// part before the first `/`), as the deployment signs in to it.
+pub type UrlKind = fn(&Deployment, &str) -> Result<Arc<dyn Objects>, Error>;
 
 /// A program routed to a kind of Performer, with what it needs.
 #[derive(Debug, Clone, PartialEq)]
@@ -427,6 +431,7 @@ pub struct Kinds {
     secrets: BTreeMap<String, SecretKind>,
     performers: BTreeMap<String, PerformerKind>,
     sign_ins: BTreeMap<String, SignInKind>,
+    urls: BTreeMap<String, UrlKind>,
 }
 
 impl Default for Kinds {
@@ -451,6 +456,7 @@ impl Kinds {
             secrets: BTreeMap::new(),
             performers: BTreeMap::new(),
             sign_ins: BTreeMap::new(),
+            urls: BTreeMap::new(),
         }
         .with_store("sqlite", sqlite_store)
         .with_secret("env", env_secret)
@@ -477,6 +483,25 @@ impl Kinds {
     pub fn with_performer(mut self, kind: &str, performer: PerformerKind) -> Kinds {
         self.performers.insert(kind.into(), performer);
         self
+    }
+
+    /// URLs of `scheme` (`s3`) reach an object store this way: where a
+    /// runner keeps a Run's log ([`Claim::log`](stepmeld_core::orders::Claim)).
+    pub fn with_url(mut self, scheme: &str, open: UrlKind) -> Kinds {
+        self.urls.insert(scheme.into(), open);
+        self
+    }
+
+    /// The object store a URL (`scheme://bucket/key`) names, and the key
+    /// in it: for [`read_log`](stepmeld_core::orders::read_log).
+    pub fn open_url(&self, d: &Deployment, url: &str) -> Result<(Arc<dyn Objects>, String), Error> {
+        let (scheme, rest) = url.split_once("://").ok_or_else(|| Error::Invalid(format!("{url:?} is not a URL")))?;
+        let open = self
+            .urls
+            .get(scheme)
+            .ok_or_else(|| Error::Refused(format!("this build reaches no {scheme}:// URL (it reaches {:?}), so cannot read {url}", self.urls.keys().collect::<Vec<_>>())))?;
+        let (bucket, key) = rest.split_once('/').ok_or_else(|| Error::Invalid(format!("{url:?} names no key")))?;
+        Ok((open(d, bucket)?, key.to_string()))
     }
 
     /// The deployment's shared store.

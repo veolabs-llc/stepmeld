@@ -131,7 +131,16 @@ dispatch into stepmeld (Max, 2026-10-20); this is the rest of it.
   and its containers share one slot within it (`docker_slots`), so a
   machine running several commands still runs one container at a time.
 - **Logs go in the store**, appended as they grow (Max, 2026-10-20),
-  rather than replaced whole on each report.
+  rather than replaced whole on each report. **A log is written once,
+  by what runs the program** (Max, 2026-10-31): a runner that keeps it
+  where every machine reads it (a Batch job's wrapper, in the Run's
+  folder) says where (`Performer::log_url`), the claim records it
+  (`log`), and no Worker copies it; a log on one machine only is kept in
+  the store by that machine's Worker, as before. A reader follows a log
+  from where it was (`read_log`), fetching only what it lacks: a ranged
+  read of one object, or the pieces after its own. Origin: a Batch job's
+  log in S3 copied every few seconds by a daemon into the store, 3,000
+  pieces that a page re-read whole on each refresh, four minutes behind.
 
 ## 6. Workers advertise themselves
 

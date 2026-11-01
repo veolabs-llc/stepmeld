@@ -452,6 +452,12 @@ impl Performer for BatchPerformer {
         Some(String::from_utf8_lossy(&body).into_owned())
     }
 
+    /// The job's `log.txt`, which its wrapper keeps up to date in the
+    /// Run's folder: read there by everyone, copied by no Worker.
+    fn log_url(&self, handle: &str) -> Option<String> {
+        Some(format!("{}{handle}/log.txt", self.url))
+    }
+
     fn portable(&self) -> bool {
         true
     }

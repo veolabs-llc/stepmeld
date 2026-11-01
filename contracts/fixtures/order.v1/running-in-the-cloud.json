@@ -1,0 +1,50 @@
+{
+  "contract": "stepmeld/order.v1",
+  "id": "wf-1/count/1",
+  "placed": "2026-10-17T14:00:00Z",
+  "request": {
+    "workflow": "wf-1",
+    "step": "count",
+    "run": "wf-1/count/1",
+    "definition": {
+      "name": "count-words",
+      "version": 1
+    },
+    "program": "count-program",
+    "inputs": {
+      "text": {
+        "file": "notes.txt"
+      }
+    },
+    "parameters": {
+      "min-length": 3
+    },
+    "outputs": [
+      {
+        "name": "counts",
+        "tag": "word-counts"
+      }
+    ]
+  },
+  "claim": {
+    "worker": "cloud-1",
+    "at": "2026-10-17T14:00:01Z",
+    "until": "2026-10-17T14:05:01Z",
+    "handle": "batch#job-7",
+    "portable": true,
+    "log": "s3://example-runs/stepmeld/batch-runs/wf-1_count_1/log.txt"
+  },
+  "report": {
+    "at": "2026-10-17T14:00:05Z",
+    "progress": {
+      "phase": "counting",
+      "done": 120,
+      "total": 480,
+      "unit": "lines",
+      "at": "2026-10-17T14:00:04Z"
+    }
+  },
+  "open": {
+    "cloud": true
+  }
+}

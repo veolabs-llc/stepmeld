@@ -15,12 +15,12 @@
 //! | `workers/<name>.json` | a published Worker |
 //! | `orders/<id>.json` | an order with its claim, cancel and report |
 //! | `open/<id>` | an order that has not ended |
-//! | `logs/<id>/<at>` | an order's log, a chunk at each length |
+//! | `logs/<id>/<at>` | an order's log, a chunk at each length, when its Worker keeps it |
 
 use crate::definition::{Ref, StepDefinition, WorkflowDefinition};
 use crate::history::Entry;
 use crate::library::Library;
-use crate::orders::{CancelAsk, Claim, Order, OrderBook, Report, WorkerFace};
+use crate::orders::{CancelAsk, Claim, LogPart, Order, OrderBook, Report, WorkerFace};
 use crate::store::StateStore;
 use crate::workflow::Workflow;
 use crate::Error;
@@ -50,6 +50,24 @@ pub trait Objects: Send + Sync {
     fn delete(&self, key: &str) -> Result<(), Error>;
     /// The keys under `prefix`, sorted.
     fn list(&self, prefix: &str) -> Result<Vec<String>, Error>;
+    /// The keys under `prefix` that sort after `after`, sorted: a long,
+    /// ordered prefix (a log's pieces) listed from where a reader is. A
+    /// service that can ask for that lists less; by default all are
+    /// listed and the rest dropped.
+    fn list_after(&self, prefix: &str, after: &str) -> Result<Vec<String>, Error> {
+        Ok(self.list(prefix)?.into_iter().filter(|k| k.as_str() > after).collect())
+    }
+    /// An object's bytes from `at` on, and where they start: `at`, or 0
+    /// when the object is now shorter than that (written anew), with the
+    /// whole of it; `None` when there is none. A service that reads a
+    /// range reads only that; by default the whole object is read and
+    /// cut.
+    fn read_from(&self, key: &str, at: u64) -> Result<Option<(u64, Vec<u8>)>, Error> {
+        Ok(self.get(key)?.map(|(body, _)| match body.get(at as usize..) {
+            Some(rest) => (at, rest.to_vec()),
+            None => (0, body),
+        }))
+    }
     /// The keys under `prefix` with their versions. By default, each
     /// one read; a service whose listing carries versions says so.
     fn listing(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
@@ -542,6 +560,33 @@ impl<O: Objects> OrderBook for ObjectStore<O> {
         Ok(out)
     }
 
+    /// Only the pieces from `at` on are listed and read; an `at` inside
+    /// a piece (not a length the log had) reads it whole.
+    fn log_from(&self, id: &str, at: u64) -> Result<LogPart, Error> {
+        if at == 0 {
+            return Ok(LogPart::cut(self.log(id)?.as_bytes(), 0));
+        }
+        let prefix = self.key(&self.log_prefix(id));
+        // pieces are named by where they start, zero-padded, so the
+        // name of the length just short of `at` sorts just before `at`'s
+        let after = format!("{prefix}{:012}", at - 1);
+        let mut pieces: Vec<(u64, String)> = self.objects.list_after(&prefix, &after)?.into_iter().filter_map(|k| Some((k.strip_prefix(&prefix)?.parse().ok()?, k.clone()))).collect();
+        pieces.sort();
+        match pieces.first() {
+            None => Ok(LogPart::none(at)),
+            Some((start, _)) if *start != at => Ok(LogPart::cut(self.log(id)?.as_bytes(), at)),
+            Some(_) => {
+                let mut bytes = Vec::new();
+                for (_, k) in &pieces {
+                    if let Some((body, _)) = self.objects.get(k)? {
+                        bytes.extend_from_slice(&body);
+                    }
+                }
+                Ok(LogPart::of(at, &bytes))
+            }
+        }
+    }
+
     fn append_log(&self, id: &str, worker: &str, at: u64, text: &str) -> Result<bool, Error> {
         let Some(o) = self.order(id)? else { return Ok(false) };
         if o.ended() || o.claim.as_ref().map(|c| c.worker.as_str()) != Some(worker) {
@@ -571,6 +616,85 @@ mod tests {
     fn the_object_store_keeps_orders_as_the_book_says() {
         crate::orders::conformance::run(&ObjectStore::new(MemoryObjects::new(), "stepmeld/"));
         crate::orders::conformance::removing(&ObjectStore::new(MemoryObjects::new(), "stepmeld/"));
+    }
+
+    /// Objects that count what they are asked: how many reads, and
+    /// whether a listing was from the top.
+    #[derive(Default)]
+    struct Counted {
+        inner: MemoryObjects,
+        gets: std::sync::atomic::AtomicUsize,
+        whole_lists: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Objects for Counted {
+        fn describe(&self) -> String {
+            "counted".into()
+        }
+        fn get(&self, key: &str) -> Result<Option<(Vec<u8>, String)>, Error> {
+            self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.get(key)
+        }
+        fn put(&self, key: &str, body: &[u8], cond: Cond) -> Result<Option<String>, Error> {
+            self.inner.put(key, body, cond)
+        }
+        fn delete(&self, key: &str) -> Result<(), Error> {
+            self.inner.delete(key)
+        }
+        fn list(&self, prefix: &str) -> Result<Vec<String>, Error> {
+            self.whole_lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.list(prefix)
+        }
+        fn list_after(&self, prefix: &str, after: &str) -> Result<Vec<String>, Error> {
+            Ok(self.inner.list(prefix)?.into_iter().filter(|k| k.as_str() > after).collect())
+        }
+    }
+
+    /// A reader that follows a log the Worker keeps in pieces lists from
+    /// where it was and reads only the pieces it does not have.
+    #[test]
+    fn a_log_is_followed_piece_by_piece() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let store = ObjectStore::new(Counted::default(), "stepmeld/");
+        let mut order: Order = serde_json::from_str(include_str!("../../contracts/fixtures/order.v1/running.json")).unwrap();
+        order.claim = None;
+        order.report = None;
+        store.place(&order).unwrap();
+        let claim = Claim {
+            worker: "desk".into(),
+            at: "2026-10-17T14:00:01Z".into(),
+            until: "2026-10-17T14:05:01Z".into(),
+            handle: None,
+            portable: false,
+            log: None,
+        };
+        assert!(store.claim(&order.id, None, &claim).unwrap());
+        let mut at = 0;
+        for piece in ["one\n", "two\n", "three\n"] {
+            assert!(store.append_log(&order.id, "desk", at, piece).unwrap());
+            at += piece.len() as u64;
+        }
+        let o = store.objects();
+        o.gets.store(0, SeqCst);
+        o.whole_lists.store(0, SeqCst);
+        assert_eq!(store.log_from(&order.id, 8).unwrap(), LogPart { from: 8, text: "three\n".into(), to: 14 });
+        assert_eq!((o.gets.load(SeqCst), o.whole_lists.load(SeqCst)), (1, 0), "one piece read, nothing listed from the top");
+        assert_eq!(store.log_from(&order.id, 14).unwrap(), LogPart::none(14));
+        assert_eq!(o.gets.load(SeqCst), 1, "nothing new, nothing read");
+        assert_eq!(store.log_from(&order.id, 5).unwrap().text, "wo\nthree\n", "inside a piece: read whole, still right");
+    }
+
+    #[test]
+    fn an_object_is_read_from_where_a_reader_was() {
+        let o = MemoryObjects::new();
+        assert!(o.read_from("log", 0).unwrap().is_none());
+        o.put("log", b"abcdef", Cond::None).unwrap();
+        assert_eq!(o.read_from("log", 4).unwrap(), Some((4, b"ef".to_vec())));
+        assert_eq!(o.read_from("log", 6).unwrap(), Some((6, Vec::new())));
+        assert_eq!(o.read_from("log", 9).unwrap(), Some((0, b"abcdef".to_vec())), "shorter: written anew, read whole");
+        o.put("logs/1", b"", Cond::None).unwrap();
+        o.put("logs/2", b"", Cond::None).unwrap();
+        assert_eq!(o.list_after("logs/", "logs/1").unwrap(), ["logs/2"]);
     }
 
     #[test]

@@ -9,6 +9,37 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A log is kept where its runner writes it, and read from where a reader was
+
+*Breaking for a reader of a Run's log, `stepmeld-core` (`Claim::log`,
+`Performer::log_url`, `read_log`, `OrderBook::log_from`,
+`Objects::read_from` and `list_after`), `stepmeld-config`
+(`Kinds::with_url`, `open_url`), and the contract `stepmeld/order.v1`
+(a claim gains `log`).*
+
+**Before:** every Run's log was copied into the store beside its order
+by the Worker that claimed it, a piece each time it grew, even a Batch
+job's, whose wrapper already keeps `log.txt` in the Run's folder in
+S3; a reader read every piece each time. **Now:** a Performer whose
+runner keeps the log where every machine reads it says where
+(`log_url`; the Batch Performer does), the Worker records it on its
+claim (`log`, a URL) and keeps no copy, also for work it already holds;
+a log on one machine only is kept beside the order as before.
+`read_log(book, id, at, open)` reads a Run's log wherever it is, from
+`at` (0, or a part's `to`): a ranged read of the runner's object, or
+only the pieces of the store's copy after `at`. `open` reaches a URL:
+`Kinds::open_url` with the provider's URL kinds (`s3` in `stepmeld-aws`).
+
+**Who notices:** a reader of `OrderBook::log` or of the Orchestrator's
+`Performer::log`: for a Batch Run they now read nothing (the copy is
+not made). A build of the Worker from before keeps copying; a reader
+from before shows no log for a Run claimed by a Worker built after.
+
+**What to do:** read a Run's log with `read_log`, giving it a way to
+open URLs (`Kinds::open_url`); a reader that follows a log keeps the
+part's `to`, asks from there, and starts over when a part comes back
+`from` 0 (the runner wrote it anew). `stepmeld log` does this.
+
 ## A placement recorded on a cloud Worker is the cloud
 
 *Behaviour change, `stepmeld-core` (`Workflow::placement_among`), and

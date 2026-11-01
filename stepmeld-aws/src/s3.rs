@@ -93,6 +93,57 @@ impl Objects for S3Objects {
         })
     }
 
+    /// Listed from `after` on (`StartAfter`), not from the top.
+    fn list_after(&self, prefix: &str, after: &str) -> Result<Vec<String>, Error> {
+        block_on(async {
+            let mut keys = Vec::new();
+            let mut token: Option<String> = None;
+            loop {
+                let out = self
+                    .client
+                    .list_objects_v2()
+                    .bucket(&self.bucket)
+                    .prefix(prefix)
+                    .start_after(after)
+                    .set_continuation_token(token.clone())
+                    .send()
+                    .await
+                    .map_err(|e| refused("list", prefix, e))?;
+                keys.extend(out.contents().iter().filter_map(|o| o.key().map(str::to_string)));
+                token = out.next_continuation_token().map(str::to_string);
+                if token.is_none() || !out.is_truncated().unwrap_or(false) {
+                    break;
+                }
+            }
+            keys.sort();
+            Ok(keys)
+        })
+    }
+
+    /// A ranged GET from the byte before `at`, so one request tells
+    /// "nothing new" (that byte alone) from "written anew" (no such
+    /// range: the object is shorter, and is read whole).
+    fn read_from(&self, key: &str, at: u64) -> Result<Option<(u64, Vec<u8>)>, Error> {
+        if at == 0 {
+            return Ok(self.get(key)?.map(|(body, _)| (0, body)));
+        }
+        let ranged = block_on(async {
+            match self.client.get_object().bucket(&self.bucket).key(key).range(format!("bytes={}-", at - 1)).send().await {
+                Ok(out) => Ok(Some(out.body.collect().await.map_err(|e| refused("read", key, e))?.into_bytes().to_vec())),
+                Err(e) if e.as_service_error().is_some_and(|s| s.is_no_such_key()) || e.raw_response().is_some_and(|r| r.status().as_u16() == 404) => Err(None),
+                Err(e) if e.code() == Some("InvalidRange") || e.raw_response().is_some_and(|r| r.status().as_u16() == 416) => Ok(None),
+                Err(e) => Err(Some(refused("read", key, e))),
+            }
+        });
+        match ranged {
+            Ok(Some(body)) => Ok(Some((at, body.get(1..).unwrap_or_default().to_vec()))),
+            // shorter than `at`: written anew, so read whole
+            Ok(None) => Ok(self.get(key)?.map(|(body, _)| (0, body))),
+            Err(None) => Ok(None),
+            Err(Some(e)) => Err(e),
+        }
+    }
+
     /// A listing carries each object's ETag, so versions come with it.
     fn listing(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
         block_on(async {

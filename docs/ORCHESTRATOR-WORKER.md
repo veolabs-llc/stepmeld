@@ -30,7 +30,9 @@ An Orchestrator reaches a Worker by placing an **order** in the shared
 store: the Run's request, addressed to the Worker by name. The Worker
 takes its open orders, runs each through its own Performer, and writes
 a **report** on the order: progress while it runs, the outcome when it
-ends, and the log so far. A cancel is a request on the order, which the
+ends. The log so far is kept beside the order, unless the Performer's
+runner keeps it where every machine reads it, as a Batch job does; the
+claim then says where. A cancel is a request on the order, which the
 Worker carries out.
 
 This is the run directory protocol (`contracts/run-directory.v1.md`)
@@ -106,7 +108,9 @@ My choices in the first form, each open to change:
   `stepmeld-machine.toml`, found the same way. A Worker's name defaults
   to the host name.
 - A report carried the whole log so far, replaced on each report.
-  Since 2026-10-20 the log is kept beside the order and appended.
+  Since 2026-10-20 the log is kept beside the order and appended; since
+  2026-10-31, only when no runner keeps it where every machine reads it
+  (the claim's `log` then says where; `docs/PLACEMENT.md` §5).
 - A cancel asked before the Worker took the order ends it as canceled
   without starting it (since 2026-10-20 the Orchestrator ends it, so a
   Worker that is away does not hold it up).

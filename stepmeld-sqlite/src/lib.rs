@@ -512,6 +512,7 @@ mod tests {
             until: "2026-10-20T00:05:00Z".into(),
             handle: None,
             portable: false,
+            log: None,
         };
         assert!(store.claim("o-1", None, &claim).unwrap());
     }

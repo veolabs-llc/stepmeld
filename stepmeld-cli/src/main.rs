@@ -14,7 +14,7 @@ use stepmeld_core::definition::{Locality, Ref, StepDefinition, WorkflowDefinitio
 use stepmeld_core::driver::Driver;
 use stepmeld_core::engine::Command;
 use stepmeld_core::library::Library;
-use stepmeld_core::orders::{wall_clock, OrderPerformer};
+use stepmeld_core::orders::{read_log, wall_clock, OrderPerformer};
 use stepmeld_core::store::SharedStore;
 use stepmeld_core::workflow::{Actor, Gate, StepStatus, Waiting, Workflow, WorkflowStatus};
 use stepmeld_core::{iso, Error, Value};
@@ -866,13 +866,13 @@ fn run(cli: Cli) -> Result<(), Error> {
                 None => s.latest(),
             }
             .ok_or_else(|| Error::Refused(format!("{step} has no such run")))?;
-            let handle = r.handle.as_deref().ok_or_else(|| Error::Refused(format!("run {} was never started", r.id)))?;
-            let p = driver
-                .performers
-                .iter()
-                .find(|p| p.describe().name == r.performer)
-                .ok_or_else(|| Error::Refused(format!("Worker {:?} has not published itself to this store", r.performer)))?;
-            print!("{}", p.log(handle).unwrap_or_else(|| "(no log kept)\n".into()));
+            if r.handle.is_none() {
+                return Err(Error::Refused(format!("run {} was never started", r.id)));
+            }
+            // where its runner keeps it, or beside its order
+            let open = |url: &str| kinds().open_url(&deployment(&cli)?, url);
+            let part = read_log(store.as_ref(), &r.id, 0, &open)?;
+            print!("{}", if part.text.is_empty() { "(no log kept)\n".to_string() } else { part.text });
         }
     }
     Ok(())
