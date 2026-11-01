@@ -232,11 +232,11 @@ conformance suite beside it.
    are what a user must provide; every Step's Output is addressable by
    path (`typeset.document`). A value two Steps need comes from a Step with
    no Inputs, never from the Workflow itself.
-4. **Names are the only per-use difference in a recipe.** Two entries
-   for the same StepDefinition differ by name; everything else that
-   makes the Steps differ arrives after minting. A step entry may carry
-   a display label. (Per-recipe overrides of defaults and policy were
-   withdrawn; add them if a real case appears.)
+4. **A step entry sets its use apart.** Two entries for the same
+   StepDefinition differ by name, and each may carry a display label,
+   Parameter values to start from in place of the verb's defaults, and
+   a Policy of its own (§3.1). Everything else that makes the Steps
+   differ arrives after minting.
 5. **The Gate is a conjunction of Predicates**, checked and reported in
    this order:
    1. no live Run, and either not yet succeeded or stale;
@@ -420,26 +420,27 @@ and its tests, and none contradicts the rules above.
    Inputs are in made it easy to start before an optional Parameter was
    set. A nested Workflow is its parent's Run and has its go from
    creation. A Step's own `start: manual` is the finer gate, on top.
-8. **Policies live on the verb and on the Step**, not on the recipe:
-   the StepDefinition carries defaults; an Actor changes a Workflow's
-   Step by `set-policy`. Per-recipe overrides stay withdrawn (rule 4).
-9. **The core is synchronous.** No async runtime; every Performer call
-   is short by contract, and a driver may thread as it likes.
-10. **A person's Run has no locality**, and its Performer word is the
+9. **A Policy is layered**: the StepDefinition carries the defaults, a
+   step entry may set its own (rule 4 of §5), and an Actor changes one
+   Workflow's Step by `set-policy`.
+10. **The core is synchronous.** No async runtime; every Performer call
+    is short by contract, and a driver may thread as it likes.
+11. **A person's Run has no locality**, and its Performer word is the
     person.
-12. **A Workflow is removed by a person, never archived by the
-    engine.** `remove` (the StateStore's, through the driver) forgets
-    a Workflow, its History, its lease and the children its Runs made;
-    one with a Run still live is refused until canceled. A driver
-    ticks every Workflow in the store, finished ones included (a lease
-    write each), so a long-lived store is kept short by removing.
-11. **The local Performer's protocol is files in a directory**
+12. **The local Performer's protocol is files in a directory**
     (`request.json` in; `progress.json`, `outcome.json`, `log.txt`
     out), so a verb can be a program in any language: the first wire
     form of the Performer contract. Its contract is
     `contracts/run-directory.v1.md`, with a schema for each file; a
     cancel there is a request with a deadline (`cancel.json`), so a
     program with work elsewhere can stop it before it is stopped.
+13. **A Workflow is removed by a person, never archived by the
+    engine.** `remove` (the StateStore's, through the driver) forgets
+    a Workflow, its History, its lease, the children its Runs made, and
+    the orders those Runs placed with their logs;
+    one with a Run still live is refused until canceled. A driver
+    ticks every Workflow in the store, finished ones included (a lease
+    write each), so a long-lived store is kept short by removing.
 
 ## 11. Open
 
@@ -449,7 +450,7 @@ and its tests, and none contradicts the rules above.
   structured "reject"); timeouts in the Policy menu. All additive.
 - The Performer wire form between machines: orders in the shared
   store (`docs/ORCHESTRATOR-WORKER.md`); on one machine, the run
-  directory (§10a.11). A transport other than a shared store (a server)
+  directory (§10a.12). A transport other than a shared store (a server)
   is still open. Placement on fleet machines and in the cloud:
   `docs/PLACEMENT.md` §11.
 - Whether a numeric engine-readable Output kind joins Decision for
