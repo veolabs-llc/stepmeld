@@ -336,5 +336,18 @@ fn a_cloud_worker_takes_over_a_batch_job_and_sees_it_through() {
     let run = wf.steps["typeset"].latest().unwrap();
     assert_eq!(store.order(&run.id).unwrap().unwrap().claim.unwrap().worker, "queue-2", "taken over");
     assert_eq!(jobs.submitted().len(), 1, "the job ran once");
-    assert!(store.log(&run.id).unwrap().contains("typesetting"), "its log reached the store");
+    // the job's wrapper keeps its log in the Run's folder: the claim says
+    // where, no Worker copies it, and a reader reads it there
+    let claim = store.order(&run.id).unwrap().unwrap().claim.unwrap();
+    let url = claim.log.expect("the claim names where the log is");
+    assert_eq!(url, format!("s3://runs-bucket/{prefix}log.txt"));
+    assert_eq!(store.log(&run.id).unwrap(), "", "no copy beside the order");
+    let open = |u: &str| -> Result<(Arc<dyn stepmeld_core::objects::Objects>, String), stepmeld_core::Error> {
+        let key = u.strip_prefix("s3://runs-bucket/").expect("the runs bucket").to_string();
+        Ok((folders.clone(), key))
+    };
+    let all = stepmeld_core::orders::read_log(store.as_ref(), &run.id, 0, &open).unwrap();
+    assert!(all.text.contains("typesetting"), "{all:?}");
+    let more = stepmeld_core::orders::read_log(store.as_ref(), &run.id, all.to, &open).unwrap();
+    assert_eq!((more.from, more.text.as_str(), more.to), (all.to, "", all.to), "nothing new since");
 }

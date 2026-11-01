@@ -26,6 +26,15 @@ pub trait Performer: Send + Sync {
     fn log(&self, _handle: &str) -> Option<String> {
         None
     }
+    /// Where the Run's runner keeps its log for every machine to read,
+    /// as a URL (`s3://bucket/key`), when it does: a cloud job that
+    /// writes its log to an object store. A Worker records it on its
+    /// claim and keeps no copy; readers read it there. None (the
+    /// default): the log is on this machine only, and the Worker keeps
+    /// it beside the order.
+    fn log_url(&self, _handle: &str) -> Option<String> {
+        None
+    }
     fn estimate(&self, _request: &StartRequest) -> Option<Estimate> {
         None
     }
@@ -103,6 +112,11 @@ impl Performer for Router {
     fn log(&self, handle: &str) -> Option<String> {
         let (p, inner) = self.route(handle)?;
         p.log(&inner)
+    }
+
+    fn log_url(&self, handle: &str) -> Option<String> {
+        let (p, inner) = self.route(handle)?;
+        p.log_url(&inner)
     }
 
     /// Portable only when every route is.

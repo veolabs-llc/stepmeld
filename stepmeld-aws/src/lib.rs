@@ -7,6 +7,7 @@
 //! | `aws-secretsmanager` | secret | `id`, `key` (one field of a JSON secret) |
 //! | `aws` | sign-in | none: a registry login for an ECR image, and credentials for the container |
 //! | `batch` | Performer (cloud) | `[programs.<name>.batch]`: see [`batch`]; the Runs' folders at `[providers.aws] runs` |
+//! | `s3` | URL | none: where an `s3://bucket/key` URL leads, as the deployment signs in (a Batch job's log) |
 //!
 //! Every kind also reads `[providers.aws]`: `region`, `profile`, and
 //! `endpoint` (an S3-compatible endpoint, or a stand-in for tests); a
@@ -47,6 +48,13 @@ pub fn kinds(k: Kinds) -> Kinds {
         .with_secret("aws-secretsmanager", secretsmanager_secret)
         .with_sign_in("aws", sign_in)
         .with_performer("batch", PerformerKind { cloud: true, make: batch_performer })
+        .with_url("s3", s3_objects)
+}
+
+/// An S3 bucket, as the deployment's `[providers.aws]` signs in: where an
+/// `s3://` URL leads (a Batch job's log).
+fn s3_objects(d: &Deployment, bucket: &str) -> Result<Arc<dyn stepmeld_core::objects::Objects>, Error> {
+    Ok(Arc::new(s3::S3Objects::new(Settings::of(d, &Table::new()).s3(), bucket)))
 }
 
 /// An `s3://bucket/prefix/` URL's bucket and key prefix.

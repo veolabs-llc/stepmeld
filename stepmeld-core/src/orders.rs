@@ -17,6 +17,7 @@
 use crate::definition::{Locality, Ref, StepDefinition};
 use crate::engine::{Observation, StartRequest};
 use crate::library::Library;
+use crate::objects::Objects;
 use crate::performer::Performer;
 use crate::workflow::{Outcome, PerformerFace, Progress};
 use crate::Error;
@@ -163,6 +164,12 @@ pub struct Claim {
     /// Whether the handle means anything on another machine.
     #[serde(default)]
     pub portable: bool,
+    /// Where the work's runner keeps its log for every machine to read,
+    /// as a URL, when it does ([`Performer::log_url`]): the log is read
+    /// there ([`read_log`]) and none is kept beside the order. None: this
+    /// Worker keeps it beside the order ([`OrderBook::append_log`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
 }
 
 impl Claim {
@@ -172,8 +179,9 @@ impl Claim {
 }
 
 /// A Worker's latest word on an order: progress while it runs, the
-/// outcome once it ends (final). The log is kept beside the order and
-/// appended as it grows ([`OrderBook::append_log`]).
+/// outcome once it ends (final). The log is where the claim says
+/// ([`Claim::log`]), or kept beside the order and appended as it grows
+/// ([`OrderBook::append_log`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub at: String,
@@ -278,11 +286,98 @@ pub trait OrderBook: Send + Sync {
     fn ask_cancel(&self, id: &str, ask: &CancelAsk) -> Result<(), Error>;
     /// The log kept so far for an order: empty when none was kept.
     fn log(&self, id: &str) -> Result<String, Error>;
+    /// The log kept for an order from `at` on, `at` being 0 or a length
+    /// it had (where an earlier read came to): what a reader that
+    /// follows a log asks, so it fetches only what it does not have. A
+    /// store that keeps a log in pieces reads only the pieces from
+    /// there; by default the whole log is read and cut.
+    fn log_from(&self, id: &str, at: u64) -> Result<LogPart, Error> {
+        Ok(LogPart::cut(self.log(id)?.as_bytes(), at))
+    }
     /// Append `text` to an order's log, only for the claiming Worker,
     /// only while the order has not ended, and only if the log holds
     /// `at` bytes now: so a chunk is never written twice. Whether it
     /// was appended.
     fn append_log(&self, id: &str, worker: &str, at: u64, text: &str) -> Result<bool, Error>;
+}
+
+/// A stretch of a log, read from where a reader was: what a reader that
+/// follows a Run's log fetches each time ([`read_log`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LogPart {
+    /// Where `text` starts: where the reader asked from, or 0 when the
+    /// log is now shorter than that (its runner wrote it anew), so the
+    /// reader starts over.
+    pub from: u64,
+    pub text: String,
+    /// Where to ask from next: past what `text` holds, short of a
+    /// character cut off at the end, which comes whole next time.
+    pub to: u64,
+}
+
+impl LogPart {
+    /// `bytes`, which start at `from`, as text.
+    pub fn of(from: u64, bytes: &[u8]) -> LogPart {
+        let whole = whole_characters(bytes);
+        LogPart {
+            from,
+            text: String::from_utf8_lossy(&bytes[..whole]).into_owned(),
+            to: from + whole as u64,
+        }
+    }
+
+    /// Nothing new since `at`.
+    pub fn none(at: u64) -> LogPart {
+        LogPart { from: at, text: String::new(), to: at }
+    }
+
+    /// A whole log's part from `at` on.
+    pub fn cut(log: &[u8], at: u64) -> LogPart {
+        match log.get(at as usize..) {
+            Some(rest) => LogPart::of(at, rest),
+            None => LogPart::of(0, log),
+        }
+    }
+}
+
+/// How many of `bytes` end on a whole character: a UTF-8 sequence cut
+/// off at the end is left out.
+fn whole_characters(bytes: &[u8]) -> usize {
+    let n = bytes.len();
+    for back in 1..=n.min(4) {
+        let b = bytes[n - back];
+        if b & 0xC0 != 0x80 {
+            let needs = match b {
+                0xF0.. => 4,
+                0xE0.. => 3,
+                0xC0.. => 2,
+                _ => 1,
+            };
+            return if back < needs { n - back } else { n };
+        }
+    }
+    n
+}
+
+/// Where a URL leads: the object store it names and the key in it. A
+/// deployment knows the stores it can reach (`stepmeld-config`).
+pub type OpenUrl<'a> = &'a dyn Fn(&str) -> Result<(Arc<dyn Objects>, String), Error>;
+
+/// An order's log from `at` on (0, or where an earlier read came to),
+/// wherever it is kept: where its claim says its runner keeps it,
+/// reached through `open`, or else beside the order. A reader that
+/// follows a Run's log asks again from the part's `to`, and starts over
+/// when a part comes `from` 0 having asked from further on.
+pub fn read_log(book: &dyn OrderBook, id: &str, at: u64, open: OpenUrl) -> Result<LogPart, Error> {
+    let Some(url) = book.order(id)?.and_then(|o| o.claim).and_then(|c| c.log) else {
+        return book.log_from(id, at);
+    };
+    let (objects, key) = open(&url)?;
+    Ok(match objects.read_from(&key, at)? {
+        Some((from, bytes)) => LogPart::of(from, &bytes),
+        // its runner has written none yet
+        None => LogPart::none(at),
+    })
 }
 
 /// What a deployment says one request needs, computed from the request
@@ -452,6 +547,8 @@ impl Performer for OrderPerformer {
         let _ = self.book.end(handle, None, &Report::ended(&now, Outcome::canceled(reason)));
     }
 
+    /// The log kept beside the order; one its runner keeps elsewhere
+    /// (the claim's `log`) is read with [`read_log`].
     fn log(&self, handle: &str) -> Option<String> {
         self.book.log(handle).ok().filter(|l| !l.is_empty())
     }
@@ -643,6 +740,7 @@ impl Worker {
                 until: until.clone(),
                 handle: None,
                 portable: self.performer.portable(),
+                log: None,
             };
             let (claim, taken) = match &order.claim {
                 Some(c) if c.worker == self.name => {
@@ -699,7 +797,11 @@ impl Worker {
                     if request.as_ref().map_or(true, |r| self.performer.fits(r).is_err()) {
                         continue;
                     }
-                    let over = Claim { handle: c.handle.clone(), ..fresh };
+                    let over = Claim {
+                        handle: c.handle.clone(),
+                        log: c.log.clone(),
+                        ..fresh
+                    };
                     if !self.book.claim(&order.id, Some(c), &over)? {
                         continue;
                     }
@@ -715,7 +817,9 @@ impl Worker {
             if let Some(h) = &claim.handle {
                 self.carrying.lock().unwrap().insert(order.id.clone(), (h.clone(), claim.portable));
             }
-            if let Some(h) = &claim.handle {
+            // a log its runner keeps where every machine reads it is
+            // left there; one only this machine has is kept beside the order
+            if let (Some(h), None) = (&claim.handle, &claim.log) {
                 self.append_log(&order.id, h)?;
             }
             let unchanged = order.report.as_ref().map(|b| (&b.progress, &b.outcome)) == Some((&report.progress, &report.outcome));
@@ -806,9 +910,11 @@ impl Worker {
                 Err(words) => return Ok(Some((claim, Report::ended(now, Outcome::failed("refused", &words))))),
             },
         };
-        if claim.handle.as_deref() != Some(handle.as_str()) {
+        let log = self.performer.log_url(&handle);
+        if claim.handle.as_deref() != Some(handle.as_str()) || claim.log != log {
             let with = Claim {
                 handle: Some(handle.clone()),
+                log,
                 ..claim.clone()
             };
             if !self.book.claim(&order.id, Some(&claim), &with)? {
@@ -867,6 +973,7 @@ pub mod conformance {
             until: until.into(),
             handle: None,
             portable: false,
+            log: None,
         }
     }
 
@@ -1021,6 +1128,15 @@ pub mod conformance {
         assert!(!book.append_log("o-5", "w1", 0, "a\n").unwrap(), "a chunk is not written twice");
         assert!(book.append_log("o-5", "w1", 2, "bé\n").unwrap());
         assert_eq!(book.log("o-5").unwrap(), "a\nbé\n");
+        // a reader follows it from where it was, fetching only what is new
+        let part = |at: u64| {
+            let p = book.log_from("o-5", at).unwrap();
+            (p.from, p.text, p.to)
+        };
+        assert_eq!(part(0), (0, "a\nbé\n".into(), 6));
+        assert_eq!(part(2), (2, "bé\n".into(), 6), "from a length it had");
+        assert_eq!(part(6), (6, String::new(), 6), "nothing new");
+        assert_eq!(book.log_from("nope", 4).unwrap().text, "", "no log is nothing new");
         book.report("o-5", "w1", &Report::ended("2026-10-17T00:04:00Z", Outcome::succeeded(BTreeMap::new()))).unwrap();
         assert!(!book.append_log("o-5", "w1", 6, "late\n").unwrap(), "nor after the order ended");
         assert_eq!(book.log("o-5").unwrap(), "a\nbé\n", "the log stays once it ends");
@@ -1042,5 +1158,80 @@ pub mod conformance {
         assert!(!o4.for_worker("w1", false, &["hello-program".into()], &[]), "without the capability");
         assert!(!o4.for_worker("w1", true, &["hello-program".into()], &["gpu".into()]), "a cloud Worker, for a local order");
         assert!(book.claim("o-4", None, &claim("w9", "2026-10-17T00:05:00Z")).unwrap(), "claimed like any other");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::definition::Ref;
+    use crate::objects::{Cond, MemoryObjects};
+
+    #[test]
+    fn a_part_of_a_log_ends_on_a_whole_character() {
+        let cut = "aé".as_bytes();
+        assert_eq!(LogPart::of(4, &cut[..2]), LogPart { from: 4, text: "a".into(), to: 5 }, "half an é waits");
+        assert_eq!(LogPart::of(4, cut), LogPart { from: 4, text: "aé".into(), to: 7 });
+        assert_eq!(LogPart::of(0, "€".as_bytes()).to, 3);
+        assert_eq!(LogPart::of(0, &"€".as_bytes()[..2]), LogPart::none(0));
+    }
+
+    #[test]
+    fn a_log_written_anew_is_read_from_its_start() {
+        assert_eq!(LogPart::cut(b"short\n", 40), LogPart { from: 0, text: "short\n".into(), to: 6 });
+        assert_eq!(LogPart::cut(b"long enough\n", 5), LogPart { from: 5, text: "enough\n".into(), to: 12 });
+    }
+
+    /// A log its runner keeps elsewhere is read there, from where the
+    /// reader was; one the Worker keeps, beside the order.
+    #[test]
+    fn a_log_is_read_where_the_claim_says() {
+        let store = crate::store::MemoryStore::new();
+        let place = |id: &str, log: Option<&str>| {
+            let order = Order {
+                contract: ORDER.into(),
+                id: id.into(),
+                worker: Some("w1".into()),
+                open: None,
+                placed: "2026-10-17T00:00:00Z".into(),
+                request: StartRequest {
+                    workflow: "wf".into(),
+                    step: "s".into(),
+                    run: id.into(),
+                    definition: Ref::new("stepdef_add", 1),
+                    program: Some("hello-program".into()),
+                    needs: BTreeMap::new(),
+                    inputs: BTreeMap::new(),
+                    parameters: BTreeMap::new(),
+                    outputs: Vec::new(),
+                },
+                cancel: None,
+                claim: None,
+                report: None,
+            };
+            store.place(&order).unwrap();
+            let c = Claim {
+                worker: "w1".into(),
+                at: "2026-10-17T00:00:00Z".into(),
+                until: "2026-10-17T00:05:00Z".into(),
+                handle: Some("h".into()),
+                portable: log.is_some(),
+                log: log.map(str::to_string),
+            };
+            assert!(store.claim(id, None, &c).unwrap());
+        };
+        place("kept", None);
+        assert!(store.append_log("kept", "w1", 0, "here\n").unwrap());
+        place("away", Some("mem://runs/away/log.txt"));
+        let runs: Arc<dyn Objects> = Arc::new(MemoryObjects::new());
+        let open = |url: &str| -> Result<(Arc<dyn Objects>, String), Error> { Ok((runs.clone(), url.strip_prefix("mem://runs/").unwrap().to_string())) };
+        assert_eq!(read_log(&store, "kept", 0, &open).unwrap().text, "here\n");
+        assert_eq!(read_log(&store, "away", 0, &open).unwrap(), LogPart::none(0), "its runner wrote none yet");
+        runs.put("away/log.txt", b"one\n", Cond::None).unwrap();
+        let first = read_log(&store, "away", 0, &open).unwrap();
+        runs.put("away/log.txt", b"one\ntwo\n", Cond::None).unwrap();
+        assert_eq!(read_log(&store, "away", first.to, &open).unwrap(), LogPart { from: 4, text: "two\n".into(), to: 8 });
+        runs.put("away/log.txt", b"3\n", Cond::None).unwrap();
+        assert_eq!(read_log(&store, "away", 8, &open).unwrap().from, 0, "written anew: from the start");
     }
 }

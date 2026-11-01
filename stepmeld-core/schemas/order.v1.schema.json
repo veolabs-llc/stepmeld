@@ -93,6 +93,11 @@
         "portable": {
           "type": "boolean",
           "description": "Whether the handle means anything on another machine (a cloud job's id does)."
+        },
+        "log": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the work's runner keeps its log for every machine to read, as a URL (`s3://bucket/key`), when it does: the log is then read there, and none is kept beside the order. Absent: the claiming Worker keeps the log beside the order."
         }
       }
     },
@@ -102,7 +107,7 @@
         "at"
       ],
       "additionalProperties": false,
-      "description": "The claiming Worker's latest word: progress while it runs, the outcome once it ends (final). An order nobody took may be ended canceled, and one whose local claim lapsed ended lost, by an Orchestrator. The log is kept beside the order, appended as it grows, and is not part of this document.",
+      "description": "The claiming Worker's latest word: progress while it runs, the outcome once it ends (final). An order nobody took may be ended canceled, and one whose local claim lapsed ended lost, by an Orchestrator. The log is not part of this document: it is where the claim's `log` says, or else kept beside the order and appended as it grows.",
       "properties": {
         "at": {
           "$ref": "#/$defs/time"

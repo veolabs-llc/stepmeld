@@ -899,3 +899,65 @@ fn needs_that_cannot_be_computed_refuse_the_order_in_words() {
     let outcome = store.order(&latest(&store, "sized-4").id).unwrap().unwrap().report.unwrap().outcome.unwrap();
     assert_eq!(outcome.reason.as_deref(), Some("its needs could not be computed: `cameras` is not in Input model"));
 }
+
+/// A mechanism whose runner keeps each Run's log where every machine
+/// reads it, once `away` is set (a Worker's newer build).
+struct KeptAway {
+    inner: Arc<MemoryPerformer>,
+    away: std::sync::atomic::AtomicBool,
+}
+
+impl stepmeld_core::performer::Performer for KeptAway {
+    fn describe(&self) -> PerformerFace {
+        self.inner.describe()
+    }
+    fn start(&self, request: &stepmeld_core::engine::StartRequest) -> Result<String, String> {
+        self.inner.start(request)
+    }
+    fn observe(&self, handle: &str) -> stepmeld_core::engine::Observation {
+        self.inner.observe(handle)
+    }
+    fn cancel(&self, handle: &str, reason: &str) {
+        self.inner.cancel(handle, reason)
+    }
+    fn log(&self, handle: &str) -> Option<String> {
+        self.inner.log(handle)
+    }
+    fn log_url(&self, handle: &str) -> Option<String> {
+        self.away.load(std::sync::atomic::Ordering::SeqCst).then(|| format!("s3://runs/{handle}/log.txt"))
+    }
+}
+
+/// A Worker copies only a log that is on its machine alone: once its
+/// runner keeps the log where every machine reads it, the claim says
+/// where, even for work already under way, and the copying stops.
+#[test]
+fn a_log_its_runner_keeps_is_not_copied() {
+    let store = Arc::new(MemoryStore::new());
+    library(&store);
+    let (_, mechanism) = worker(&store, "desk", "desk-host", false);
+    let kept = Arc::new(KeptAway {
+        inner: mechanism.clone(),
+        away: false.into(),
+    });
+    let w = Worker::new("desk", "desk-host", false, vec!["add-program".into()], store.clone(), kept.clone());
+    w.tick(&now(1)).unwrap();
+    let o = orchestrator(&store, "desk-host");
+    begin(&o, "hello-1");
+    o.tick_all(&now(2), &now(9)).unwrap();
+    w.tick(&now(3)).unwrap();
+    let run = store.get("hello-1").unwrap().unwrap().0.steps["add"].latest().unwrap().clone();
+    let handle = mechanism.handle_of(&run.id).unwrap();
+    mechanism.print(&handle, "early\n");
+    w.tick(&now(4)).unwrap();
+    assert_eq!(store.log(&run.id).unwrap(), "early\n", "on this machine alone: kept beside the order");
+    assert_eq!(store.order(&run.id).unwrap().unwrap().claim.unwrap().log, None);
+
+    kept.away.store(true, std::sync::atomic::Ordering::SeqCst);
+    mechanism.print(&handle, "later\n");
+    w.tick(&now(5)).unwrap();
+    let order = store.order(&run.id).unwrap().unwrap();
+    assert_eq!(order.claim.as_ref().unwrap().log.as_deref(), Some(format!("s3://runs/{handle}/log.txt").as_str()), "the claim says where");
+    assert_eq!(store.log(&run.id).unwrap(), "early\n", "and nothing more is copied");
+    stepmeld_core::contracts::validate(&serde_json::to_value(&order).unwrap(), "stepmeld/order.v1").unwrap();
+}
