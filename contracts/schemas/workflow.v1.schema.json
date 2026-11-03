@@ -269,7 +269,7 @@
       "additionalProperties": false,
       "properties": {
         "definition": { "$ref": "#/$defs/ref" },
-        "done_by": { "enum": ["performer", "person"] },
+        "done_by": { "enum": ["performer", "person", "selection"] },
         "label": { "type": "string" },
         "inputs": { "type": "object", "additionalProperties": { "type": "object", "required": ["tag", "required", "bound"], "additionalProperties": false, "properties": { "tag": { "type": "string" }, "required": { "type": "boolean" }, "bound": { "type": "boolean" }, "value": {} } } },
         "parameters": { "type": "object", "additionalProperties": { "type": "object", "required": ["tag", "required"], "additionalProperties": false, "properties": { "tag": { "type": "string" }, "required": { "type": "boolean" }, "value": {}, "chosen": { "$ref": "#/$defs/stamp" } } } },

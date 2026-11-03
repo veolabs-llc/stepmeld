@@ -12,7 +12,10 @@
   "if": {
     "properties": {
       "done_by": {
-        "const": "person"
+        "enum": [
+          "person",
+          "selection"
+        ]
       }
     },
     "required": [
@@ -51,7 +54,7 @@
     "program": {
       "type": "string",
       "pattern": "^\\S+$",
-      "description": "The program that does the work, by name; each Worker maps the name to a command on its own machine. Required when a Performer does the work, absent when a person does."
+      "description": "The program that does the work, by name; each Worker maps the name to a command on its own machine. Required when a Performer does the work, absent when a person does or chooses."
     },
     "requires": {
       "type": "array",
@@ -68,9 +71,11 @@
     "done_by": {
       "enum": [
         "performer",
-        "person"
+        "person",
+        "selection"
       ],
-      "default": "performer"
+      "default": "performer",
+      "description": "Who finishes a Step: a Performer; a person, by completing it with its Outputs; or a person choosing, for a selection, whose Outputs are things that exist already. A selection has no program, placement or go; unchosen, or with its choice made void by its Inputs changing, it feeds nothing: a required Input bound to it waits, an optional one goes without."
     },
     "inputs": {
       "type": "array",

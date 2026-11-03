@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-06T00:04:00Z",
+  "by": {
+    "id": "max",
+    "kind": "person"
+  },
+  "contract": "stepmeld/history.v1",
+  "detail": {
+    "outputs": {
+      "notes": "notes-1"
+    }
+  },
+  "kind": "completed",
+  "run": "sel-1/notes/1",
+  "seq": 2,
+  "step": "notes",
+  "workflow": "sel-1"
+}

@@ -939,6 +939,8 @@ fn reason(wf: &Workflow, name: &str, status: &StepStatus) -> String {
         StepStatus::Waiting(Waiting::Input { name }) => format!("needs input {name}"),
         StepStatus::Waiting(Waiting::Parameter { name }) => format!("needs parameter {name}"),
         StepStatus::Waiting(Waiting::Completion) => "waiting for someone to complete it".into(),
+        StepStatus::Waiting(Waiting::Selection) => "waiting for someone to choose".into(),
+        StepStatus::Unchosen => "nothing chosen; nothing requires it".into(),
         StepStatus::Waiting(Waiting::Go) => "waiting for a start".into(),
         StepStatus::Waiting(Waiting::Start) => "waiting for the workflow to be started (`start <workflow>`)".into(),
         StepStatus::Waiting(Waiting::Confirmation { locality }) => format!("waiting for the {} placement to be confirmed", locality.as_str()),
@@ -980,6 +982,7 @@ fn library(cli: &Cli, store: &dyn SharedStore, what: &Option<LibraryCmd>) -> Res
                 for s in &steps {
                     let by = match (&s.done_by, &s.program) {
                         (stepmeld_core::definition::DoneBy::Person, _) => "  (done by a person)".to_string(),
+                        (stepmeld_core::definition::DoneBy::Selection, _) => "  (a selection)".to_string(),
                         (_, Some(p)) => format!("  (program {p})"),
                         (_, None) => "  (no program)".to_string(),
                     };
