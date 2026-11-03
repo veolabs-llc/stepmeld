@@ -28,13 +28,28 @@ impl std::fmt::Display for Ref {
     }
 }
 
-/// Who finishes a Step: a Performer, or a person issuing `complete`.
+/// Who finishes a Step: a Performer, a person issuing `complete`, or a
+/// person choosing (a selection).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DoneBy {
     #[default]
     Performer,
     Person,
+    /// A selection: its Outputs are things that exist already, and a
+    /// person picks them (`complete`, as for a person's Step). It has no
+    /// program, no placement and no go; each choice is a Run that ended
+    /// as it was made. With nothing chosen, or a choice made void by
+    /// its Inputs changing, it feeds nothing: a required Input bound to
+    /// it waits, an optional one goes without.
+    Selection,
+}
+
+impl DoneBy {
+    /// A person finishes it (by completing or choosing); it runs nowhere.
+    pub fn is_someone(self) -> bool {
+        matches!(self, DoneBy::Person | DoneBy::Selection)
+    }
 }
 
 /// Where a Performer runs.
@@ -260,6 +275,8 @@ impl StepDefinition {
             (DoneBy::Performer, None) => return Err(invalid("it names no program; a StepDefinition a Performer does says which program does it".into())),
             (DoneBy::Performer, Some(p)) if p.trim().is_empty() || p.chars().any(char::is_whitespace) => return Err(invalid(format!("program {p:?} is not a name (no spaces; the command it runs is registered on each Worker)"))),
             (DoneBy::Person, Some(_)) => return Err(invalid("a person does it, so it names no program".into())),
+            (DoneBy::Selection, Some(_)) => return Err(invalid("a selection is chosen, so it names no program".into())),
+            (DoneBy::Selection, None) if self.outputs.is_empty() => return Err(invalid("a selection gives at least one Output: what is chosen".into())),
             _ => {}
         }
         // what is given (inputs, parameters) shares one namespace; what

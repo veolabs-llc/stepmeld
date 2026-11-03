@@ -1,0 +1,53 @@
+{
+  "bindings": [
+    {
+      "from": "notes.notes",
+      "to": "write.notes"
+    },
+    {
+      "from": "notes.notes",
+      "to": "style.notes"
+    },
+    {
+      "from": "style.style",
+      "to": "write.style"
+    },
+    {
+      "from": "write.text",
+      "to": "print.text"
+    }
+  ],
+  "contract": "stepmeld/workflow-definition.v1",
+  "name": "chosen-report",
+  "steps": [
+    {
+      "name": "notes",
+      "step": {
+        "name": "choose-notes",
+        "version": 1
+      }
+    },
+    {
+      "name": "style",
+      "step": {
+        "name": "choose-style",
+        "version": 1
+      }
+    },
+    {
+      "name": "write",
+      "step": {
+        "name": "write",
+        "version": 1
+      }
+    },
+    {
+      "name": "print",
+      "step": {
+        "name": "print",
+        "version": 1
+      }
+    }
+  ],
+  "version": 1
+}

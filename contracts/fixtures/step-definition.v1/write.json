@@ -1,0 +1,34 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "performer",
+  "inputs": [
+    {
+      "name": "notes",
+      "required": true,
+      "tag": "notes"
+    },
+    {
+      "name": "style",
+      "required": false,
+      "tag": "style"
+    }
+  ],
+  "name": "write",
+  "outputs": [
+    {
+      "name": "text",
+      "tag": "text"
+    }
+  ],
+  "parameters": [],
+  "policy": {
+    "on_failure": {
+      "do": "stop"
+    },
+    "on_stale": "wait",
+    "placement": {},
+    "start": "automatic"
+  },
+  "program": "write-program",
+  "version": 1
+}

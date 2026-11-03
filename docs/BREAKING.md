@@ -9,6 +9,36 @@ While the engine is iterating, the v1 contracts change in place
 rather than gaining a v2 beside them; this log is how a user of the
 engine catches up.
 
+## A selection is a third kind of Step
+
+*Additive, but a closed word gains a value: `stepmeld-core`
+(`DoneBy::Selection`, `StepStatus::Unchosen`, `Waiting::Selection`,
+`Feed::Unchosen`, `Step::chosen`), and the contracts
+`stepmeld/step-definition.v1` and `stepmeld/workflow.v1` (`done_by`
+gains `selection`).*
+
+**Before:** a Step was a Performer's or a person's. **Now:** it may be a
+selection (`docs/DESIGN.md` §4.2): a person chooses its Outputs from
+what exists already, by `complete`; it has no program, placement or go,
+is never started, placed or skipped (each is refused in words), and may
+be chosen before the Workflow is started. With nothing chosen, or a
+choice made void by its Inputs changing, it feeds nothing: a required
+Input bound to it waits (the selection reads `waiting` for a
+`selection`), an optional one goes without (the selection reads
+`unchosen`, a new status word that counts as done). `propagate` now runs
+to a fixpoint, since what a selection feeds depends on its own Inputs.
+
+**Who notices:** a reader that matches `done_by` or a Step's status word
+exhaustively (`selection`, `unchosen` are new); a UI that offers a
+placement, a start or a skip to every Step that is not a person's; a
+Performer that advertises verbs by the Library's StepDefinitions (a
+selection is no verb of anyone's). Nothing stored before carries the new
+words.
+
+**What to do:** treat a selection as a person's Step for placement and
+start (none), and offer its Outputs as a pick by tag; read `unchosen` as
+done; show `waiting` for a `selection` as a choice somebody must make.
+
 ## A log is kept where its runner writes it, and read from where a reader was
 
 *Breaking for a reader of a Run's log, `stepmeld-core` (`Claim::log`,

@@ -1,0 +1,28 @@
+{
+  "contract": "stepmeld/step-definition.v1",
+  "done_by": "selection",
+  "inputs": [
+    {
+      "name": "notes",
+      "required": true,
+      "tag": "notes"
+    }
+  ],
+  "name": "choose-style",
+  "outputs": [
+    {
+      "name": "style",
+      "tag": "style"
+    }
+  ],
+  "parameters": [],
+  "policy": {
+    "on_failure": {
+      "do": "stop"
+    },
+    "on_stale": "wait",
+    "placement": {},
+    "start": "automatic"
+  },
+  "version": 1
+}

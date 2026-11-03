@@ -71,6 +71,14 @@ fn person_verb(name: &str, inputs: &[(&str, &str)], outputs: &[(&str, &str)], de
     d
 }
 
+/// A selection: a person picks its Outputs from what exists already.
+fn selection_verb(name: &str, inputs: &[(&str, &str)], outputs: &[(&str, &str)]) -> StepDefinition {
+    let mut d = verb(name, inputs, &[], outputs);
+    d.done_by = DoneBy::Selection;
+    d.program = None;
+    d
+}
+
 fn entry(name: &str, def: &str) -> StepEntry {
     StepEntry::new(name, Ref::new(def, 1))
 }
@@ -135,13 +143,19 @@ struct Rig {
 
 impl Rig {
     fn new(store: Arc<MemoryStore>, performers: Vec<Arc<MemoryPerformer>>, definition: &str, id: &str) -> Rig {
+        let mut rig = Rig::unstarted(store, performers, definition, id);
+        rig.command(Command::StartWorkflow).unwrap();
+        rig
+    }
+
+    /// Created, not started: what a person settles before the start.
+    fn unstarted(store: Arc<MemoryStore>, performers: Vec<Arc<MemoryPerformer>>, definition: &str, id: &str) -> Rig {
         let mut driver = Driver::new(store.clone(), "test").with_nesting();
         for p in performers {
             driver = driver.with_performer(p);
         }
         driver.create(&Ref::new(definition, 1), id, None, &max(), &now(0)).unwrap();
-        driver.command(id, &Command::StartWorkflow, &max(), &now(1)).unwrap();
-        Rig { store, driver, id: id.into(), clock: 1 }
+        Rig { store, driver, id: id.into(), clock: 0 }
     }
 
     fn tick(&mut self) -> Workflow {
@@ -1050,7 +1064,13 @@ fn definitions_are_checked() {
     d.done_by = DoneBy::Person;
     d.program = Some("x-program".into());
     assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("a person does it")));
+    // a selection names no program either, and gives something to choose
+    d.done_by = DoneBy::Selection;
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("a selection is chosen")));
+    d.program = None;
+    assert!(matches!(store.put_step(&d), Err(Error::Invalid(m)) if m.contains("at least one Output")));
     d.done_by = DoneBy::Performer;
+    d.program = Some("x-program".into());
     d.outputs.push(OutputDefinition {
         name: "d".into(),
         tag: "string".into(),
@@ -1569,4 +1589,134 @@ fn a_workflows_definition_is_saved_with_what_is_kept() {
     let (wf2, _) = store.get("wf-2").unwrap().unwrap();
     assert_eq!(wf2.step("add").unwrap().parameters["beat-seconds"].value, Some(3.into()));
     assert_eq!(wf2.step("double").unwrap().policy.placement.locality, Some(Locality::Cloud));
+}
+
+// ---------------------------------------------------------------------
+// Scenario G: selections (DESIGN.md §4.2). A person chooses what exists
+// already; the choice feeds the Steps bound to it.
+
+fn selection_library(store: &MemoryStore) {
+    store.put_step(&selection_verb("choose-notes", &[], &[("notes", "notes")])).unwrap();
+    store.put_step(&selection_verb("choose-style", &[("notes", "notes")], &[("style", "style")])).unwrap();
+    let mut write = verb("write", &[("notes", "notes"), ("style", "style")], &[], &[("text", "text")]);
+    write.inputs[1].required = false;
+    store.put_step(&write).unwrap();
+    store.put_step(&verb("print", &[("text", "text")], &[], &[("document", "document")])).unwrap();
+    let mut w = WorkflowDefinition::new("chosen-report", 1);
+    w.steps = vec![entry("notes", "choose-notes"), entry("style", "choose-style"), entry("write", "write"), entry("print", "print")];
+    w.bindings = vec![bind("notes.notes", "write.notes"), bind("notes.notes", "style.notes"), bind("style.style", "write.style"), bind("write.text", "print.text")];
+    store.put_workflow_definition(&w).unwrap();
+}
+
+/// A selection is chosen, never started, placed or skipped; it may be
+/// chosen before the Workflow starts. A required Input bound to an
+/// unchosen selection waits for it; an optional one goes without, and
+/// such a selection counts as done. A choice made void by its Inputs
+/// changing is nothing chosen until it is made again.
+#[test]
+fn scenario_g_a_selection_feeds_what_was_chosen() {
+    let store = Arc::new(MemoryStore::new());
+    selection_library(&store);
+    let local = performer("local", Locality::ThisMachine, &["write", "print"]);
+    let mut rig = Rig::unstarted(store.clone(), vec![local.clone()], "chosen-report", "sel-1");
+    // 1. created: the notes are waited for (write requires them); the
+    // style's own Input waits on the notes; write is not ready
+    assert_eq!(rig.status("notes"), StepStatus::Waiting(Waiting::Selection));
+    assert_eq!(rig.status("style"), StepStatus::NotReady);
+    assert_eq!(rig.status("write"), StepStatus::NotReady);
+    assert!(matches!(rig.command(start("notes")), Err(Error::Refused(m)) if m.contains("selection")), "a selection is chosen, not started");
+    assert!(matches!(rig.command(skip("notes")), Err(Error::Refused(m)) if m.contains("left unchosen")), "a selection is not skipped");
+    let place = Command::Place {
+        step: "notes".into(),
+        performer: "local".into(),
+        locality: Locality::ThisMachine,
+    };
+    assert!(matches!(rig.command(place), Err(Error::Refused(m)) if m.contains("runs nowhere")), "a selection is not placed");
+    // 2. chosen before the start: the style, bound only to an optional
+    // Input, is nobody's to wait for; write waits on the start alone
+    rig.command(complete("notes", &[("notes", "notes-1".into())])).unwrap();
+    assert_eq!(rig.status("notes"), StepStatus::Succeeded);
+    assert_eq!(rig.status("style"), StepStatus::Unchosen);
+    assert_eq!(rig.status("write"), StepStatus::Waiting(Waiting::Start));
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Waiting);
+    let choice = rig.wf().step("notes").unwrap().latest().unwrap().clone();
+    assert_eq!(choice.locality, None, "a choice runs nowhere");
+    assert!(choice.outcome.as_ref().and_then(|o| o.summary.as_ref()).is_some_and(|s| s.headline.starts_with("chosen by")));
+    // 3. started: write runs with the notes and without a style
+    rig.command(Command::StartWorkflow).unwrap();
+    rig.tick();
+    assert_eq!(rig.status("write"), StepStatus::Running);
+    let write_start = local.started().into_iter().find(|r| r.step == "write").unwrap();
+    assert_eq!(write_start.inputs["notes"], Value::from("notes-1"));
+    assert!(!write_start.inputs.contains_key("style"), "unchosen: the optional Input is simply absent");
+    local.finish(&rig.handle(&local, "write"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
+    rig.tick();
+    local.finish(&rig.handle(&local, "print"), Outcome::succeeded(outs(&[("document", "doc-1".into())])));
+    rig.tick();
+    assert_eq!(rig.status("style"), StepStatus::Unchosen);
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded, "a selection nothing requires does not hold the Workflow");
+    rig.write_fixtures("chosen-report");
+    // 4. a style chosen now: write is stale (its optional Input has a
+    // Value its Run did not); print is not, until write succeeds again
+    rig.command(complete("style", &[("style", "style-1".into())])).unwrap();
+    assert_eq!(rig.status("style"), StepStatus::Succeeded);
+    assert_eq!(rig.status("write"), StepStatus::Stale);
+    assert_eq!(rig.status("print"), StepStatus::Succeeded);
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Stale);
+    // 5. other notes: the style's choice was of the first notes, so it is
+    // void, and write's style is gone with it
+    rig.command(complete("notes", &[("notes", "notes-2".into())])).unwrap();
+    assert_eq!(rig.status("notes"), StepStatus::Succeeded);
+    assert_eq!(rig.status("style"), StepStatus::Unchosen, "a void choice is nothing chosen");
+    let write = rig.wf().step("write").unwrap().clone();
+    assert_eq!(write.inputs["notes"].value, Some(Value::from("notes-2")));
+    assert_eq!(write.inputs["style"].value, None, "a void choice feeds nothing");
+    assert_eq!(rig.status("write"), StepStatus::Stale);
+    // chosen again, for the new notes
+    rig.command(complete("style", &[("style", "style-2".into())])).unwrap();
+    assert_eq!(rig.status("style"), StepStatus::Succeeded);
+    assert_eq!(rig.wf().step("style").unwrap().runs.len(), 2, "every choice is a Run");
+    assert_eq!(rig.wf().step("write").unwrap().inputs["style"].value, Some(Value::from("style-2")));
+}
+
+/// A required Input bound to a void choice waits for a new one, and the
+/// Workflow waits with it.
+#[test]
+fn scenario_g_a_void_choice_is_waited_for_where_required() {
+    let store = Arc::new(MemoryStore::new());
+    store.put_step(&selection_verb("choose-notes", &[], &[("notes", "notes")])).unwrap();
+    store.put_step(&selection_verb("choose-style", &[("notes", "notes")], &[("style", "style")])).unwrap();
+    store.put_step(&verb("write", &[("notes", "notes"), ("style", "style")], &[], &[("text", "text")])).unwrap();
+    let mut w = WorkflowDefinition::new("styled", 1);
+    w.steps = vec![entry("notes", "choose-notes"), entry("style", "choose-style"), entry("write", "write")];
+    w.bindings = vec![bind("notes.notes", "write.notes"), bind("notes.notes", "style.notes"), bind("style.style", "write.style")];
+    store.put_workflow_definition(&w).unwrap();
+    let local = performer("local", Locality::ThisMachine, &["write"]);
+    let mut rig = Rig::new(store.clone(), vec![local.clone()], "styled", "sel-2");
+    rig.command(complete("notes", &[("notes", "notes-1".into())])).unwrap();
+    assert_eq!(rig.status("style"), StepStatus::Waiting(Waiting::Selection));
+    assert_eq!(rig.status("write"), StepStatus::NotReady, "a required Input waits for the choice");
+    rig.command(complete("style", &[("style", "style-1".into())])).unwrap();
+    rig.tick();
+    assert_eq!(rig.status("write"), StepStatus::Running);
+    local.finish(&rig.handle(&local, "write"), Outcome::succeeded(outs(&[("text", "text-1".into())])));
+    rig.tick();
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Succeeded);
+    rig.command(complete("notes", &[("notes", "notes-2".into())])).unwrap();
+    assert_eq!(rig.status("style"), StepStatus::Waiting(Waiting::Selection), "void, and required: waited for");
+    // write's style is gone with the choice: not ready, before stale
+    // (its Outputs are kept; a reader sees the old document still bound)
+    assert_eq!(rig.status("write"), StepStatus::NotReady);
+    assert_eq!(rig.wf().step("write").unwrap().inputs["style"].value, None);
+    assert!(rig.wf().step("write").unwrap().outputs["text"].value.is_some());
+    assert_eq!(rig.workflow_status(), WorkflowStatus::Waiting);
+    // a start given now waits for the choice too
+    rig.command(start("write")).unwrap();
+    rig.tick();
+    assert_eq!(rig.status("write"), StepStatus::NotReady);
+    rig.command(complete("style", &[("style", "style-2".into())])).unwrap();
+    rig.tick();
+    assert_eq!(rig.status("write"), StepStatus::Running);
+    let again = local.started().into_iter().rfind(|r| r.step == "write").unwrap();
+    assert_eq!(again.inputs["style"], Value::from("style-2"));
 }

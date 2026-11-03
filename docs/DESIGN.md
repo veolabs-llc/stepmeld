@@ -85,7 +85,7 @@ StepDefinition with its derived face (§6), so recipes nest.
 | **Value** | An opaque blob the engine never reads, usually a reference into a store. Compared for equality. |
 | **Run** | One execution of a Step: its Inputs and Parameters as resolved, its Performer and placement, its handle, its progress, its Outcome, its metrics. Append-only: a retake is a new Run. A stored run (§8) is the durable trace of one. |
 | **Gate** | A Step's go/no-go: the conjunction of its Predicates (§5.5). Derived each time the engine looks. |
-| **Status** | Derived, never stored. Step: not ready, ready, running, waiting (with its reason: the Workflow not started, an Input, a Parameter, a go, a placement, no Performer offering it, a confirmation, a person's completion), succeeded, failed, canceled, skipped, stale. Workflow: follows from its Steps. |
+| **Status** | Derived, never stored. Step: not ready, ready, running, waiting (with its reason: the Workflow not started, an Input, a Parameter, a go, a placement, no Performer offering it, a confirmation, a person's completion, a selection), succeeded, failed, canceled, skipped, stale, unchosen (a selection nothing requires, with nothing chosen). Workflow: follows from its Steps. |
 | **Stale** | A succeeded Step whose Inputs or Parameters now differ from its current Run's record (§5.7). |
 
 ### 3.3 Execution side
@@ -187,6 +187,25 @@ estimate(step)           -> optional: cost or duration, changing nothing
 A Step a person completes has no Performer; it is finished by a
 `complete` Command carrying its Outputs.
 
+A **selection** (`done_by: selection`, 2026-11-03) is a Step a person
+chooses rather than does: its Outputs are things that exist already (a
+document, a table), and the `complete` Command carries the choice. It
+has no program, no placement and no go, and is never skipped; each
+choice is a Run that ended as it was made, so the History says who chose
+what and when, and a choice made before the Workflow is started stands.
+What sets it apart from a person's Step is what an absence means. With
+nothing chosen, or with its choice made void by its own Inputs changing
+(a choice among the things of one Input is no choice among another's),
+it feeds nothing: a Binding from it is passed over for the next
+alternative, a required Input bound to it waits (the selection reads
+waiting, for a selection), and an optional one goes without (the
+selection reads unchosen, which counts as done). A person's Step keeps
+its Outputs while stale (rule 7 of §5); a selection does not, because
+its Outputs were never made from its Inputs, only picked under them. The
+engine never reads a choice: whether it is among what exists, or fits
+the Inputs it was made under, is the presentation layer's to judge by
+tag.
+
 Kinds: on an Orchestrator, orders to a Worker, and the nested-workflow
 Performer, which lives inside the engine because it issues Commands
 (§6); on a Worker, a command, a Docker image, and a cloud batch service
@@ -242,7 +261,9 @@ conformance suite beside it.
    1. no live Run, and either not yet succeeded or stale;
    2. on a live path: at least one guarded Binding into it applies.
       When none can ever apply the Step is skipped, which is final;
-   3. every required Input holds a Value;
+   3. every required Input holds a Value (an Input bound to a
+      selection with nothing chosen waits for the choice; an optional
+      one goes without, §4.2);
    4. every required Parameter holds a Value;
    5. go given: the Policy starts automatically, or an Actor issued
       `start`;
@@ -328,6 +349,15 @@ fixtures.
 - **C. Publish as a nested workflow.** §6. Found: the attention flag;
   confirmations per Step at any depth; dotted names are the only new
   syntax.
+- **G. Selections** (2026-11-03). `choose-notes` (a selection) feeds
+  `write` and `choose-style` (a selection with an Input); `choose-style`
+  feeds `write`'s optional `style`; `write` -> `print`. Found: a choice
+  before the start; an optional Input bound to an unchosen selection
+  does not hold its Step, and such a selection does not hold the
+  Workflow; a choice made under one notes is void under another, and
+  what it fed is taken back (propagation runs to a fixpoint, since a
+  selection's feed depends on its own Inputs); a required Input whose
+  choice is void reads not ready, its Outputs kept.
 - **D. The same verb twice.** Two samples, `measure-early` and
   `measure-late` in parallel in two localities with different Parameters,
   joined by `compare` (Decision stable|moved) guarding `flag`. One side
@@ -426,7 +456,8 @@ and its tests, and none contradicts the rules above.
 10. **The core is synchronous.** No async runtime; every Performer call
     is short by contract, and a driver may thread as it likes.
 11. **A person's Run has no locality**, and its Performer word is the
-    person.
+    person. A selection's choice is a Run of the same shape, headlined
+    "chosen by".
 12. **The local Performer's protocol is files in a directory**
     (`request.json` in; `progress.json`, `outcome.json`, `log.txt`
     out), so a verb can be a program in any language: the first wire

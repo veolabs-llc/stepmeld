@@ -1,0 +1,277 @@
+{
+  "contract": "stepmeld/workflow.v1",
+  "created": {
+    "at": "2026-10-06T00:00:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
+  "from": {
+    "name": "chosen-report",
+    "version": 1
+  },
+  "id": "sel-1",
+  "started": {
+    "at": "2026-10-06T00:05:00Z",
+    "by": {
+      "id": "max",
+      "kind": "person"
+    }
+  },
+  "steps": {
+    "notes": {
+      "definition": {
+        "name": "choose-notes",
+        "version": 1
+      },
+      "done_by": "selection",
+      "inputs": {},
+      "outputs": {
+        "notes": {
+          "tag": "notes",
+          "value": "notes-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:04:00Z",
+          "id": "sel-1/notes/1",
+          "inputs": {},
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "notes": "notes-1"
+            },
+            "state": "succeeded",
+            "summary": {
+              "headline": "chosen by person:max"
+            }
+          },
+          "parameters": {},
+          "performer": "person:max",
+          "started": {
+            "at": "2026-10-06T00:04:00Z",
+            "by": {
+              "id": "max",
+              "kind": "person"
+            }
+          }
+        }
+      ]
+    },
+    "print": {
+      "definition": {
+        "name": "print",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "text": {
+          "bound": true,
+          "required": true,
+          "tag": "text",
+          "value": "text-1"
+        }
+      },
+      "outputs": {
+        "document": {
+          "tag": "document",
+          "value": "doc-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:08:00Z",
+          "handle": "local-2",
+          "id": "sel-1/print/1",
+          "inputs": {
+            "text": "text-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "document": "doc-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {},
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:07:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "print"
+            }
+          }
+        }
+      ]
+    },
+    "style": {
+      "definition": {
+        "name": "choose-style",
+        "version": 1
+      },
+      "done_by": "selection",
+      "inputs": {
+        "notes": {
+          "bound": true,
+          "required": true,
+          "tag": "notes",
+          "value": "notes-1"
+        }
+      },
+      "outputs": {
+        "style": {
+          "tag": "style"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": []
+    },
+    "write": {
+      "definition": {
+        "name": "write",
+        "version": 1
+      },
+      "done_by": "performer",
+      "inputs": {
+        "notes": {
+          "bound": true,
+          "required": true,
+          "tag": "notes",
+          "value": "notes-1"
+        },
+        "style": {
+          "bound": true,
+          "required": false,
+          "tag": "style"
+        }
+      },
+      "outputs": {
+        "text": {
+          "tag": "text",
+          "value": "text-1"
+        }
+      },
+      "parameters": {},
+      "policy": {
+        "on_failure": {
+          "do": "stop"
+        },
+        "on_stale": "wait",
+        "placement": {},
+        "start": "automatic"
+      },
+      "runs": [
+        {
+          "ended_at": "2026-10-06T00:07:00Z",
+          "handle": "local-1",
+          "id": "sel-1/write/1",
+          "inputs": {
+            "notes": "notes-1"
+          },
+          "locality": "this-machine",
+          "number": 1,
+          "outcome": {
+            "outputs": {
+              "text": "text-1"
+            },
+            "state": "succeeded"
+          },
+          "parameters": {},
+          "performer": "local",
+          "started": {
+            "at": "2026-10-06T00:06:00Z",
+            "by": {
+              "kind": "policy",
+              "rule": "start-automatically",
+              "step": "write"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "workflow_definition": {
+    "bindings": [
+      {
+        "from": "notes.notes",
+        "to": "write.notes"
+      },
+      {
+        "from": "notes.notes",
+        "to": "style.notes"
+      },
+      {
+        "from": "style.style",
+        "to": "write.style"
+      },
+      {
+        "from": "write.text",
+        "to": "print.text"
+      }
+    ],
+    "contract": "stepmeld/workflow-definition.v1",
+    "name": "chosen-report",
+    "steps": [
+      {
+        "name": "notes",
+        "step": {
+          "name": "choose-notes",
+          "version": 1
+        }
+      },
+      {
+        "name": "style",
+        "step": {
+          "name": "choose-style",
+          "version": 1
+        }
+      },
+      {
+        "name": "write",
+        "step": {
+          "name": "write",
+          "version": 1
+        }
+      },
+      {
+        "name": "print",
+        "step": {
+          "name": "print",
+          "version": 1
+        }
+      }
+    ],
+    "version": 1
+  }
+}

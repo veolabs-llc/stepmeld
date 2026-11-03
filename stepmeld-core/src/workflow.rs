@@ -302,6 +302,12 @@ impl Step {
         }
     }
 
+    /// A selection holds a choice: chosen, and not made void by its
+    /// Inputs changing since.
+    pub fn chosen(&self) -> bool {
+        self.done_by == DoneBy::Selection && self.current().is_some() && !self.stale()
+    }
+
     /// Runs the retake Policy has made since the last Run somebody
     /// started.
     fn automatic_retakes(&self) -> u32 {
@@ -331,6 +337,10 @@ pub enum Waiting {
     },
     /// A person must `complete` the Step.
     Completion,
+    /// A person must choose: a selection with nothing chosen, or whose
+    /// choice is void since its Inputs changed, that a required Input
+    /// is bound to.
+    Selection,
     /// A person must `start` it.
     Go,
     /// A person must confirm the placement.
@@ -362,6 +372,10 @@ pub enum StepStatus {
     Skipped,
     /// Succeeded, and its Values changed since.
     Stale,
+    /// A selection with nothing chosen (or a choice made void) that no
+    /// required Input is bound to: the Workflow goes on without it, and
+    /// counts as done without it.
+    Unchosen,
 }
 
 impl StepStatus {
@@ -376,12 +390,13 @@ impl StepStatus {
             StepStatus::Canceled => "canceled",
             StepStatus::Skipped => "skipped",
             StepStatus::Stale => "stale",
+            StepStatus::Unchosen => "unchosen",
         }
     }
 
     /// Counts as done for the Workflow.
     pub fn is_done(&self) -> bool {
-        matches!(self, StepStatus::Succeeded | StepStatus::Skipped)
+        matches!(self, StepStatus::Succeeded | StepStatus::Skipped | StepStatus::Unchosen)
     }
 }
 
@@ -414,6 +429,10 @@ pub enum Feed {
     Undecided,
     /// No Binding will ever carry one.
     Never,
+    /// Every Binding that applies reaches a selection with nothing
+    /// chosen: a required Input waits for a choice, an optional one
+    /// goes without.
+    Unchosen,
 }
 
 /// A fact that may not be known yet.
@@ -544,7 +563,7 @@ impl Workflow {
     /// Whether `step` has ended that way, as a Guard sees it.
     fn settled(&self, step: &str) -> Option<StepStatus> {
         let status = self.step_status(step);
-        matches!(status, StepStatus::Succeeded | StepStatus::Stale | StepStatus::Failed | StepStatus::Skipped | StepStatus::Canceled).then_some(status)
+        matches!(status, StepStatus::Succeeded | StepStatus::Stale | StepStatus::Failed | StepStatus::Skipped | StepStatus::Canceled | StepStatus::Unchosen).then_some(status)
     }
 
     pub fn guard(&self, g: &Guard) -> Tri {
@@ -611,10 +630,25 @@ impl Workflow {
 
     /// What a bound Input gets from its Bindings, taken in order: the
     /// first alive one wins; one that cannot be told yet holds the
-    /// answer; none alive at all means the Input will never be fed.
+    /// answer; none alive at all means the Input will never be fed. A
+    /// selection with nothing chosen is passed over for the next
+    /// Binding, and with none left the Input is unchosen, not never.
     fn feed(&self, step: &str, input: &str) -> Feed {
         let def = &self.workflow_definition;
+        let mut unchosen = false;
         for b in def.bindings_into(step, input) {
+            let source = b.from.split().and_then(|(src, _)| self.steps.get(src));
+            if let Some(src) = source.filter(|s| s.done_by == DoneBy::Selection) {
+                match b.guard.as_ref().map_or(Tri::True, |g| self.guard(g)) {
+                    Tri::Unknown => return Feed::Undecided,
+                    Tri::False => continue,
+                    Tri::True => {}
+                }
+                if !src.chosen() {
+                    unchosen = true;
+                    continue;
+                }
+            }
             match self.binding_alive(b) {
                 Tri::Unknown => return Feed::Undecided,
                 Tri::False => continue,
@@ -627,28 +661,54 @@ impl Workflow {
                 }
             }
         }
-        Feed::Never
+        if unchosen {
+            Feed::Unchosen
+        } else {
+            Feed::Never
+        }
     }
 
-    /// Carry Outputs into the Inputs bound to them, everywhere.
+    /// Whether a required Input of a Step an Actor has not skipped is
+    /// bound to one of `step`'s Outputs: a selection somebody must make.
+    fn required_by_someone(&self, step: &str) -> bool {
+        self.workflow_definition.bindings.iter().any(|b| {
+            b.from.split().is_some_and(|(s, _)| s == step)
+                && b.to
+                    .split()
+                    .is_some_and(|(to, input)| self.steps.get(to).is_some_and(|t| t.skipped.is_none() && t.inputs.get(input).is_some_and(|i| i.required)))
+        })
+    }
+
+    /// Carry Outputs into the Inputs bound to them, everywhere. Until
+    /// nothing moves: what a selection feeds depends on its own Inputs
+    /// (a choice is void once they change), so one pass may leave a
+    /// value a later pass takes back. Bindings form no cycle, so the
+    /// passes are at most one per Step.
     pub fn propagate(&mut self) {
-        let def = &self.workflow_definition;
-        let mut changes = Vec::new();
-        for (name, step) in &self.steps {
-            for input in step.inputs.keys() {
-                if def.bindings_into(name, input).next().is_some() {
-                    let value = match self.feed(name, input) {
-                        Feed::Value(v) => Some(v),
-                        _ => None,
-                    };
-                    changes.push((name.clone(), input.clone(), value));
+        for _ in 0..=self.steps.len() {
+            let def = &self.workflow_definition;
+            let mut changes = Vec::new();
+            for (name, step) in &self.steps {
+                for (input, held) in &step.inputs {
+                    if def.bindings_into(name, input).next().is_some() {
+                        let value = match self.feed(name, input) {
+                            Feed::Value(v) => Some(v),
+                            _ => None,
+                        };
+                        if !held.bound || held.value != value {
+                            changes.push((name.clone(), input.clone(), value));
+                        }
+                    }
                 }
             }
-        }
-        for (step, input, value) in changes {
-            if let Some(i) = self.steps.get_mut(&step).and_then(|s| s.inputs.get_mut(&input)) {
-                i.bound = true;
-                i.value = value;
+            if changes.is_empty() {
+                return;
+            }
+            for (step, input, value) in changes {
+                if let Some(i) = self.steps.get_mut(&step).and_then(|s| s.inputs.get_mut(&input)) {
+                    i.bound = true;
+                    i.value = value;
+                }
             }
         }
     }
@@ -706,7 +766,10 @@ impl Workflow {
                 // source too: starting without it would take the Value the
                 // recipe meant it to have as one the person declined
                 Feed::Undecided => return Closed(StepStatus::NotReady),
-                Feed::Never | Feed::Value(_) => {}
+                // a selection nobody has made: a required Input waits for
+                // it, an optional one goes without
+                Feed::Unchosen if input.required => return Closed(StepStatus::NotReady),
+                Feed::Never | Feed::Unchosen | Feed::Value(_) => {}
             }
         }
         // 4. parameters present
@@ -722,6 +785,17 @@ impl Workflow {
                 Some(_) if !stale => StepStatus::Succeeded,
                 Some(_) => StepStatus::Stale,
                 None => StepStatus::Waiting(Waiting::Completion),
+            });
+        }
+        // a selection: chosen, or waited for only where a required Input
+        // is bound to it (a void choice is nothing chosen)
+        if step.done_by == DoneBy::Selection {
+            return Closed(if step.chosen() {
+                StepStatus::Succeeded
+            } else if self.required_by_someone(name) {
+                StepStatus::Waiting(Waiting::Selection)
+            } else {
+                StepStatus::Unchosen
             });
         }
         // 5. go given

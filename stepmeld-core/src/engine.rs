@@ -374,6 +374,9 @@ pub fn apply(lib: &Library, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &
             if s.done_by == DoneBy::Person {
                 return Err(refused(format!("step {step:?} is a person's: complete it, do not start it")));
             }
+            if s.done_by == DoneBy::Selection {
+                return Err(refused(format!("step {step:?} is a selection: choose its outputs (complete), do not start it")));
+            }
             s.go = Some(stamp(now, by));
             vec![entry("go", step)]
         }
@@ -382,19 +385,20 @@ pub fn apply(lib: &Library, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &
             let status = wf.step_status(step);
             let wf_id = wf.id.clone();
             let s = wf.step_mut(step)?;
-            if s.done_by != DoneBy::Person {
+            if !s.done_by.is_someone() {
                 return Err(refused(format!("step {step:?} is a performer's: it completes itself")));
             }
-            if !matches!(status, StepStatus::Waiting(Waiting::Completion) | StepStatus::Stale | StepStatus::Succeeded) {
+            if !matches!(status, StepStatus::Waiting(Waiting::Completion | Waiting::Selection) | StepStatus::Unchosen | StepStatus::Stale | StepStatus::Succeeded) {
                 return Err(refused(format!("step {step:?} is {}, not waiting to be completed", status.word())));
             }
+            let chosen = s.done_by == DoneBy::Selection;
             check_outputs(&s.outputs, outputs).map_err(refused)?;
             let (inputs, parameters) = s.resolved();
             let number = s.runs.len() as u32 + 1;
             let run_id = format!("{wf_id}/{step}/{number}");
             let mut outcome = Outcome::succeeded(outputs.clone());
             outcome.summary = Some(crate::workflow::Summary {
-                headline: format!("completed by {}", actor_word(by)),
+                headline: format!("{} by {}", if chosen { "chosen" } else { "completed" }, actor_word(by)),
                 details: None,
             });
             s.runs.push(Run {
@@ -426,6 +430,9 @@ pub fn apply(lib: &Library, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &
         Command::Place { step, performer, locality } => {
             not_running(wf, step)?;
             let s = wf.step_mut(step)?;
+            if s.done_by == DoneBy::Selection {
+                return Err(refused(format!("step {step:?} is a selection: it runs nowhere")));
+            }
             s.placement = Some(Placement {
                 performer: performer.clone(),
                 locality: *locality,
@@ -441,6 +448,9 @@ pub fn apply(lib: &Library, wf: &mut Workflow, cmd: &Command, by: &Actor, now: &
         Command::Skip { step } => {
             not_running(wf, step)?;
             let s = wf.step_mut(step)?;
+            if s.done_by == DoneBy::Selection {
+                return Err(refused(format!("step {step:?} is a selection: it is not skipped but left unchosen, and what requires it waits")));
+            }
             if s.current().is_some() {
                 return Err(refused(format!("step {step:?} has succeeded; it cannot be skipped")));
             }
